@@ -4,7 +4,8 @@ from message import AnyMessage,AIMessage
 import httpx
 import asyncio
 import json
-
+from openai import OpenAI
+import anthropic
 
 class Model(ABC):
     def __init__(self, model: str, api_key: str, base_url: str):
@@ -279,7 +280,6 @@ class MiniMaxModel(Model):
             "stream_options": {"include_usage": True}
             }
 
-
         timeout = httpx.Timeout(30.0, read=300.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
@@ -295,8 +295,6 @@ class MiniMaxModel(Model):
             except httpx.HTTPStatusError as e:
                 print(f"HTTP {e.response.status_code}: {e.response.text}")
                 raise
-
-
     
     def model_response_parse(self,response:dict) -> AIMessage:
         id=response.get('id',None)
