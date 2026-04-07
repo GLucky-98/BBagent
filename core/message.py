@@ -1,9 +1,8 @@
 from typing import List
 
-
 class AnyMessage():
     # this class is used to represent any message
-    def __init__(self, role: str, content: str):
+    def __init__(self, role: str, content):
         self.role = role
         self.content = content
 
@@ -55,5 +54,5 @@ class SystemMessage(AnyMessage):
         super().__init__("system", content)
 
 class ToolMessage(AnyMessage):
-    def __init__(self, content: str):
+    def __init__(self, id:str, content):
         super().__init__("tool", content)

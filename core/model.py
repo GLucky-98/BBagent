@@ -196,7 +196,7 @@ class MiniMaxModel(Model):
             "top_p": top_p
             }
 
-        timeout = httpx.Timeout(30.0, read=300.0)
+        timeout = httpx.Timeout(60.0, read=300.0)
         with httpx.Client(timeout=timeout) as client:
             try:
                 response = client.post(self.base_url, headers=self.headers, json=payload)
