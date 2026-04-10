@@ -44,10 +44,10 @@ class Tool():
             function
             invoke    
     """
-    def __init__(self, func:Callable) :
-        self.name=func.__name__
-        self.description=func.__doc__
-        self.inputschema=self.generate_input_schema_from_func(func)
+    def __init__(self, func:Callable, name:str = None, description:str = None, input_shcema:dict = None) :
+        self.name=name if name else func.__name__ 
+        self.description=description if description else func.__doc__
+        self.input_schema=input_shcema if input_shcema else self.generate_input_schema_from_func(func)
         self.func=func
     
     def invoke(self,input_dict:dict):
