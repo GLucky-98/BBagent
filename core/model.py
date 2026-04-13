@@ -8,6 +8,7 @@ import json
 
 from .tool import Tool
 from .message import Message,AIMessage,HumanMessage,SystemMessage,ToolMessage
+from .mcp import MCPClient
 
 class Model(ABC):
     def __init__(self, model: str, api_key: str, base_url: str):
@@ -19,22 +20,22 @@ class Model(ABC):
     def invoke(self,messages:List[Message]) -> AIMessage | str:
         pass
 
-    # @abstractmethod
-    # def stream_invoke(self,messages:List[Message]) -> AIMessage | str:
-    #     pass
+    @abstractmethod
+    async def async_invoke(self,messages:List[Message])-> AIMessage | str:
+        pass
 
     # @abstractmethod
-    # async def async_invoke(self,messages:List[Message])-> AIMessage | str:
+    # def stream_invoke(self,messages:List[Message]) -> AIMessage | str:
     #     pass
 
     # @abstractmethod
     # async def async_stream_invoke(self,messages:List[Message]) -> AIMessage | str:
     #     pass
 
-    # @abstractmethod
-    # def model_response_parse(self,response:dict) -> AIMessage | str:
-    #     # parse the model response
-    #     pass
+    @abstractmethod
+    def model_response_parse(self,response:dict) -> AIMessage | str:
+        # parse the model response
+        pass
 
 
 class AnthropicModel(Model):
@@ -73,32 +74,8 @@ class AnthropicModel(Model):
         self.payload.update(self.extra_args)
 
     def invoke(self, messages: List[Message], max_retries: int = 3, retry_delay: float = 1.0) -> AIMessage | str:
-        #   {
-        #   "messages": [
-        #     {
-        #       "content": "string",
-        #       "role": "user"
-        #     }
-        #   ],
-        #   "model": "claude-opus-4-6",
-        #   "cache_control": ,
-        #   "container": ,
-        #   "inference_geo": ,
-        #   "metadata": ,
-        #   "output_config": ,
-        #   "service_tier": ,
-        #   "stop_sequences": ,
-        #   "stream": ,
-        #   "system": ,
-        #   "temperature": ,
-        #   "thinking": {"type":"adaptive","display":"summarized"},
-        #   "tool_choice": {"type":"auto","disable_parallel_tool_use":false},
-        #   "tools": ,
-        #   "top_k": ,
-        #   "top_p":
-        #    }
+        
         self.payload_construct(messages)
-
         # print(self.payload)
         timeout = httpx.Timeout(60.0, read=300.0)
 
@@ -116,12 +93,31 @@ class AnthropicModel(Model):
                         continue
                     print(f"HTTP error after {max_retries} attempts: {e}")
                     raise
+    
+    async def async_invoke(self, messages: List[Message], max_retries: int = 3, retry_delay: float = 1.0) -> AIMessage | str:
+        
+        self.payload_construct(messages)
+        timeout = httpx.Timeout(60.0, read=300.0)
+
+        for attempt in range(max_retries):
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                try:
+                    response = await client.post(self.base_url, headers=self.headers, json=self.payload)
+                    response.raise_for_status()
+                    return self.model_response_parse(response.json())
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay * (2 ** attempt))
+                        print(f"Retry {attempt + 1}/{max_retries} after error: {e}")
+                        continue
+                    print(f"HTTP error after {max_retries} attempts: {e}")
+                    raise
 
     def payload_construct(self, messages: List[Message]):
-        payload_messages=[]
+        payload_messages = []
         for m in messages:
             if isinstance(m,SystemMessage):
-                self.sytem = m.content
+                self.system = m.content
                 self.payload['system'] = m.content 
             if isinstance(m,HumanMessage):
                 payload_messages.append({'role':m.role, 'content':m.content})
@@ -129,12 +125,12 @@ class AnthropicModel(Model):
                 payload_messages.append({'role':'user', 'content':[{'type':'tool_result','tool_use_id':m.id,'content':m.content}]})
             if isinstance(m,AIMessage):
                 if isinstance(m.content,list):
-                    content=[]
+                    content = []
                     for c in m.content:
                         if c['type'] != 'thinking': # delete the thinking
                             content.append(c)
                 else:
-                    content=m.content    
+                    content = m.content    
                 payload_messages.append({'role':m.role, 'content':content})
         
         self.payload['messages']=payload_messages
@@ -145,15 +141,15 @@ class AnthropicModel(Model):
         content=response.get('content',{})
         id=response.get('id','')
         
-        text=''
-        thinking=''
-        tool_calls=[]
+        text = ''
+        thinking = ''
+        tool_calls = []
         if isinstance(content,list):
             for block in content:
                 if 'text' in block:
-                    text+=block['text']
+                    text += block['text']
                 if 'thinking' in block:
-                    thinking+=block['thinking']
+                    thinking += block['thinking']
                 if block['type'] == 'tool_use':
                     tool_calls.append({'id':block['id'], 'name':block['name'], 'input':block['input']})
         else:
@@ -164,12 +160,24 @@ class AnthropicModel(Model):
 
         return AIMessage(content=content,id=id,text=text,thinking=thinking,stop_reason=stop_reason,tool_calls=tool_calls,usage_data=usage_data)
 
-    def bind_tools(self,tools:List[Tool]):
-        self.tools=tools
-        tool_prompt=[]
+    def bind_tools(self, tools:List[Tool]):
+        tool_prompt = []
         for t in tools:
             tool_prompt.append({"name":t.name, "description":t.description, "input_schema":t.input_schema})
-        self.payload['tools'] = tool_prompt
+
+        if hasattr(self,'tools'):
+            self.tools.extend(tools)
+            self.payload['tools'].extend(tool_prompt)
+        else:
+            self.tools = tools
+            self.payload['tools'] = tool_prompt
+    
+    # def bind_mcp_client(self, mcp_client:MCPClient):
+    #     if hasattr(self,'mcp'):
+    #         self.mcp[mcp_client.name] = mcp_client
+    #     else:
+    #         self.mcp = {}
+    #         self.mcp[mcp_client.name] = mcp_client
 
 class MiniMaxModel(Model):
     """MiniMax Model native API https://platform.minimaxi.com/docs/api-reference/text-post"""

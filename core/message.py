@@ -36,8 +36,8 @@ class SystemMessage(Message):
 class ToolMessage(Message):
     def __init__(self, content, name: str, id: str):
         super().__init__("tool", content)
-        self.name=name
-        self.id=id
+        self.name = name
+        self.id = id
 
 class AIMessage(Message):
     
@@ -53,15 +53,15 @@ class AIMessage(Message):
                 usage_data:dict
                 ):
         super().__init__("assistant", content)
-        self.content=content  # The raw output of the model !!!
+        self.content = content  # The raw output of the model !!!
         
-        self.id=id
-        self.text=text           # the model output text
-        self.thinking=thinking   # the model thinking text
+        self.id = id
+        self.text = text           # the model output text
+        self.thinking = thinking   # the model thinking text
         
-        self.stop_reason=stop_reason
-        self.tool_calls=tool_calls # [{'id':,'name':,'input':}]
-        self.usage_data=usage_data
+        self.stop_reason = stop_reason
+        self.tool_calls = tool_calls # [{'id':,'name':,'input':}]
+        self.usage_data = usage_data
 
 
 
