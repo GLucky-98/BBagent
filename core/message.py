@@ -3,7 +3,7 @@ from typing import List
 
 class Message():
     # this class is used to represent any message
-    def __init__(self, role: str, content: str|dict ):
+    def __init__(self, role: str, content):
         self.role = role
         self.content = content
 
@@ -44,13 +44,13 @@ class AIMessage(Message):
     """The message replied by the model"""
     
     def __init__(self,
-                content: str|dict,
+                content,
                 text: str,
                 thinking: str,
-                id:str,
-                stop_reason:str,
-                tool_calls:List[dict],
-                usage_data:dict
+                id: str,
+                stop_reason: str,
+                tool_calls: List[dict],
+                usage_data: dict
                 ):
         super().__init__("assistant", content)
         self.content = content  # The raw output of the model !!!

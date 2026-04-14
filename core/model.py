@@ -161,24 +161,36 @@ class AnthropicModel(Model):
         return AIMessage(content=content,id=id,text=text,thinking=thinking,stop_reason=stop_reason,tool_calls=tool_calls,usage_data=usage_data)
 
     def bind_tools(self, tools:List[Tool]):
-        tool_prompt = []
+        """绑定工具到模型，自动识别重复工具"""
+        if not hasattr(self, 'tools'):
+            self.tools = []
+            self.payload['tools'] = []
+        
+        existing_tool_names = {t.name for t in self.tools}
+        initial_count = len(self.tools)
+        
         for t in tools:
-            tool_prompt.append({"name":t.name, "description":t.description, "input_schema":t.input_schema})
-
-        if hasattr(self,'tools'):
-            self.tools.extend(tools)
-            self.payload['tools'].extend(tool_prompt)
+            if t.name in existing_tool_names:
+               continue
+            
+            tool_prompt = {
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema
+            }
+            
+            self.tools.append(t)
+            self.payload['tools'].append(tool_prompt)
+            existing_tool_names.add(t.name)
+        
+        new_tools_count = len(self.tools) - initial_count
+        if new_tools_count > 0:
+            print(f"✅ 成功绑定 {new_tools_count} 个新工具")
+        elif len(self.tools) == 0 and len(tools) == 0:
+            pass
         else:
-            self.tools = tools
-            self.payload['tools'] = tool_prompt
+            print(f"ℹ️ 没有新工具需要绑定")
     
-    # def bind_mcp_client(self, mcp_client:MCPClient):
-    #     if hasattr(self,'mcp'):
-    #         self.mcp[mcp_client.name] = mcp_client
-    #     else:
-    #         self.mcp = {}
-    #         self.mcp[mcp_client.name] = mcp_client
-
 class MiniMaxModel(Model):
     """MiniMax Model native API https://platform.minimaxi.com/docs/api-reference/text-post"""
 
@@ -356,6 +368,7 @@ class MiniMaxModel(Model):
         for t in tools:
             tool_prompt.append({'type':'function','function':{'name':t.name, 'description':t.description, 'parameters':t.input_schema}})
         self.payload['tools'] = tool_prompt
+
 
 class GLMModel():
     pass

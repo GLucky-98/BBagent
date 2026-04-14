@@ -10,7 +10,7 @@ from .mcp import MCPClient
 class ModelToolLoop:
     def __init__(self, model:Model, tools:List[Tool] = [], mcp_client:MCPClient = None) -> None:
         self.model = model
-        self.tools={}
+        self.tools = {}
         if tools:
             self.bind_tools(tools)
         if mcp_client:
@@ -79,11 +79,7 @@ class ModelToolLoop:
                 return
             
             for tool_call in response.tool_calls:
-                if tool_call['name'] == 'execute_mcp_tools':
-                    call = json.loads(self.tool_execute(tool_call).content)
-                    result = await self.model.mcp[call['mcp_name']].call_tool(call['tool_name'], call['arguments'])
-                else:
-                    result = await self.async_tool_execute(tool_call)
+                result = await self.async_tool_execute(tool_call)
                 messages.append(result)                  
 
     def tool_execute(self, tool_call:dict) -> ToolMessage:
@@ -95,13 +91,13 @@ class ModelToolLoop:
         if tool:
             try:
                 result = tool.invoke(input)
-                content = result              
+                content = json.dumps(result, ensure_ascii=False)              
             except Exception as e:
                 content = f'Tool invocation error {e}'
         else:
             content = f'Unkonw tool:{name}'
             
-        return ToolMessage(name=name,id=id,content=content)
+        return ToolMessage(name=name, id=id, content=content)
     
     async def async_tool_execute(self, tool_call:dict) -> ToolMessage:
         id = tool_call['id']
@@ -115,13 +111,13 @@ class ModelToolLoop:
                     result = await tool.async_invoke(input)
                 else:
                     result = tool.invoke(input)
-                content=result              
+                content = json.dumps(result, ensure_ascii=False)              
             except Exception as e:
                 content = f'Tool invocation error {e}'
         else:
             content = f'Unkonw tool:{name}'
             
-        return ToolMessage(name=name,id=id,content=content)
+        return ToolMessage(name=name, id=id, content=content)
         
 
     
