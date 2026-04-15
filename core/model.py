@@ -8,13 +8,13 @@ import json
 
 from .tool import Tool
 from .message import Message,AIMessage,HumanMessage,SystemMessage,ToolMessage
-from .mcp import MCPClient
 
 class Model(ABC):
-    def __init__(self, model: str, api_key: str, base_url: str):
+    def __init__(self, model: str, api_key: str, base_url: str, tools: List[Tool] = []):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
+        self.tools = tools
 
     @abstractmethod
     def invoke(self,messages:List[Message]) -> AIMessage | str:
@@ -33,10 +33,40 @@ class Model(ABC):
     #     pass
 
     @abstractmethod
+    def payload_construct(self,messages:List[Message]) -> None:
+        # construct the payload payload
+        pass
+
+    @abstractmethod
     def model_response_parse(self,response:dict) -> AIMessage | str:
         # parse the model response
         pass
 
+    def add_tools(self, tools:List[Tool]):
+        """绑定工具到模型，自动识别重复工具"""
+        existing_tool_names = {t.name for t in self.tools}
+        initial_count = len(self.tools)
+        
+        for t in tools:
+            if t.name in existing_tool_names:
+               continue
+            
+            self.tools.append(t)
+            existing_tool_names.add(t.name)
+        
+        new_tools_count = len(self.tools) - initial_count
+        if new_tools_count > 0:
+            print(f"✅ 成功绑定 {new_tools_count} 个新工具")
+        elif len(self.tools) == 0 and len(tools) == 0:
+            pass
+        else:
+            print(f"ℹ️ 没有新工具需要绑定")
+
+    def del_tools(self, tools: List[Tool]):
+        """删除工具从模型"""
+        del_tool_names = {t.name for t in tools}
+        # 重建工具列表，排除要删除的
+        self.tools = [t for t in self.tools if t.name not in del_tool_names]
 
 class AnthropicModel(Model):
     """Anthropic Claude API https://platform.claude.com/docs/en/api/messages/create"""
@@ -49,14 +79,15 @@ class AnthropicModel(Model):
                  temperature: float = 1,
                  top_p: float = 0.95,
                  thinking: dict = {"type":"adaptive","display":"summarized"},
+                 tools: List[Tool] = [],
                  **kwargs):
-        super().__init__(model, api_key, base_url+'/v1/messages')
+        super().__init__(model, api_key, base_url+'/v1/messages', tools)
         
-        self.max_tokens=max_tokens
-        self.temperature=temperature
-        self.top_p=top_p
-        self.thinking=thinking
-        self.extra_args=kwargs
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.top_p = top_p
+        self.thinking = thinking
+        self.extra_args = kwargs if kwargs else {}
 
         self.headers = {
                     "Content-Type": "application/json",
@@ -118,7 +149,10 @@ class AnthropicModel(Model):
         for m in messages:
             if isinstance(m,SystemMessage):
                 self.system = m.content
-                self.payload['system'] = m.content 
+                if 'system' in self.payload:
+                    self.payload['system'] += m.content
+                else:
+                    self.payload['system'] = m.content 
             if isinstance(m,HumanMessage):
                 payload_messages.append({'role':m.role, 'content':m.content})
             if isinstance(m,ToolMessage):
@@ -134,6 +168,8 @@ class AnthropicModel(Model):
                 payload_messages.append({'role':m.role, 'content':content})
         
         self.payload['messages']=payload_messages
+        if self.tools:
+            self.payload['tools'] = [t.schema for t in self.tools]
         return
 
     def model_response_parse(self,response:dict) -> AIMessage:       
@@ -159,37 +195,7 @@ class AnthropicModel(Model):
         usage_data=response.get('usage',{})   
 
         return AIMessage(content=content,id=id,text=text,thinking=thinking,stop_reason=stop_reason,tool_calls=tool_calls,usage_data=usage_data)
-
-    def bind_tools(self, tools:List[Tool]):
-        """绑定工具到模型，自动识别重复工具"""
-        if not hasattr(self, 'tools'):
-            self.tools = []
-            self.payload['tools'] = []
-        
-        existing_tool_names = {t.name for t in self.tools}
-        initial_count = len(self.tools)
-        
-        for t in tools:
-            if t.name in existing_tool_names:
-               continue
-            
-            tool_prompt = {
-                "name": t.name,
-                "description": t.description,
-                "input_schema": t.input_schema
-            }
-            
-            self.tools.append(t)
-            self.payload['tools'].append(tool_prompt)
-            existing_tool_names.add(t.name)
-        
-        new_tools_count = len(self.tools) - initial_count
-        if new_tools_count > 0:
-            print(f"✅ 成功绑定 {new_tools_count} 个新工具")
-        elif len(self.tools) == 0 and len(tools) == 0:
-            pass
-        else:
-            print(f"ℹ️ 没有新工具需要绑定")
+    
     
 class MiniMaxModel(Model):
     """MiniMax Model native API https://platform.minimaxi.com/docs/api-reference/text-post"""
@@ -361,14 +367,6 @@ class MiniMaxModel(Model):
         usage_data=response.get('usage',{})   
 
         return AIMessage(content=content,id=id,text=text,thinking=thinking,stop_reason=stop_reason,tool_calls=tool_calls,usage_data=usage_data)
-
-    def bind_tools(self,tools:List[Tool]):
-        self.tools=tools
-        tool_prompt=[]
-        for t in tools:
-            tool_prompt.append({'type':'function','function':{'name':t.name, 'description':t.description, 'parameters':t.input_schema}})
-        self.payload['tools'] = tool_prompt
-
 
 class GLMModel():
     pass

@@ -4,6 +4,9 @@ import os
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional
+import inspect
+
+from .tool import Tool
 
 # ------------------------------------------------------------
 # MCP JSON-RPC 消息构造辅助函数
@@ -26,7 +29,7 @@ def make_notification(method: str, params: Optional[Dict] = None) -> str:
     if params is not None:
         notif["params"] = params
     return json.dumps(notif)
-
+    
 # ------------------------------------------------------------
 # MCP 客户端类
 # ------------------------------------------------------------
@@ -38,6 +41,7 @@ class MCPClient:
         self.process: Optional[asyncio.subprocess.Process] = None
         self.request_id = 0
         self.pending_requests: Dict[int, asyncio.Future] = {}
+        self.state = 'inactive'
 
     async def start(self):
         """启动 MCP 服务器子进程并开始读取消息"""
@@ -161,6 +165,7 @@ class MCPClient:
 
         # 2. 发送 initialized 通知（握手完成）
         await self.send_notification("notifications/initialized")
+        self.state = 'active'
         return server_info
 
     async def list_tools(self) -> List[Dict]:
@@ -181,4 +186,161 @@ class MCPClient:
         if self.process:
             self.process.terminate()
             await self.process.wait()
+            self.state = 'inactive'
             self.process = None
+class MCPTool(Tool):
+    def __init__(self, mcp_client: MCPClient, config: Dict[str, Any]) :
+        func = self.create_tool_from_config(mcp_client, config)
+        super().__init__(func)
+        
+    @staticmethod
+    def create_tool_from_config(mcp_client: MCPClient, config: Dict[str, Any]):
+        """
+        根据工具配置字典生成一个可调用函数。
+        配置格式示例:
+        {
+            "name": "text_to_image",
+            "description": "Generate a image from a prompt...",
+            "inputSchema": {
+                "properties": {
+                    "model": {"type": "string", "default": "image-01"},
+                    "prompt": {"type": "string", "default": ""},
+                    "aspect_ratio": {"type": "string", "default": "1:1"},
+                    "n": {"type": "integer", "default": 1},
+                    "prompt_optimizer": {"type": "boolean", "default": True},
+                    "output_directory": {"type": "string"}
+                },
+                "required": ["output_directory"]  # 可选，但我们可以从 default 判断
+            }
+        }
+        返回的函数具有:
+            - __name__ == config["name"]
+            - __doc__ == config["description"]
+            - 参数签名与 inputSchema 一致，并包含正确的默认值
+        """
+        func_name = mcp_client.name + "_" + config["name"]
+        func_doc = config["description"]
+        schema = config["inputSchema"]
+        properties = schema.get("properties", {})
+
+        # 存储默认值映射
+        defaults = {}
+        # 存储参数类型注解映射（可选，用于增强可读性）
+        annotations = {}
+
+        type_mapping = {
+            "string": str,
+            "integer": int,
+            "boolean": bool,
+            "number": float,
+        }
+
+        for param_name, param_info in properties.items():
+            param_type_str = param_info.get("type", "string")
+            param_type = type_mapping.get(param_type_str, str)
+            annotations[param_name] = param_type
+
+            # 处理默认值
+            if "default" in param_info:
+                default_val = param_info["default"]
+                defaults[param_name] = default_val
+                # 有默认值的参数在签名中表示为 param=default
+            else:
+                # 无默认值，必填参数
+                defaults[param_name] = inspect.Parameter.empty
+
+        # 构建 inspect.Parameter 对象
+        parameters = []
+        for param_name, param_type in annotations.items():
+            default = defaults.get(param_name, inspect.Parameter.empty)
+            # 如果参数有默认值，kind 为 POSITIONAL_OR_KEYWORD，否则也是
+            # 注意：我们仅支持位置或关键字参数，简单处理
+            kind = inspect.Parameter.POSITIONAL_OR_KEYWORD
+            param = inspect.Parameter(
+                name=param_name,
+                kind=kind,
+                default=default,
+                annotation=param_type
+            )
+            parameters.append(param)
+
+        # 创建函数签名
+        sig = inspect.Signature(parameters=parameters)
+
+        async def tool_func(*args, **kwargs):
+            # 绑定参数，应用默认值
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            arguments = bound.arguments
+
+            result = await mcp_client.call_tool(config["name"], arguments)
+            return json.dumps(result)
+
+        # 设置函数元信息
+        tool_func.__name__ = func_name
+        tool_func.__doc__ = func_doc
+        tool_func.__signature__ = sig
+        tool_func.__annotations__ = annotations
+
+        return tool_func
+    
+class MCPManager:
+    def __init__(self, mcp_clients:List[MCPClient] = None):
+        self.clients = {}
+        self.client_tools = {}
+        if mcp_clients:
+            self.add_mcp_clients(mcp_clients)
+        
+    def add_mcp_clients(self, mcp_clients:List[MCPClient] = None):
+        """添加 MCP 客户端"""
+        for client in mcp_clients:
+            if client.name not in self.clients:
+                self.clients[client.name] = client
+        print(f"Added mcp clients: {[client.name for client in mcp_clients]}")
+    
+    async def activate_mcp_clients(self, mcp_clients:List[MCPClient] = None, is_all:bool = False) -> List[MCPTool]:
+        """激活 MCP 客户端"""
+        async def activate_client(client:MCPClient) -> List[MCPTool]:
+            await client.start()
+            await client.initialize()
+            tools = await client.list_tools()
+            if tools:
+                tools = [MCPTool(client, tool) for tool in tools]
+                self.client_tools[client.name] = tools
+                return tools
+            return []
+        
+        if mcp_clients:
+            self.add_mcp_clients(mcp_clients)      
+        
+        all_tools = []
+
+        if is_all:
+            for _,client in self.clients.items():
+                if client.state == 'inactive':
+                    tools = await activate_client(client)
+                    all_tools.extend(tools)
+                    print(f"Activated mcp client: {client.name}")
+        
+        else:
+            for client in mcp_clients:
+                tools = await activate_client(client)
+                all_tools.extend(tools)
+                print(f"Activated mcp client: {client.name}")
+
+        return all_tools        
+
+    async def del_mcp_clients(self, clients_name:List[str]) -> List[MCPTool]:
+        """删除指定 MCP 客户端"""
+        all_del_tools = []
+        for client_name in clients_name:
+            if client_name in self.clients:
+                client = self.clients.pop(client_name)
+                await client.close()
+                tools = self.client_tools.pop(client_name, None)
+                if tools:
+                    all_del_tools.extend(tools)
+                    
+        print(f"Deleted mcp clients: {clients_name}")
+        return all_del_tools
+

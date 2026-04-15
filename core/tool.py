@@ -34,10 +34,8 @@ import json
 import inspect
 from typing import Any, get_type_hints
 from pydantic import BaseModel, TypeAdapter
-from typing import Callable,Dict
+from typing import Callable,Dict,List
 import copy
-
-from .mcp import MCPClient
 
 # ------------------------------------------------------------
 # pydantic 输入参数类型解析辅助函数
@@ -90,6 +88,11 @@ class Tool():
         self.name = name if name else func.__name__ 
         self.description = description if description else func.__doc__
         self.input_schema = input_shcema if input_shcema else self.generate_input_schema_from_func(func)
+        self.schema = {
+                "name": self.name,
+                "description": self.description,
+                "input_schema": self.input_schema
+            }
         self.func = func
         self.is_async = inspect.iscoroutinefunction(func)
     
@@ -184,99 +187,3 @@ class Tool():
 def tool(func:Callable):
     
     return Tool(func)
-
-class MCPTool(Tool):
-    def __init__(self, mcp_client: MCPClient, config: Dict[str, Any]) :
-        func = self.create_tool_from_config(mcp_client, config)
-        super().__init__(func)
-        
-    @staticmethod
-    def create_tool_from_config(mcp_client: MCPClient, config: Dict[str, Any]):
-        """
-        根据工具配置字典生成一个可调用函数。
-        配置格式示例:
-        {
-            "name": "text_to_image",
-            "description": "Generate a image from a prompt...",
-            "inputSchema": {
-                "properties": {
-                    "model": {"type": "string", "default": "image-01"},
-                    "prompt": {"type": "string", "default": ""},
-                    "aspect_ratio": {"type": "string", "default": "1:1"},
-                    "n": {"type": "integer", "default": 1},
-                    "prompt_optimizer": {"type": "boolean", "default": True},
-                    "output_directory": {"type": "string"}
-                },
-                "required": ["output_directory"]  # 可选，但我们可以从 default 判断
-            }
-        }
-        返回的函数具有:
-            - __name__ == config["name"]
-            - __doc__ == config["description"]
-            - 参数签名与 inputSchema 一致，并包含正确的默认值
-        """
-        func_name = mcp_client.name + "_" + config["name"]
-        func_doc = config["description"]
-        schema = config["inputSchema"]
-        properties = schema.get("properties", {})
-
-        # 存储默认值映射
-        defaults = {}
-        # 存储参数类型注解映射（可选，用于增强可读性）
-        annotations = {}
-
-        type_mapping = {
-            "string": str,
-            "integer": int,
-            "boolean": bool,
-            "number": float,
-        }
-
-        for param_name, param_info in properties.items():
-            param_type_str = param_info.get("type", "string")
-            param_type = type_mapping.get(param_type_str, str)
-            annotations[param_name] = param_type
-
-            # 处理默认值
-            if "default" in param_info:
-                default_val = param_info["default"]
-                defaults[param_name] = default_val
-                # 有默认值的参数在签名中表示为 param=default
-            else:
-                # 无默认值，必填参数
-                defaults[param_name] = inspect.Parameter.empty
-
-        # 构建 inspect.Parameter 对象
-        parameters = []
-        for param_name, param_type in annotations.items():
-            default = defaults.get(param_name, inspect.Parameter.empty)
-            # 如果参数有默认值，kind 为 POSITIONAL_OR_KEYWORD，否则也是
-            # 注意：我们仅支持位置或关键字参数，简单处理
-            kind = inspect.Parameter.POSITIONAL_OR_KEYWORD
-            param = inspect.Parameter(
-                name=param_name,
-                kind=kind,
-                default=default,
-                annotation=param_type
-            )
-            parameters.append(param)
-
-        # 创建函数签名
-        sig = inspect.Signature(parameters=parameters)
-
-        async def tool_func(*args, **kwargs):
-            # 绑定参数，应用默认值
-            bound = sig.bind(*args, **kwargs)
-            bound.apply_defaults()
-            arguments = bound.arguments
-
-            result = await mcp_client.call_tool(config["name"], arguments)
-            return json.dumps(result)
-
-        # 设置函数元信息
-        tool_func.__name__ = func_name
-        tool_func.__doc__ = func_doc
-        tool_func.__signature__ = sig
-        tool_func.__annotations__ = annotations
-
-        return tool_func
