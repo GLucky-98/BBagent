@@ -72,10 +72,10 @@ class ToolManager():
 
 
 class Agent:
-    def __init__(self, model:Model, base_dir:Path | str = None, system_promt:str = "", tools:List[Tool] = [], mcp_clients:List[MCPClient] = None, skill_dir:Path | str = None) -> None:
+    def __init__(self, model:Model, base_dir:Path | str = None, system_prompt:str = "", tools:List[Tool] = [], mcp_clients:List[MCPClient] = None, skill_dir:Path | str = None) -> None:
         self.model = model
         self.base_dir = base_dir if base_dir else os.getcwd()
-        self.promt = SystemMessage(system_promt) if system_promt else None
+        self.prompt = SystemMessage(system_prompt) if system_prompt else None
         self.tool_manger = ToolManager(model, tools)
         self.mcp_manager = MCPManager(mcp_clients)
         self.skill_manager = SkillManager(self.base_dir, skill_dir)
@@ -97,7 +97,7 @@ class Agent:
     def show_skills(self):
         return self.skill_manager.show_skills()
         
-    async def tool_loop(self, messages:List[Message]) -> List[Message]:
+    async def tool_loop(self, messages:List[Message]):
         while True:
             response = await self.model.async_invoke(messages)
             messages.append(response)
@@ -109,8 +109,8 @@ class Agent:
                 result = await self.tool_manger.async_tool_execute(tool_call)
                 messages.append(result)       
 
-    async def run(self) -> List[Message]:        
-        messages = [self.promt] if self.promt else []
+    async def run(self) -> List[Message]:
+        messages = [self.prompt] if self.prompt else []
         # 激活所有 MCP 客户端
         if len(self.mcp_manager.clients) > 0:
             tools = await self.mcp_manager.activate_mcp_clients(is_all=True)

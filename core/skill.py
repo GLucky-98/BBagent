@@ -29,19 +29,19 @@ class SkillManager:
         if skill_dir is not None:
             self.add_skills(skill_dir)
 
-    def _validate_path(self, path: Path | str, base_dir: Path | str) -> bool:
+    def _validate_path(self, path: Path | str, base_dir: Path | str) -> Path:
         if not isinstance(path, Path):
            path = Path(path)
 
         if not path.is_relative_to(base_dir):
             raise ValueError(f"路径 '{path}' 超出基础目录 '{base_dir}' 范围")
-        
+
         if not path.exists():
             raise FileNotFoundError(f"路径不存在: {path}")
-        
+
         if not path.is_dir():
             raise NotADirectoryError(f"路径不是目录: {path}")
-        
+
         return path
 
     def add_skills(self, skill_dir: Path | str):
