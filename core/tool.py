@@ -30,11 +30,10 @@
 # greet=Tool(service.greet)
 # print(greet.invoke({'name':'gl','age': 18}))    
 
-import json
 import inspect
 from typing import Any, get_type_hints
 from pydantic import BaseModel, TypeAdapter
-from typing import Callable,Dict,List
+from typing import Callable
 import copy
 
 # ------------------------------------------------------------
@@ -88,11 +87,13 @@ class Tool():
         self.name = name if name else func.__name__ 
         self.description = description if description else func.__doc__
         self.input_schema = input_shcema if input_shcema else self.generate_input_schema_from_func(func)
+
         self.schema = {
                 "name": self.name,
                 "description": self.description,
                 "input_schema": self.input_schema
             }
+        
         self.func = func
         self.is_async = inspect.iscoroutinefunction(func)
     

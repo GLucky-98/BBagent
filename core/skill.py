@@ -100,7 +100,7 @@ class SkillManager:
             name = frontmatter.get('name', skill_path.name)
             description = frontmatter.get('description', '')
             if isinstance(description, str):
-                description = description.strip().split('\n')[0]
+                description = description.strip()
 
             metadata = SkillMetadata(
                 license=frontmatter.get('license'),
