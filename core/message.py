@@ -1,51 +1,37 @@
 import json
 from typing import List
-from dataclasses import dataclass, asdict, fields
+from dataclasses import dataclass, field
 from datetime import datetime
-
-from .tool import Tool
+from pathlib import Path
+import uuid
 
 __all__ = [
     'Session',
     'Message', 
     'HumanMessage', 
-    'SystemMessage', 
-    'AssistantMessage', 
-    'ToolResultMessage',
+    'ModelMessage', 
+    'ToolMessage',
     'ContentBlock',
     'TextBlock',
     'ImageBlock',
-    'ToolUseBlock',
-    'ThinkingBlock'
+    'ToolUseBlock'
 ]
 
 
 class ContentBlock:
-    """
-    内容块基类 - 提供统一的序列化/反序列化方法
-    
-    所有子类直接复用基类的 to_dict() 方法，无需覆盖
-    """
-    
     def to_dict(self) -> dict:
-        """
-        通用序列化方法 - 使用 dataclasses.asdict()
-        所有子类复用此方法，无需覆盖
-        """
-        return asdict(self)
-    
+        raise NotImplementedError
+
     @staticmethod
     def from_dict(data: dict) -> 'ContentBlock':
-        """工厂方法 - 根据 type 字段创建对应的子类实例"""
-        block_type = data.get('type', 'text')
-        type_mapping = {
-            'text': TextBlock,
-            'image': ImageBlock,
-            'thinking': ThinkingBlock,
-            'tooluse': ToolUseBlock,
-        }
-        block_class = type_mapping.get(block_type, TextBlock)
-        return block_class(**data)
+        block_type = data.get('type', '')
+        if block_type == 'text':
+            return TextBlock(text=data['text'])
+        elif block_type == 'image':
+            return ImageBlock(data=data['data'], image_type=data.get('image_type', 'base64'))
+        elif block_type == 'tooluse':
+            return ToolUseBlock(id=data['id'], name=data['name'], input=data['input'])
+        raise ValueError(f"Unknown content block type: {block_type}")
 
 
 @dataclass
@@ -53,20 +39,25 @@ class TextBlock(ContentBlock):
     text: str
     type: str = "text"
 
+    def to_dict(self) -> dict:
+        return {"type": self.type, "text": self.text}
 
 @dataclass
 class ImageBlock(ContentBlock):
     data: str
-    image_type: str 
-    type: str = "image" 
+    image_type: str = 'base64'
+    type: str = "image"
 
+    def to_dict(self) -> dict:
+        return {"type": self.type, "data": self.data, "image_type": self.image_type}
 
 @dataclass
-class ThinkingBlock(ContentBlock):
-    thinking: str
-    signature: str
-    type: str = "thinking"
+class AudioBlock(ContentBlock):
+    pass
 
+@dataclass
+class DocumentBlock(ContentBlock):
+    pass
 
 @dataclass
 class ToolUseBlock(ContentBlock):
@@ -75,202 +66,345 @@ class ToolUseBlock(ContentBlock):
     input: dict
     type: str = "tooluse"
 
+    def to_dict(self) -> dict:
+        return {"type": self.type, "id": self.id, "name": self.name, "input": self.input}
 
 
 class Message:
-    """消息基类 - 提供统一的序列化/反序列化方法"""
-    
+    @staticmethod
+    def _serialize_content(content):
+        if isinstance(content, str):
+            return content
+        return [block.to_dict() for block in content]
+
+    @staticmethod
+    def _deserialize_content(content_data):
+        if isinstance(content_data, str):
+            return content_data
+        return [ContentBlock.from_dict(block) for block in content_data]
+
     def to_dict(self) -> dict:
-        """
-        通用序列化方法 - 所有子类复用此方法
-        
-        规则：
-        1. ContentBlock 及其子类：递归调用 to_dict()
-        2. list 中元素是 ContentBlock 子类：递归调用 to_dict()
-        3. 其他：直接返回
-        """
-        if not hasattr(self, '__dataclass_fields__'):
-            return {}
-        
-        result = {}
-        for f in fields(self):
-            value = getattr(self, f.name)
-            result[f.name] = self._serialize_value(value)
-        return result
-    
-    def _serialize_value(self, value):
-        """递归序列化值"""
-        if isinstance(value, ContentBlock):
-            return value.to_dict()
-        elif isinstance(value, list) and len(value) > 0:
-            return [self._serialize_item(item) for item in value]
-        else:
-            return value
-    
-    def _serialize_item(self, item):
-        """序列化列表中的单个元素"""
-        if isinstance(item, ContentBlock):
-            return item.to_dict()
-        return item
-    
+        raise NotImplementedError
+
     @staticmethod
     def from_dict(data: dict) -> 'Message':
-        """工厂方法 - 根据 role 字段创建对应的子类实例"""
-        msg_type = data.get('role', 'user')
-        content = data.get('content')
-        
-        if isinstance(content, list):
-            content = [ContentBlock.from_dict(c) if isinstance(c, dict) else c for c in content]
-        elif isinstance(content, dict):
-            content = ContentBlock.from_dict(content)
-        
-        if msg_type == 'user':
-            return HumanMessage(content=content)
-        elif msg_type == 'system':
-            return SystemMessage(content=content)
-        elif msg_type == 'assistant':
-            tool_calls = data.get('tool_calls', [])
-            if isinstance(tool_calls, list):
-                tool_calls = [ToolUseBlock(**tc) if isinstance(tc, dict) else tc for tc in tool_calls]
-            return AssistantMessage(
-                content=content,
-                id=data.get('id', ''),
-                stop_reason=data.get('stop_reason', ''),
-                tool_calls=tool_calls,
-                usage_data=data.get('usage_data', {})
-            )
-        elif msg_type == 'tool':
-            return ToolResultMessage(
-                id=data.get('id', ''),
-                name=data.get('name', ''),
-                content=content
-            )
-        else:
-            return HumanMessage(content=content)
+        role = data.get('role', '')
+        if role == 'user':
+            return HumanMessage._from_dict(data)
+        elif role == 'model':
+            return ModelMessage._from_dict(data)
+        elif role == 'tool':
+            return ToolMessage._from_dict(data)
+        raise ValueError(f"Unknown message role: {role}")
 
 
 @dataclass
 class HumanMessage(Message):
-    content: List[ContentBlock] | str 
+    content: List[ContentBlock] | str
+    token_num: int = 0
     role: str = "user"
+    timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
+
+    def to_dict(self) -> dict:
+        return {
+            "role": self.role,
+            "content": Message._serialize_content(self.content),
+            "token_num": self.token_num,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def _from_dict(cls, data: dict) -> 'HumanMessage':
+        return cls(
+            content=Message._deserialize_content(data['content']),
+            token_num=data.get('token_num', 0),
+            timestamp=data.get('timestamp', 0),
+        )
 
 
 @dataclass
-class SystemMessage(Message):
-    content: str 
-    role: str = "system"
-
-
-@dataclass
-class ToolResultMessage(Message):
+class ToolMessage(Message):
     id: str
     name: str
-    content: List[ContentBlock] | str 
+    content: List[ContentBlock] | str
+    token_num: int = 0 
     role: str = "tool"
+    timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
+
+    def to_dict(self) -> dict:
+        return {
+            "role": self.role,
+            "id": self.id,
+            "name": self.name,
+            "content": Message._serialize_content(self.content),
+            "token_num": self.token_num,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def _from_dict(cls, data: dict) -> 'ToolMessage':
+        return cls(
+            id=data['id'],
+            name=data['name'],
+            content=Message._deserialize_content(data['content']),
+            token_num=data.get('token_num', 0),
+            timestamp=data.get('timestamp', 0),
+        )
 
 
 @dataclass
-class AssistantMessage(Message):
+class ModelMessage(Message):
     id: str
-    content: List[ContentBlock] | str
+    content: List[ContentBlock] | str 
     stop_reason: str
-    tool_calls: List[ToolUseBlock]
     usage_data: dict
-    role: str = "assistant"
+    raw_json: str = ''
+    thinking: str = ''
+    tool_calls: List[ToolUseBlock] = field(default_factory=list)
+    input_tokens: int = 0
+    token_num: int = 0
+    role: str = "model"
+    timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
+
+    def to_dict(self) -> dict:
+        return {
+            "role": self.role,
+            "id": self.id,
+            "content": Message._serialize_content(self.content),
+            "stop_reason": self.stop_reason,
+            "usage_data": self.usage_data,
+            "raw_json": self.raw_json,
+            "thinking": self.thinking,
+            "tool_calls": [tc.to_dict() for tc in self.tool_calls],
+            "input_tokens": self.input_tokens,
+            "token_num": self.token_num,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def _from_dict(cls, data: dict) -> 'ModelMessage':
+        return cls(
+            id=data['id'],
+            content=Message._deserialize_content(data['content']),
+            stop_reason=data.get('stop_reason', ''),
+            usage_data=data.get('usage_data', {}),
+            raw_json=data.get('raw_json', ''),
+            thinking=data.get('thinking', ''),
+            tool_calls=[ContentBlock.from_dict(tc) for tc in data.get('tool_calls', [])],
+            input_tokens=data.get('input_tokens', 0),
+            token_num=data.get('token_num', 0),
+            timestamp=data.get('timestamp', 0),
+        )
 
 
 class Session:
-    def __init__(self, id: str = None, system_prompt: str = None, tools: List[Tool] = None, context: List[Message] = None):
-        self.id = id if id else datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.tools = tools if tools else []
-        self.context = context if context else []
-        self.system_prompt = ''
-        if system_prompt:
-            self.add_system_prompt(system_prompt)          
-        self.usage_data = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
-    
-    def add_system_prompt(self, system_prompt: str):
-        if self.system_prompt:
-            self.system_prompt += system_prompt
-            self.context[0].content = self.system_prompt
-        else:
-            self.system_prompt = system_prompt
-            self.context.insert(0, SystemMessage(content=system_prompt))
-
-    def add_tools(self, tools: List[Tool]):
-        existing_names = {t.name for t in self.tools}
-        new_tools = [t for t in tools if t.name not in existing_names]
-        self.tools.extend(new_tools)
-    
-    def del_tools(self, tools: List[Tool]):
-        self.tools = [t for t in self.tools if t.name not in [t.name for t in tools]]
-
-    def add_message(self, message: List[Message] | Message):
-        if isinstance(message, List):
-            self.context.extend(message)
-        else:
-            self.context.append(message)
-        if isinstance(self.context[-1], AssistantMessage):
-            self.usage_data.update(self.context[-1].usage_data)
-            self.usage_data['total_tokens'] = self.usage_data['input_tokens'] + self.usage_data['output_tokens']
-
-    def to_dict(self) -> dict:
-        """将 Session 序列化为字典"""
-        return {
-            'id': self.id,
-            'system_prompt': self.system_prompt,
-            'tools': [t.schema for t in self.tools],
-            'context': [msg.to_dict() for msg in self.context],
-            'usage_data': self.usage_data
-        }
-    
-    def to_json(self, indent: int = 4) -> str:
-        """将 Session 序列化为 JSON 字符串"""
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
-    
-    def save(self, filepath: str = None) -> str:
-        """将 Session 保存到 JSON 文件"""
-        if filepath is None:
-            filepath = f"{self.id}.json"
+    def __init__(self, path: str | Path = None, id: str = None, messages: List[Message] = None):
+        self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.id = id if id else uuid.uuid4().hex[:8] + '-' + self.timestamp
+        self.path = Path(path) if path else None
+        self.messages = messages if messages else []
         
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(self.to_json())
-        
-        return filepath
-    
+        self.total_tokens = 0
+        self.compress_num = 0
+        self.summary = ''
+        self.compact_summary = []
+        self.ever_used_tools = []
+
     @classmethod
-    def from_dict(cls, data: dict) -> 'Session':
-        """从字典反序列化为 Session"""
-        session = cls(
-            id=data.get('id'),
-            system_prompt=data.get('system_prompt', '')
-        )
-        
-        session.tools = []
-        session.context = []
-        
-        for msg_data in data.get('context', []):
-            msg = Message.from_dict(msg_data)
-            session.context.append(msg)
-        
-        session.usage_data = data.get('usage_data', {
-            'input_tokens': 0,
-            'output_tokens': 0,
-            'total_tokens': 0
-        })
-        
+    def create(cls, base_path: str | Path) -> 'Session':
+        session_dir = Path(base_path) / 'history_session'
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        session = cls(path=session_dir)
+        session._messages_path().touch()
+        session._write_metadata()
         return session
-    
+
+    def _messages_path(self) -> Path:
+        return self.path / f'{self.id}.jsonl'
+
+    def _metadata_path(self) -> Path:
+        return self.path / f'{self.id}.md'
+
+    def add_message(self, message: Message | List[Message]):
+        if isinstance(message, list):
+            self.messages.extend(message)
+            if self.path:
+                with open(self._messages_path(), 'a', encoding='utf-8') as f:
+                    for msg in message:
+                        f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
+        else:
+            self.messages.append(message)
+            if self.path:
+                with open(self._messages_path(), 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(message.to_dict(), ensure_ascii=False) + '\n')
+
+    def replace_messages(self, new_messages: List[Message], summary: str = ''):
+        if self.path:
+            marker = {
+                "type": "compress_boundary",
+                "compress_num": self.compress_num + 1,
+                "timestamp": int(datetime.now().timestamp()),
+                "old_messages_count": len(self.messages),
+                "summary": summary,
+            }
+            with open(self._messages_path(), 'a', encoding='utf-8') as f:
+                f.write(json.dumps(marker, ensure_ascii=False) + '\n')
+                for msg in new_messages:
+                    f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
+
+        self.compress_num += 1
+        if summary:
+            self.summary = summary
+        self.messages = new_messages
+
+    def save_messages(self):
+        if not self.path:
+            raise ValueError("Session path not set, use Session.create() for persistent sessions")
+        boundaries = []
+        if self._messages_path().exists():
+            with open(self._messages_path(), 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if data.get('type') == 'compress_boundary':
+                        boundaries.append(line)
+        with open(self._messages_path(), 'w', encoding='utf-8') as f:
+            for boundary in boundaries:
+                f.write(boundary + '\n')
+            for msg in self.messages:
+                f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
+
+    def save_metadata(self):
+        if not self.path:
+            raise ValueError("Session path not set, use Session.create() for persistent sessions")
+        self._write_metadata()
+
+    def save(self):
+        if not self.path:
+            raise ValueError("Session path not set, use Session.create() for persistent sessions")
+        self.save_messages()
+        self.save_metadata()
+
+    def _write_metadata(self):
+        tools_str = ', '.join(self.ever_used_tools) if self.ever_used_tools else 'None'
+        compact_str = '\n'.join(self.compact_summary) if self.compact_summary else '(empty)'
+        summary_str = self.summary if self.summary else '(empty)'
+
+        content = f"""# Session: {self.id}
+
+id: {self.id}
+timestamp: {self.timestamp}
+total_tokens: {self.total_tokens}
+compress_num: {self.compress_num}
+messages_count: {len(self.messages)}
+ever_used_tools: {tools_str}
+
+---
+
+## Summary
+
+{summary_str}
+
+---
+
+## Compact Summary
+
+{compact_str}
+"""
+        self._metadata_path().write_text(content, encoding='utf-8')
+
     @classmethod
-    def from_json(cls, json_str: str) -> 'Session':
-        """从 JSON 字符串反序列化为 Session"""
-        data = json.loads(json_str)
-        return cls.from_dict(data)
-    
-    @classmethod
-    def load(cls, filepath: str) -> 'Session':
-        """从 JSON 文件加载 Session"""
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        return cls.from_dict(data)
+    def load(cls, session_id: str, base_path: str | Path) -> 'Session':
+        session_dir = Path(base_path) / 'history_session'
+        messages_file = session_dir / f'{session_id}.jsonl'
+        metadata_file = session_dir / f'{session_id}.md'
+
+        if not messages_file.exists():
+            raise FileNotFoundError(f"Messages file not found: {messages_file}")
+        if not metadata_file.exists():
+            raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
+
+        lines = []
+        with open(messages_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    lines.append(json.loads(line))
+
+        last_boundary_idx = -1
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].get('type') == 'compress_boundary':
+                last_boundary_idx = i
+                break
+
+        messages = []
+        for data in lines[last_boundary_idx + 1:]:
+            if data.get('type') != 'compress_boundary':
+                messages.append(Message.from_dict(data))
+
+        metadata = cls._parse_metadata(metadata_file)
+
+        session = cls(
+            path=session_dir,
+            id=session_id,
+            messages=messages,
+        )
+        session.timestamp = metadata.get('timestamp', session.timestamp)
+        session.total_tokens = metadata.get('total_tokens', 0)
+        session.compress_num = metadata.get('compress_num', 0)
+        session.summary = metadata.get('summary', '')
+        session.compact_summary = metadata.get('compact_summary', [])
+        session.ever_used_tools = metadata.get('ever_used_tools', [])
+
+        md_count = metadata.get('messages_count', len(messages))
+        if len(messages) != md_count:
+            print(f"Warning: message count mismatch. JSONL: {len(messages)}, metadata: {md_count}")
+
+        return session
+
+    @staticmethod
+    def _parse_metadata(md_path: Path) -> dict:
+        text = md_path.read_text(encoding='utf-8')
+        result = {}
+        section = 'header'
+        summary_lines = []
+        compact_lines = []
+
+        for line in text.split('\n'):
+            stripped = line.strip()
+            if stripped == '---':
+                if section == 'header':
+                    section = 'after_header'
+                elif section == 'summary':
+                    section = 'after_summary'
+                continue
+            if stripped == '## Summary':
+                section = 'summary'
+                continue
+            if stripped == '## Compact Summary':
+                section = 'compact'
+                continue
+
+            if section == 'header' and ':' in stripped and not stripped.startswith('#'):
+                key, _, value = stripped.partition(':')
+                key, value = key.strip(), value.strip()
+                if key in ('total_tokens', 'compress_num', 'messages_count'):
+                    result[key] = int(value) if value.isdigit() else 0
+                elif key == 'ever_used_tools':
+                    result[key] = [t.strip() for t in value.split(',') if t.strip()] if value != 'None' else []
+                else:
+                    result[key] = value
+            elif section == 'summary':
+                summary_lines.append(line)
+            elif section == 'compact' and stripped:
+                compact_lines.append(stripped)
+
+        result['summary'] = '\n'.join(summary_lines).strip()
+        if result['summary'] == '(empty)':
+            result['summary'] = ''
+        result['compact_summary'] = compact_lines if compact_lines and compact_lines != ['(empty)'] else []
+
+        return result
