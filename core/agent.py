@@ -147,10 +147,11 @@ class Agent:
         self.tools.extend(tools)
         self.tool_dict.update({t.name: t for t in tools})
     
-    async def tool_execute(self, tool_call:ToolUseBlock) -> ToolMessage:
-        id = tool_call.id
-        name = tool_call.name
-        input = tool_call.input
+    async def tool_execute(self, tool_use: ToolUseBlock) -> ToolMessage:
+        await self.hook.trigger(HookType.ON_TOOL_USE, tool_use)
+        id = tool_use.id
+        name = tool_use.name
+        input = tool_use.input
         tool = self.tool_dict.get(name)
 
         if tool:
@@ -168,7 +169,9 @@ class Agent:
         else:
             content = f'Unknown tool:{name}'
             
-        return ToolMessage(id, name, content)
+        tool_msg = ToolMessage(id, name, content)
+        await self.hook.trigger(HookType.ON_TOOL_RESULT, tool_msg)
+        return tool_msg
 
     def _load_skill_prompt(self):
         """从 skills.md 加载技能提示词，文件不存在时使用默认值"""
@@ -190,32 +193,38 @@ Your available skills are:
         return Model_Input(prompt=prompt, tools=tools, messages=messages)
       
     async def stream_tool_loop(self):
-        """改进版：工具调用不阻塞流式输出"""
         try:
             while True:
-                tool_tasks = []  # 存储待执行的工具任务
-                stop_reason = None  # 初始化 stop_reason
+                tool_tasks = []
+                stop_reason = None
+                interrupted = False
                 
                 await self.hook.trigger(HookType.BEFORE_STREAM)
+                if self.hook.should_break():
+                    break
                 model_input = self.construct_model_input()
                 model = self.choose_model()
                 async for chunk in model.async_stream_invoke(model_input): 
+                    if self.hook.should_break():
+                        interrupted = True
+                        break
+                    
                     chunk_type = chunk.get('type')
                     content = chunk.get('content', '')
 
                     if chunk_type == 'text':
                         await self.hook.trigger(HookType.ON_TEXT_CHUNK, content)
                         yield chunk
+
                     
                     if chunk_type == 'thinking':
                         await self.hook.trigger(HookType.ON_THINKING_CHUNK, content)
                         yield chunk
 
                     if chunk_type == 'completed_tool_use':
-                        tool_call = content
-                        await self.hook.trigger(HookType.ON_TOOL_START, tool_call)
+                        tool_use = content
                         task = asyncio.create_task(
-                            self.tool_execute(tool_call)
+                            self.tool_execute(tool_use)
                         )
                         tool_tasks.append(task)
                         yield chunk
@@ -227,10 +236,12 @@ Your available skills are:
                         yield chunk
                         break
                 
+                if interrupted:
+                    break
+                
                 if stop_reason in ['tool_use', 'tool_calls']:
                     tool_results = await asyncio.gather(*tool_tasks)
-                    await self.hook.trigger(HookType.ON_TOOL_RESULT, tool_results)
-                    yield tool_results
+                    yield {'type': 'tool_results', 'content': tool_results}
                     self.session.add_message(tool_results)
                 elif stop_reason in ['end_turn', 'stop']:
                     break
