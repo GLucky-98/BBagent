@@ -1,63 +1,157 @@
 import asyncio
-import os
 import json
-import termios
-import sys
-
+import shutil
+from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 from typing import  List
+from uuid import uuid4 as uuid
 
-from .model import Model
+from .model import Model,Model_Input
 from .tool import Tool
 from .message import *
-from .mcp import MCPClient,MCPManager
-from .skill import SkillManager
+from .skill import Skill
+from .agenthook import AgentHook, HookType, Hook
+from .messagebus import MessageBus
 
-class ToolManager():
-    def __init__(self, session:Session, tools:List[Tool] = []):
-        self.tools = {}
-        self.session = session
-        if tools:
-            self.add_tools(tools)
+@dataclass
+class AgentConfig:
+    model: List[Model]  #方便后期进行多模型路由的扩展
+    base_path: Path | str = Path.cwd()
+    system_prompt: str = ""
+    name: str = 'Agent_' + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '_' + uuid().hex[:8]
+    session: Session = None
+    tools: List[Tool] = None
+    skills: List[Skill] = None
+    hook: AgentHook = None
+
+    def __post_init__(self): 
+        if self.tools is None:
+            self.tools = []
+        if self.skills is None:
+            self.skills = []
+        self.base_path = Path(self.base_path) / self.name
+
+
+@dataclass
+class AgentState:
+    Ready = 'Ready'
+    Running = 'Running'
+    IDLE = 'IDLE'
+    Stop = 'Stop'
+
+
+class Agent:
+    def __init__(self,agent_config:AgentConfig):
+        self.name = agent_config.name
+        self.model = agent_config.model
+
+        self.base_path = agent_config.base_path
+        self.base_path.mkdir(parents=True, exist_ok=True)
+        self.system_prompt_path = self.base_path / 'system_prompt.md'
+        self.system_prompt = agent_config.system_prompt
+        if not self.system_prompt_path.exists():
+            self.system_prompt_path.write_text(agent_config.system_prompt, encoding='utf-8')
+        self.session_path = self.base_path / 'session'
+        self.session_path.mkdir(parents=True, exist_ok=True)
+
+        self.session = agent_config.session or Session.create(self.session_path)
+
+        self.tools = agent_config.tools
+        self.tool_dict = {t.name: t for t in self.tools}
+
+        self.skills = agent_config.skills
+        self.skill_prompt = self._load_skill_prompt()
+        
+        self.hook = agent_config.hook if agent_config.hook else AgentHook()
+        if self.hook:
+            self.hook.set_context(self)
+        
+        self.state = AgentState.Ready
+
+    def change_name(self, name: str):
+        self.name = name
+    
+    def choose_model(self):
+        #TODO: 实现模型选择逻辑
+        return self.model[0]
+    
+    def change_model(self, model: List[Model]):
+        self.model = model
+    
+    def change_base_path(self, path: Path | str):
+        new_base = Path(path)
+        old_base = self.base_path
+        new_base.mkdir(parents=True, exist_ok=True)
+
+        new_system_prompt = new_base / 'system_prompt.md'
+        if new_system_prompt.exists():
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            deprecated = new_base / f'system_prompt_deprecated_{timestamp}.md'
+            shutil.move(str(new_system_prompt), str(deprecated))
+        shutil.copy2(old_base / 'system_prompt.md', new_system_prompt)
+
+        new_session = new_base / 'session'
+        if new_session.exists():
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            deprecated = new_base / f'session_deprecated_{timestamp}'
+            shutil.move(str(new_session), str(deprecated))
+        shutil.copytree(old_base / 'session', new_session)
+
+        self.base_path = new_base
+        self.system_prompt_path = new_system_prompt
+        self.session_path = new_session
+    
+    def change_system_prompt(self, prompt: str):
+        self.system_prompt = prompt
+        self.system_prompt_path.write_text(prompt, encoding='utf-8')
+    
+    async def load_session(self, session_file_path: Path | str):
+        await self.hook.trigger(HookType.NEW_SESSION)
+        self.session.save()
+
+        src = Path(session_file_path)
+        if not src.exists():
+            raise FileNotFoundError(f"Session file not found: {src}")
+
+        session_id = src.stem
+        src_dir = src.parent
+        jsonl_src = src_dir / f'{session_id}.jsonl'
+        md_src = src_dir / f'{session_id}.md'
+
+        dst_dir = self.session_path / session_id
+        dst_dir.mkdir(parents=True, exist_ok=True)
+
+        for f in [jsonl_src, md_src]:
+            if f.exists():
+                dst = dst_dir / f.name
+                if dst.exists():
+                    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    deprecated = dst_dir / f'{f.stem}_deprecated_{timestamp}{f.suffix}'
+                    shutil.move(str(dst), str(deprecated))
+                shutil.copy2(f, dst)
+
+        self.session = Session.load(session_id, dst_dir)
+        
+        ever_used_tools = self.session.ever_used_tools()
+        for tool in ever_used_tools:
+            if tool not in self.tool_dict:
+                print(f'Warning: Tool {tool} not found in agent tools')
+
+    async def new_session(self):
+        await self.hook.trigger(HookType.NEW_SESSION)
+        self.session.save()
+        self.session = Session.create(self.session_path)
     
     def add_tools(self, tools:List[Tool]):
-        self.session.add_tools(tools)
-        for t in tools:
-            self.tools[t.name] = t
-        print(f"Added tools: {[tool.name for tool in tools]}")
+        self.tools.extend(tools)
+        self.tool_dict.update({t.name: t for t in tools})
     
-    def del_tools(self, tools:List[Tool]):
-        self.session.del_tools(tools)
-        for t in tools:
-            if t.name in self.tools:
-                del self.tools[t.name]
-        print(f"Deleted tools: {[tool.name for tool in tools]}")
-    
-    def tool_execute(self, tool_call:ToolUseBlock) -> ToolResultMessage:
+    async def tool_execute(self, tool_call:ToolUseBlock) -> ToolMessage:
         id = tool_call.id
         name = tool_call.name
         input = tool_call.input
-        tool=self.tools.get(name)
-
-        if tool:
-            try:
-                result = tool.invoke(input)
-                if isinstance(result, str):
-                    content = result
-                else:
-                    content = json.dumps(result, ensure_ascii=False)              
-            except Exception as e:
-                content = f'Tool invocation error {e}'
-        else:
-            content = f'Unknown tool:{name}'
-            
-        return ToolResultMessage(id, name, content)
-    
-    async def async_tool_execute(self, tool_call:ToolUseBlock) -> ToolResultMessage:
-        id = tool_call.id
-        name = tool_call.name
-        input = tool_call.input
-        tool = self.tools.get(name)
+        tool = self.tool_dict.get(name)
 
         if tool:
             try:
@@ -74,113 +168,95 @@ class ToolManager():
         else:
             content = f'Unknown tool:{name}'
             
-        return ToolResultMessage(id, name, content)
+        return ToolMessage(id, name, content)
 
+    def _load_skill_prompt(self):
+        """从 skills.md 加载技能提示词，文件不存在时使用默认值"""
+        skill_system_prompt = ["""You have access to the following skills. Each skill's complete information (including its full capabilities, usage instructions, and detailed behavior) is stored in a markdown file located at the skill's path. When you need to use a specific skill, read its SKILL.md file from the skill's path to get the complete details.
 
-class Agent:
-    def __init__(self, 
-                 model:Model, 
-                 base_dir:Path | str = None, 
-                 system_prompt:str = None, 
-                 session:Session = None, 
-                 tools:List[Tool] = None, 
-                 mcp_clients:List[MCPClient] = None, 
-                 skill_dir:Path | str = None):
-        
-        self.model = model
-        self.base_dir = base_dir if base_dir else os.getcwd()
-        self.session = session if session else Session(system_prompt=system_prompt)        
-        self.tool_manager = ToolManager(self.session, tools)
-        self.mcp_manager = MCPManager(mcp_clients)
-        self.skill_manager = SkillManager(self.base_dir, skill_dir)
-            
-    def add_mcp_clients(self, mcp_clients:List[MCPClient]):
-        self.mcp_manager.add_mcp_clients(mcp_clients)
+Your available skills are:
+"""]
+        skill_short_prompt = [f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in self.skills]
+        return '\n'.join(skill_system_prompt + skill_short_prompt)
+
+    def add_skills(self, skills:List[Skill]):
+        self.skills.extend(skills)
+        self.skill_prompt += '\n'.join([f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in skills])
     
-    async def activate_mcp_clients(self, mcp_clients:List[MCPClient], is_all:bool = False):
-        tools = await self.mcp_manager.activate_mcp_clients(mcp_clients, is_all)
-        self.tool_manager.add_tools(tools)
-        
-    async def del_mcp_client(self, clients_name:List[str]):
-        tools = await self.mcp_manager.del_mcp_clients(clients_name)
-        self.tool_manager.del_tools(tools)      
-    
-    def add_skills(self, skill_dir:Path | str):
-        self.skill_manager.add_skills(skill_dir)
-    
-    def show_skills(self):
-        return self.skill_manager.show_skills()
-        
-    
+    def construct_model_input(self) -> Model_Input:
+        tools = self.tools
+        prompt = self.system_prompt + self.skill_prompt
+        messages = self.session.messages
+        return Model_Input(prompt=prompt, tools=tools, messages=messages)
+      
     async def stream_tool_loop(self):
         """改进版：工具调用不阻塞流式输出"""
-        while True:
-            tool_tasks = []  # 存储待执行的工具任务
-            tool_call_map = {}  # 映射 task -> tool_call 用于调试
-            
-            # 使用异步流式调用
-            async for chunk in self.model.async_stream_invoke(self.session):
-                chunk_type = chunk.get('type')
-                content = chunk.get('content', '')
+        try:
+            while True:
+                tool_tasks = []  # 存储待执行的工具任务
+                stop_reason = None  # 初始化 stop_reason
+                
+                await self.hook.trigger(HookType.BEFORE_STREAM)
+                model_input = self.construct_model_input()
+                model = self.choose_model()
+                async for chunk in model.async_stream_invoke(model_input): 
+                    chunk_type = chunk.get('type')
+                    content = chunk.get('content', '')
 
-                if chunk_type == 'need_print':
-                    # 实时打印，同时可以显示工具执行状态
-                    print(content, end='', flush=True)
+                    if chunk_type == 'text':
+                        await self.hook.trigger(HookType.ON_TEXT_CHUNK, content)
+                        yield chunk
+                    
+                    if chunk_type == 'thinking':
+                        await self.hook.trigger(HookType.ON_THINKING_CHUNK, content)
+                        yield chunk
 
-                elif chunk_type == 'completed_tool_use':
-                    tool_call = content
-                    # 创建后台任务，不等待立即执行
-                    task = asyncio.create_task(
-                        self.tool_manager.async_tool_execute(tool_call)
-                    )
-                    tool_tasks.append(task)
-                    tool_call_map[task] = tool_call
-                    print(f"[执行工具: {tool_call.name}]")
-                    # 可以在这里打印提示：
+                    if chunk_type == 'completed_tool_use':
+                        tool_call = content
+                        await self.hook.trigger(HookType.ON_TOOL_START, tool_call)
+                        task = asyncio.create_task(
+                            self.tool_execute(tool_call)
+                        )
+                        tool_tasks.append(task)
+                        yield chunk
 
-                elif chunk_type == 'completed_message':
-                    stop_reason = content.stop_reason
-                    self.session.add_message(content)
+                    if chunk_type == 'completed_message':
+                        stop_reason = content.stop_reason
+                        await self.hook.trigger(HookType.ON_MESSAGE, content)
+                        self.session.add_message(content)
+                        yield chunk
+                        break
+                
+                if stop_reason in ['tool_use', 'tool_calls']:
+                    tool_results = await asyncio.gather(*tool_tasks)
+                    await self.hook.trigger(HookType.ON_TOOL_RESULT, tool_results)
+                    yield tool_results
+                    self.session.add_message(tool_results)
+                elif stop_reason in ['end_turn', 'stop']:
                     break
-            
-            if stop_reason in ['tool_use']:
-                # 等待所有工具任务完成
-                tool_results = await asyncio.gather(*tool_tasks)
-                self.session.add_message(tool_results)
-            elif stop_reason in ['end_turn']:
-                print('\n', flush=True)
-                break
-            else:
-                raise ValueError(f"Stop reason: {stop_reason}")
+                else:
+                    raise ValueError(f"Stop reason: {stop_reason}")
+        except Exception as e:
+            raise e
                  
-    async def run(self):
-        # 激活所有 MCP 客户端
-        if len(self.mcp_manager.clients) > 0:
-            tools = await self.mcp_manager.activate_mcp_clients(is_all=True)
-            if tools:
-                self.tool_manager.add_tools(tools)       
-        # 显示所有技能
-        if len(self.skill_manager.skills) > 0:
-            load_skill_tool=Tool(self.skill_manager.show_skill_detail)
-            self.tool_manager.add_tools([load_skill_tool])
-            self.session.add_system_prompt(self.skill_manager.show_skills())
-        termios.tcflush(sys.stdin, termios.TCIOFLUSH)
-        while True:
-            try:                
-                query = input("\033[36ms02 >> \033[0m")              
-            except (EOFError, KeyboardInterrupt):
-                break
-            if query.strip().lower() in ("q", "exit", ""):
-                self.session.save()
-                break
+    async def run(self, human_msg:HumanMessage):
+        self.state = AgentState.Running
+        await self.hook.trigger(HookType.AFTER_INPUT, human_msg)
+        self.session.add_message(human_msg)
+        try:
+            async for chunk in self.stream_tool_loop():
+                        yield chunk
+        except Exception as e:
+            raise e
+        finally:
+            self.session.save()
+            self.state = AgentState.Ready
+            await self.hook.trigger(HookType.AFTER_RUN)
 
-            self.session.add_message(HumanMessage(content=query))
-            await self.stream_tool_loop()
-
- 
-             
         
-
+ 
+    
+        
 
 
 

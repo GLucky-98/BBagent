@@ -200,7 +200,7 @@ class ModelMessage(Message):
 class Session:
     def __init__(self, path: str | Path = None, id: str = None, messages: List[Message] = None):
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.id = id if id else uuid.uuid4().hex[:8] + '-' + self.timestamp
+        self.id = id if id else self.timestamp + '_' + uuid.uuid4().hex[:8]
         self.path = Path(path) if path else None
         self.messages = messages if messages else []
         
@@ -211,11 +211,12 @@ class Session:
         self.ever_used_tools = []
 
     @classmethod
-    def create(cls, base_path: str | Path) -> 'Session':
-        session_dir = Path(base_path) / 'history_session'
+    def create(cls, session_path: str | Path) -> 'Session':
+        id =datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '_' + uuid.uuid4().hex[:8]
+        session_dir = Path(session_path) / id
         session_dir.mkdir(parents=True, exist_ok=True)
 
-        session = cls(path=session_dir)
+        session = cls(path=session_dir, id=id)
         session._messages_path().touch()
         session._write_metadata()
         return session
@@ -227,17 +228,46 @@ class Session:
         return self.path / f'{self.id}.md'
 
     def add_message(self, message: Message | List[Message]):
-        if isinstance(message, list):
-            self.messages.extend(message)
-            if self.path:
-                with open(self._messages_path(), 'a', encoding='utf-8') as f:
-                    for msg in message:
-                        f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
-        else:
-            self.messages.append(message)
-            if self.path:
-                with open(self._messages_path(), 'a', encoding='utf-8') as f:
-                    f.write(json.dumps(message.to_dict(), ensure_ascii=False) + '\n')
+        messages = message if isinstance(message, list) else [message]
+        for msg in messages:
+            if isinstance(msg, ModelMessage) and msg.input_tokens > 0:
+                self._token_calculate(msg)
+            self.messages.append(msg)
+        if self.path:
+            with open(self._messages_path(), 'a', encoding='utf-8') as f:
+                for msg in messages:
+                    f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
+
+    def _token_calculate(self, model_msg: ModelMessage):
+        last_model_idx = -1
+        for i in range(len(self.messages) - 1, -1, -1):
+            if isinstance(self.messages[i], ModelMessage):
+                last_model_idx = i
+                break
+
+        last_model_token = self.messages[last_model_idx].token_num if last_model_idx >= 0 else 0
+
+        since_last = self.messages[last_model_idx + 1:] if last_model_idx >= 0 else self.messages
+
+        known_sum = last_model_token
+        unknown_indices = []
+        for i, m in enumerate(since_last):
+            if m.token_num > 0:
+                known_sum += m.token_num
+            else:
+                unknown_indices.append(i)
+
+        unknown_total = max(0, model_msg.input_tokens - known_sum)
+
+        if len(unknown_indices) == 1:
+            since_last[unknown_indices[0]].token_num = unknown_total
+        elif len(unknown_indices) > 1:
+            per_msg = unknown_total // len(unknown_indices)
+            remainder = unknown_total % len(unknown_indices)
+            for j, idx in enumerate(unknown_indices):
+                since_last[idx].token_num = per_msg + (1 if j < remainder else 0)
+
+        self.total_tokens = model_msg.input_tokens + model_msg.token_num
 
     def replace_messages(self, new_messages: List[Message], summary: str = ''):
         if self.path:
@@ -255,38 +285,15 @@ class Session:
 
         self.compress_num += 1
         if summary:
-            self.summary = summary
+            self.compact_summary.append(summary)
         self.messages = new_messages
-
-    def save_messages(self):
-        if not self.path:
-            raise ValueError("Session path not set, use Session.create() for persistent sessions")
-        boundaries = []
-        if self._messages_path().exists():
-            with open(self._messages_path(), 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    if data.get('type') == 'compress_boundary':
-                        boundaries.append(line)
-        with open(self._messages_path(), 'w', encoding='utf-8') as f:
-            for boundary in boundaries:
-                f.write(boundary + '\n')
-            for msg in self.messages:
-                f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
-
-    def save_metadata(self):
-        if not self.path:
-            raise ValueError("Session path not set, use Session.create() for persistent sessions")
-        self._write_metadata()
 
     def save(self):
         if not self.path:
             raise ValueError("Session path not set, use Session.create() for persistent sessions")
-        self.save_messages()
-        self.save_metadata()
+        if not self.path:
+            raise ValueError("Session path not set, use Session.create() for persistent sessions")
+        self._write_metadata()
 
     def _write_metadata(self):
         tools_str = ', '.join(self.ever_used_tools) if self.ever_used_tools else 'None'
@@ -317,8 +324,8 @@ ever_used_tools: {tools_str}
         self._metadata_path().write_text(content, encoding='utf-8')
 
     @classmethod
-    def load(cls, session_id: str, base_path: str | Path) -> 'Session':
-        session_dir = Path(base_path) / 'history_session'
+    def load(cls, session_id: str, session_path: str | Path) -> 'Session':
+        session_dir = Path(session_path)
         messages_file = session_dir / f'{session_id}.jsonl'
         metadata_file = session_dir / f'{session_id}.md'
 
