@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import  List
 from uuid import uuid4 as uuid
 
-from .model import Model,Model_Input
+from .model import Model, Model_Input
 from .tool import Tool
 from .message import *
 from .skill import Skill
@@ -252,8 +252,8 @@ Your available skills are:
                  
     async def run(self, human_msg:HumanMessage):
         self.state = AgentState.Running
-        await self.hook.trigger(HookType.AFTER_INPUT, human_msg)
         self.session.add_message(human_msg)
+        await self.hook.trigger(HookType.AFTER_INPUT, human_msg)
         try:
             async for chunk in self.stream_tool_loop():
                         yield chunk
@@ -263,6 +263,83 @@ Your available skills are:
             self.session.save()
             self.state = AgentState.Ready
             await self.hook.trigger(HookType.AFTER_RUN)
+
+
+class SubAgent:
+    def __init__(self, model: Model, tools: List[Tool] = None, system_prompt: str = "", skills: List[Skill] = None):
+        self.model = model
+        self.tools = tools or []
+        self.tool_dict = {t.name: t for t in self.tools}
+        self.system_prompt = system_prompt
+        self.skills = skills or []
+        self.skill_prompt = self._load_skill_prompt()
+
+    def _load_skill_prompt(self):
+        if not self.skills:
+            return ''
+        skill_system_prompt = ["""You have access to the following skills. Each skill's complete information (including its full capabilities, usage instructions, and detailed behavior) is stored in a markdown file located at the skill's path. When you need to use a specific skill, read its SKILL.md file from the skill's path to get the complete details.
+
+Your available skills are:
+"""]
+        skill_short_prompt = [f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in self.skills]
+        return '\n'.join(skill_system_prompt + skill_short_prompt)
+
+    def add_skills(self, skills: List[Skill]):
+        self.skills.extend(skills)
+        self.skill_prompt += '\n'.join([f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in skills])
+
+    async def _execute_tool(self, tool_use: ToolUseBlock) -> ToolMessage:
+        name = tool_use.name
+        input = tool_use.input
+        tool = self.tool_dict.get(name)
+
+        if tool:
+            try:
+                if tool.is_async:
+                    result = await tool.async_invoke(input)
+                else:
+                    result = tool.invoke(input)
+                content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+            except Exception as e:
+                content = f'Tool invocation error {e}'
+        else:
+            content = f'Unknown tool: {name}'
+
+        return ToolMessage(tool_use.id, name, content)
+
+    def _normalize_input(self, messages: List[Message] | Message | str) -> List[Message]:
+        if isinstance(messages, str):
+            return [HumanMessage(messages)]
+        if isinstance(messages, Message):
+            return [messages]
+        return list(messages)
+
+    async def invoke(self, messages: List[Message] | Message | str) -> str:
+        messages = self._normalize_input(messages)
+        tools = self.tools if self.tools else []
+
+        while True:
+            model_input = Model_Input(
+                prompt=self.system_prompt + self.skill_prompt,
+                tools=tools,
+                messages=messages,
+            )
+            result = await self.model.async_invoke(model_input)
+            messages.append(result)
+
+            if result.stop_reason in ['tool_use', 'tool_calls']:
+                for tool_use in result.tool_calls:
+                    tool_msg = await self._execute_tool(tool_use)
+                    messages.append(tool_msg)
+            elif result.stop_reason in ['end_turn', 'stop']:
+                break
+            else:
+                raise ValueError(f"SubAgent stop reason: {result.stop_reason}")
+
+        if isinstance(result.content, list):
+            parts = [b.text for b in result.content if isinstance(b, TextBlock)]
+            return '\n'.join(parts)
+        return str(result.content)
 
         
  
