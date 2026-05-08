@@ -8,7 +8,7 @@ from typing import  List
 from uuid import uuid4 as uuid
 
 from .model import Model, Model_Input
-from .tool import Tool
+from .tool import Tool, tool
 from .message import *
 from .skill import Skill
 from .agenthook import AgentHook, HookType, Hook
@@ -16,7 +16,7 @@ from .messagebus import MessageBus
 
 @dataclass
 class AgentConfig:
-    model: List[Model]  #方便后期进行多模型路由的扩展
+    model: List[Model]
     base_path: Path | str = Path.cwd()
     system_prompt: str = ""
     name: str = 'Agent_' + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '_' + uuid().hex[:8]
@@ -37,8 +37,6 @@ class AgentConfig:
 class AgentState:
     Ready = 'Ready'
     Running = 'Running'
-    IDLE = 'IDLE'
-    Stop = 'Stop'
 
 
 class Agent:
@@ -57,10 +55,15 @@ class Agent:
 
         self.session = agent_config.session or Session.create(self.session_path)
 
-        self.tools = agent_config.tools
-        self.tool_dict = {t.name: t for t in self.tools}
+        self.tools: dict[str, Tool] = {}
+        if agent_config.tools:
+            self.add_tools(agent_config.tools)
 
-        self.skills = agent_config.skills
+        self.skills: dict[str, Skill] = {}
+        if agent_config.skills:
+            self._add_load_skills_tool()
+            for skill in agent_config.skills:
+                self.skills[skill.name] = skill
         self.skill_prompt = self._load_skill_prompt()
         
         self.hook = agent_config.hook if agent_config.hook else AgentHook()
@@ -134,32 +137,44 @@ class Agent:
         self.session = Session.load(session_id, dst_dir)
         
         ever_used_tools = self.session.ever_used_tools()
-        for tool in ever_used_tools:
-            if tool not in self.tool_dict:
-                print(f'Warning: Tool {tool} not found in agent tools')
+        for tool_name in ever_used_tools:
+            if tool_name not in self.tools:
+                print(f'Warning: Tool {tool_name} not found in agent tools')
 
     async def new_session(self):
         await self.hook.trigger(HookType.NEW_SESSION)
         self.session.save()
         self.session = Session.create(self.session_path)
     
-    def add_tools(self, tools:List[Tool]):
-        self.tools.extend(tools)
-        self.tool_dict.update({t.name: t for t in tools})
+    def add_tools(self, tools: List[Tool]):
+        for t in tools:
+            self.tools[t.name] = t
+    
+    def _add_load_skills_tool(self):
+        @tool
+        def load_skill(skill_name: str):
+            """Load a skill by name to get its full capabilities and instructions. Use this when you need to access a specific skill's detailed content."""
+            skill = self.skills.get(skill_name)
+            if not skill:
+                return f"Unknown skill: {skill_name}"
+            else:
+                if skill.metadata:
+                    return f"{skill.metadata.to_dict()}-{skill.body}"
+                else:
+                    return skill.body
+        
+        self.add_tools([load_skill])
     
     async def tool_execute(self, tool_use: ToolUseBlock) -> ToolMessage:
         await self.hook.trigger(HookType.ON_TOOL_USE, tool_use)
-        id = tool_use.id
-        name = tool_use.name
-        input = tool_use.input
-        tool = self.tool_dict.get(name)
-
+        tool = self.tools.get(tool_use.name)
+        
         if tool:
             try:
                 if tool.is_async:
-                    result = await tool.async_invoke(input)
+                    result = await tool.async_invoke(tool_use.input)
                 else:
-                    result = tool.invoke(input)
+                    result = tool.invoke(tool_use.input)
                 if isinstance(result, str):
                     content = result
                 else:
@@ -167,9 +182,9 @@ class Agent:
             except Exception as e:
                 content = f'Tool invocation error {e}'
         else:
-            content = f'Unknown tool:{name}'
+            content = f'Unknown tool:{tool_use.name}'
             
-        tool_msg = ToolMessage(id, name, content)
+        tool_msg = ToolMessage(tool_use.id, tool_use.name, content)
         await self.hook.trigger(HookType.ON_TOOL_RESULT, tool_msg)
         return tool_msg
 
@@ -179,15 +194,16 @@ class Agent:
 
 Your available skills are:
 """]
-        skill_short_prompt = [f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in self.skills]
+        skill_short_prompt = [f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in self.skills.values()]
         return '\n'.join(skill_system_prompt + skill_short_prompt)
 
     def add_skills(self, skills:List[Skill]):
-        self.skills.extend(skills)
-        self.skill_prompt += '\n'.join([f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in skills])
+        new_skills = {s.name: s for s in skills}
+        self.skills.update(new_skills)
+        self.skill_prompt = self._load_skill_prompt()
     
     def construct_model_input(self) -> Model_Input:
-        tools = self.tools
+        tools = list(self.tools.values())
         prompt = self.system_prompt + self.skill_prompt
         messages = self.session.messages
         return Model_Input(prompt=prompt, tools=tools, messages=messages)
@@ -266,13 +282,19 @@ Your available skills are:
 
 
 class SubAgent:
-    def __init__(self, model: Model, tools: List[Tool] = None, system_prompt: str = "", skills: List[Skill] = None):
+    def __init__(self, model: Model, tools: List[Tool] = None, system_prompt: str = "",
+                skills: List[Skill] = None, agent_id: str = None):
         self.model = model
-        self.tools = tools or []
-        self.tool_dict = {t.name: t for t in self.tools}
         self.system_prompt = system_prompt
         self.skills = skills or []
         self.skill_prompt = self._load_skill_prompt()
+        self._agent_id = agent_id or f'sub_{id(self)}'
+
+        self.tools: dict[str, Tool] = {}
+        if tools:
+            for t in tools:
+                self.tools[t.name] = t
+
 
     def _load_skill_prompt(self):
         if not self.skills:
@@ -288,24 +310,22 @@ Your available skills are:
         self.skills.extend(skills)
         self.skill_prompt += '\n'.join([f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in skills])
 
-    async def _execute_tool(self, tool_use: ToolUseBlock) -> ToolMessage:
-        name = tool_use.name
-        input = tool_use.input
-        tool = self.tool_dict.get(name)
+    async def tool_execute(self, tool_use: ToolUseBlock) -> ToolMessage:
+        tool = self.tools.get(tool_use.name)
 
         if tool:
             try:
                 if tool.is_async:
-                    result = await tool.async_invoke(input)
+                    result = await tool.async_invoke(tool_use.input)
                 else:
-                    result = tool.invoke(input)
+                    result = tool.invoke(tool_use.input)
                 content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
             except Exception as e:
                 content = f'Tool invocation error {e}'
         else:
-            content = f'Unknown tool: {name}'
+            content = f'Unknown tool: {tool_use.name}'
 
-        return ToolMessage(tool_use.id, name, content)
+        return ToolMessage(tool_use.id, tool_use.name, content)
 
     def _normalize_input(self, messages: List[Message] | Message | str) -> List[Message]:
         if isinstance(messages, str):
@@ -314,9 +334,9 @@ Your available skills are:
             return [messages]
         return list(messages)
 
-    async def invoke(self, messages: List[Message] | Message | str) -> str:
+    async def run(self, messages: List[Message] | Message | str) -> str:
         messages = self._normalize_input(messages)
-        tools = self.tools if self.tools else []
+        tools = list(self.tools.values())
 
         while True:
             model_input = Model_Input(
@@ -329,7 +349,7 @@ Your available skills are:
 
             if result.stop_reason in ['tool_use', 'tool_calls']:
                 for tool_use in result.tool_calls:
-                    tool_msg = await self._execute_tool(tool_use)
+                    tool_msg = await self.tool_execute(tool_use)
                     messages.append(tool_msg)
             elif result.stop_reason in ['end_turn', 'stop']:
                 break
@@ -341,10 +361,6 @@ Your available skills are:
             return '\n'.join(parts)
         return str(result.content)
 
-        
- 
-    
-        
 
 
 

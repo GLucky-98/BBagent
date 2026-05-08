@@ -266,7 +266,7 @@ class AnthropicModel(Model):
         stop_reason = response.get('stop_reason','')       
         usage_data = response.get('usage',{})   
         raw_content = response.get('content',[])
-        raw_json = json.dumps({'role':'assistant','content':raw_content})
+        raw_json = json.dumps({'role':'assistant','content':raw_content}, ensure_ascii=False)
 
         tool_calls = []
         thinking = ''
@@ -427,7 +427,7 @@ class OpenAIModel(Model):
         message = choice["message"]
         finish_reason = choice.get("finish_reason", "")
         usage = response.get("usage", {})
-        raw_json = json.dumps(message)
+        raw_json = json.dumps(message, ensure_ascii=False)
 
         # 解析 content (可能为 None 或字符串)
         raw_content = message.get("content")

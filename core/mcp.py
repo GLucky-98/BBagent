@@ -5,8 +5,38 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 import inspect
+from dataclasses import dataclass, field, asdict
 
 from .tool import Tool
+
+@dataclass
+class MCPServerConfig:
+    name: str = ""
+    command: str = ""
+    args: List[str] = field(default_factory=list)
+    env: Dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "MCPServerConfig":
+        data = json.loads(json_str)
+        return cls(
+            name=data.get("name", ""),
+            command=data.get("command", ""),
+            args=data.get("args", []),
+            env=data.get("env", {})
+        )
+
+    @classmethod
+    def from_json_file(cls, file_path: str) -> "MCPServerConfig":
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return cls.from_json(f.read())
+
+    def to_json(self, indent: int = 2) -> str:
+        return json.dumps(asdict(self), indent=indent, ensure_ascii=False)
+
+    def to_json_file(self, file_path: str, indent: int = 2) -> None:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(self.to_json(indent))
 
 # ------------------------------------------------------------
 # MCP JSON-RPC 消息构造辅助函数
@@ -34,14 +64,16 @@ def make_notification(method: str, params: Optional[Dict] = None) -> str:
 # MCP 客户端类
 # ------------------------------------------------------------
 class MCPClient:
-    def __init__(self, name:str, command: List[str], env: Dict[str, str] = {}):
-        self.name = name
-        self.command = command
-        self.env = {**os.environ, **env}
+    def __init__(self, MCPserver_config:MCPServerConfig, client_name: str):
+        self.name = MCPserver_config.name
+        self.client_name = client_name
+        self.command = [MCPserver_config.command] + MCPserver_config.args
+        self.env = {**os.environ, **MCPserver_config.env}   
         self.process: Optional[asyncio.subprocess.Process] = None
         self.request_id = 0
         self.pending_requests: Dict[int, asyncio.Future] = {}
         self.state = 'inactive'
+        self._initial_tools: List[Dict] = []  # ⭐ 存储初始化时服务器推送的工具
 
     async def start(self):
         """启动 MCP 服务器子进程并开始读取消息"""
@@ -157,19 +189,39 @@ class MCPClient:
             "protocolVersion": "2024-11-05",
             "capabilities": {},  # 客户端能力（本例为空）
             "clientInfo": {
-                "name": "minimax-mcp-client",
+                "name": self.client_name,
                 "version": "0.1.0"
             }
         })
-        print(f"Server initialized: {server_info}")
-
-        # 2. 发送 initialized 通知（握手完成）
+        
+        # ⭐ 2. 服务器可能主动推送工具列表，注册 Future 等待
+        # MCP 协议允许服务器在初始化后主动推送
+        tools_future = asyncio.get_event_loop().create_future()
+        self.pending_requests[2] = tools_future  # 注册 id=2
+        
+        # 3. 发送 initialized 通知（握手完成）
         await self.send_notification("notifications/initialized")
+        
+        # ⭐ 4. 等待服务器主动推送的工具列表（最多等3秒）
+        try:
+            tools_result = await asyncio.wait_for(tools_future, timeout=3.0)
+            if tools_result:
+                print(f"Server pushed tools: {len(tools_result.get('tools', []))} tools")
+                self._initial_tools = tools_result.get("tools", [])
+        except asyncio.TimeoutError:
+            print("No tools pushed by server during init")
+            self._initial_tools = []
+        
         self.state = 'active'
         return server_info
 
     async def list_tools(self) -> List[Dict]:
         """获取服务器提供的工具列表"""
+        # ⭐ 如果初始化时服务器已经推送了工具，直接返回
+        if self._initial_tools:
+            return self._initial_tools
+        
+        # 否则发送请求获取
         result = await self.send_request("tools/list")
         return result.get("tools", [])
 
@@ -185,13 +237,18 @@ class MCPClient:
         """关闭子进程"""
         if self.process:
             self.process.terminate()
-            await self.process.wait()
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.process.kill()
+                await self.process.wait()
             self.state = 'inactive'
             self.process = None
+            
 class MCPTool(Tool):
     def __init__(self, mcp_client: MCPClient, config: Dict[str, Any]) :
         func = self.create_tool_from_config(mcp_client, config)
-        super().__init__(func)
+        super().__init__(func, has_state=True)
         
     @staticmethod
     def create_tool_from_config(mcp_client: MCPClient, config: Dict[str, Any]):
@@ -285,62 +342,141 @@ class MCPTool(Tool):
         return tool_func
     
 class MCPManager:
-    def __init__(self, mcp_clients:List[MCPClient] = None):
-        self.clients = {}
-        self.client_tools = {}
-        if mcp_clients:
-            self.add_mcp_clients(mcp_clients)
-        
-    def add_mcp_clients(self, mcp_clients:List[MCPClient] = None):
-        """添加 MCP 客户端"""
-        for client in mcp_clients:
-            if client.name not in self.clients:
-                self.clients[client.name] = client
-        print(f"Added mcp clients: {[client.name for client in mcp_clients]}")
-    
-    async def activate_mcp_clients(self, mcp_clients:List[MCPClient] = None, is_all:bool = False) -> List[MCPTool]:
-        """激活 MCP 客户端"""
-        async def activate_client(client:MCPClient) -> List[MCPTool]:
-            await client.start()
-            await client.initialize()
-            tools = await client.list_tools()
-            if tools:
-                tools = [MCPTool(client, tool) for tool in tools]
-                self.client_tools[client.name] = tools
-                return tools
+    def __init__(self, config_dir: str = ""):
+        self.config_dir: str = config_dir
+        self.configs: Dict[str, MCPServerConfig] = {}
+        self.clients: Dict[str, MCPClient] = {}
+        self.client_tools: Dict[str, List[MCPTool]] = {}
+        if config_dir:
+            self._load_configs(config_dir)
+
+    def _parse_config_file(self, file_path: str) -> List[MCPServerConfig]:
+        """解析单个 JSON 配置文件，支持两种格式
+
+        格式一（单服务器）：顶层含 name + command 字段
+        格式二（多服务器）：顶层含 mcpServers 字段，key 为 name
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: failed to parse {file_path}: {e}")
             return []
-        
-        if mcp_clients:
-            self.add_mcp_clients(mcp_clients)      
-        
-        all_tools = []
 
-        if is_all:
-            for _,client in self.clients.items():
-                if client.state == 'inactive':
-                    tools = await activate_client(client)
-                    all_tools.extend(tools)
-                    print(f"Activated mcp client: {client.name}")
-        
-        else:
-            for client in mcp_clients:
-                tools = await activate_client(client)
+        configs: List[MCPServerConfig] = []
+
+        if "mcpServers" in data and isinstance(data["mcpServers"], dict):
+            for name, server_data in data["mcpServers"].items():
+                if not isinstance(server_data, dict) or "command" not in server_data:
+                    continue
+                configs.append(MCPServerConfig(
+                    name=name,
+                    command=server_data.get("command", ""),
+                    args=server_data.get("args", []),
+                    env=server_data.get("env", {}),
+                ))
+        elif "name" in data and "command" in data:
+            configs.append(MCPServerConfig(
+                name=data.get("name", ""),
+                command=data.get("command", ""),
+                args=data.get("args", []),
+                env=data.get("env", {}),
+            ))
+
+        return configs
+
+    def _load_configs(self, config_dir: str) -> None:
+        """扫描目录下所有 JSON 文件，加载符合格式的配置"""
+        if not os.path.isdir(config_dir):
+            print(f"Warning: config directory not found: {config_dir}")
+            return
+
+        count = 0
+        for filename in sorted(os.listdir(config_dir)):
+            if not filename.endswith(".json"):
+                continue
+            file_path = os.path.join(config_dir, filename)
+            configs = self._parse_config_file(file_path)
+            for cfg in configs:
+                if cfg.name and cfg.command:
+                    self.configs[cfg.name] = cfg
+                    count += 1
+        print(f"Loaded {count} MCP server config(s) from {config_dir}")
+
+    def add_config(self, config: MCPServerConfig) -> None:
+        """运行时手动添加单个配置"""
+        if config.name and config.command:
+            self.configs[config.name] = config
+
+    def create_client(self, name: str) -> Optional[MCPClient]:
+        """根据配置实例化 MCPClient（仅创建，不启动进程）"""
+        if name not in self.configs:
+            print(f"Warning: config '{name}' not found")
+            return None
+        if name in self.clients:
+            return self.clients[name]
+        config = self.configs[name]
+        client = MCPClient(config, client_name=name)
+        self.clients[name] = client
+        return client
+
+    def create_all_clients(self) -> List[MCPClient]:
+        """为所有已加载配置创建客户端实例"""
+        created = []
+        for name in self.configs:
+            client = self.create_client(name)
+            if client:
+                created.append(client)
+        return created
+
+    async def activate_client(self, name: str) -> List[MCPTool]:
+        """激活指定客户端：自动创建（如未创建）→ 启动进程 → 握手 → 获取工具"""
+        if name not in self.clients:
+            self.create_client(name)
+        client = self.clients.get(name)
+        if not client:
+            return []
+        if client.state == 'active':
+            return self.client_tools.get(name, [])
+        return await self._activate(client)
+
+    async def activate_all(self) -> List[MCPTool]:
+        """激活所有未激活的客户端"""
+        self.create_all_clients()
+        all_tools: List[MCPTool] = []
+        for name, client in self.clients.items():
+            if client.state == 'inactive':
+                tools = await self._activate(client)
                 all_tools.extend(tools)
-                print(f"Activated mcp client: {client.name}")
+        return all_tools
 
-        return all_tools        
+    async def _activate(self, client: MCPClient) -> List[MCPTool]:
+        await client.start()
+        await client.initialize()
+        tools_data = await client.list_tools()
+        if tools_data:
+            tools = [MCPTool(client, t) for t in tools_data]
+            self.client_tools[client.name] = tools
+            print(f"Activated mcp client: {client.name} ({len(tools)} tool(s))")
+            return tools
+        print(f"Activated mcp client: {client.name} (0 tools)")
+        return []
 
-    async def del_mcp_clients(self, clients_name:List[str]) -> List[MCPTool]:
-        """删除指定 MCP 客户端"""
-        all_del_tools = []
-        for client_name in clients_name:
-            if client_name in self.clients:
-                client = self.clients.pop(client_name)
-                await client.close()
-                tools = self.client_tools.pop(client_name, None)
-                if tools:
-                    all_del_tools.extend(tools)
-                    
-        print(f"Deleted mcp clients: {clients_name}")
-        return all_del_tools
+    async def deactivate_client(self, name: str) -> List[MCPTool]:
+        """停止单个客户端：关闭进程，清理 client 和 tools（配置保留）"""
+        tools: List[MCPTool] = []
+        client = self.clients.pop(name, None)
+        if client:
+            await client.close()
+            tools = self.client_tools.pop(name, [])
+            print(f"Deactivated mcp client: {name}")
+        return tools
+
+    async def deactivate_all(self) -> List[MCPTool]:
+        """停止所有客户端"""
+        all_tools: List[MCPTool] = []
+        for name in list(self.clients.keys()):
+            tools = await self.deactivate_client(name)
+            all_tools.extend(tools)
+        return all_tools
 

@@ -269,6 +269,31 @@ class Session:
 
         self.total_tokens = model_msg.input_tokens + model_msg.token_num
 
+    @staticmethod
+    def _estimate_token_count(msg: Message) -> int:
+        serialized = json.dumps(msg.to_dict(), ensure_ascii=False)
+        return max(1, len(serialized.encode('utf-8')) // 3)
+
+    def get_message_tokens(self, msg: Message) -> int:
+        if msg.token_num > 0:
+            return msg.token_num
+        return self._estimate_token_count(msg)
+
+    def get_session_token_count(self) -> int:
+        messages = self.messages
+        if not messages:
+            return 0
+        if isinstance(messages[-1], ModelMessage):
+            return self.total_tokens
+        last_model_idx = -1
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], ModelMessage):
+                last_model_idx = i
+                break
+        if last_model_idx < 0:
+            return sum(self.get_message_tokens(m) for m in messages)
+        return self.total_tokens + sum(self.get_message_tokens(m) for m in messages[last_model_idx + 1:])
+
     def replace_messages(self, new_messages: List[Message], summary: str = ''):
         if self.path:
             marker = {
@@ -287,6 +312,7 @@ class Session:
         if summary:
             self.compact_summary.append(summary)
         self.messages = new_messages
+        self.total_tokens = sum(self.get_message_tokens(m) for m in self.messages)
 
     def save(self):
         if not self.path:

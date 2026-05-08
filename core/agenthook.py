@@ -1,4 +1,5 @@
 import asyncio
+from copy import copy
 from enum import Enum
 from typing import Callable, Any, Dict, List, Optional
 from dataclasses import dataclass
@@ -165,3 +166,13 @@ class AgentHook:
         for hook_type in self._hooks:
             self._hooks[hook_type] = []
         self._context = None
+
+    def merge(self, *others: 'AgentHook'):
+        for other in others:
+            for hook_type, hooks in other._hooks.items():
+                for hook in hooks:
+                    new_hook = copy(hook)
+                    existing = {h.priority for h in self._hooks[hook_type]}
+                    while new_hook.priority in existing:
+                        new_hook.priority += 1
+                    self._register(new_hook)
