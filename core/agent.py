@@ -4,7 +4,7 @@ import shutil
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import  List
+from typing import  Callable, List, Optional
 from uuid import uuid4 as uuid
 
 from .model import Model, Model_Input
@@ -12,11 +12,12 @@ from .tool import Tool, tool
 from .message import *
 from .skill import Skill
 from .agenthook import AgentHook, HookType, Hook
-from .messagebus import MessageBus
+from .events import AgentEvent, EventType
+from .source import EventSource
 
 @dataclass
 class AgentConfig:
-    model: List[Model]
+    model: Model
     base_path: Path | str = Path.cwd()
     system_prompt: str = ""
     name: str = 'Agent_' + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '_' + uuid().hex[:8]
@@ -36,6 +37,7 @@ class AgentConfig:
 @dataclass
 class AgentState:
     Ready = 'Ready'
+    Waiting = 'Waiting'
     Running = 'Running'
 
 
@@ -69,17 +71,19 @@ class Agent:
         self.hook = agent_config.hook if agent_config.hook else AgentHook()
         if self.hook:
             self.hook.set_context(self)
-        
+
+        self._event_queue: asyncio.Queue = asyncio.Queue()
+        self._sources: List[EventSource] = []
+        self._output_callback: Optional[Callable] = None
+        self._source_tasks: List[asyncio.Task] = []
+        self._running = False
+
         self.state = AgentState.Ready
 
     def change_name(self, name: str):
         self.name = name
     
-    def choose_model(self):
-        #TODO: 实现模型选择逻辑
-        return self.model[0]
-    
-    def change_model(self, model: List[Model]):
+    def change_model(self, model: Model):
         self.model = model
     
     def change_base_path(self, path: Path | str):
@@ -219,8 +223,7 @@ Your available skills are:
                 if self.hook.should_break():
                     break
                 model_input = self.construct_model_input()
-                model = self.choose_model()
-                async for chunk in model.async_stream_invoke(model_input): 
+                async for chunk in self.model.async_stream_invoke(model_input): 
                     if self.hook.should_break():
                         interrupted = True
                         break
@@ -239,6 +242,7 @@ Your available skills are:
 
                     if chunk_type == 'completed_tool_use':
                         tool_use = content
+                        self.session.ever_used_tools.append(tool_use.name)
                         task = asyncio.create_task(
                             self.tool_execute(tool_use)
                         )
@@ -279,6 +283,76 @@ Your available skills are:
             self.session.save()
             self.state = AgentState.Ready
             await self.hook.trigger(HookType.AFTER_RUN)
+
+    def add_source(self, source: EventSource):
+        self._sources.append(source)
+        if self._running:
+            task = asyncio.create_task(source.start(self._event_queue))
+            self._source_tasks.append(task)
+
+    def on_output(self, callback: Callable):
+        self._output_callback = callback
+
+    async def _emit(self, chunk):
+        if self._output_callback:
+            if asyncio.iscoroutinefunction(self._output_callback):
+                await self._output_callback(chunk)
+            else:
+                self._output_callback(chunk)
+
+    async def start(self):
+        if self._running:
+            return
+
+        self._running = True
+        self.state = AgentState.Waiting
+
+        for source in self._sources:
+            task = asyncio.create_task(source.start(self._event_queue))
+            self._source_tasks.append(task)
+
+        try:
+            while self._running:
+                event = await self._event_queue.get()
+                if event is _SENTINEL:
+                    break
+                self.state = AgentState.Running
+                try:
+                    await self._handle_event(event)
+                except Exception:
+                    pass
+                if self._running:
+                    self.state = AgentState.Waiting
+        finally:
+            for task in self._source_tasks:
+                if not task.done():
+                    task.cancel()
+            self._source_tasks.clear()
+            for source in self._sources:
+                await source.stop()
+            self._event_queue = asyncio.Queue()
+            self._running = False
+            self.state = AgentState.Ready
+
+    async def interrupt(self):
+        self.hook.context.break_loop()
+
+    async def stop(self):
+        self._running = False
+        self.hook.context.break_loop()
+        self._event_queue.put_nowait(_SENTINEL)
+
+    async def _handle_event(self, event: AgentEvent):
+        msg = event.to_human_message()
+        self.session.add_message(msg)
+        await self.hook.trigger(HookType.AFTER_INPUT, msg)
+        async for chunk in self.stream_tool_loop():
+            await self._emit(chunk)
+        self.session.save()
+        await self.hook.trigger(HookType.AFTER_RUN)
+
+
+_SENTINEL = object()
 
 
 class SubAgent:
