@@ -25,11 +25,10 @@ def create_find_func(cwd: str = "."):
         base = Path(base_path)
 
         if "**" in pattern:
-            glob_pattern = pattern.replace("**/", "**/")
-            if glob_pattern.startswith("**/"):
-                actual_pattern = glob_pattern[3:]
+            if pattern.startswith("**/"):
+                actual_pattern = pattern[3:]
             else:
-                actual_pattern = glob_pattern
+                actual_pattern = pattern
             for match in base.rglob(actual_pattern):
                 yield str(match)
         else:
@@ -128,5 +127,3 @@ def create_find_tool(cwd: str = ".") -> Tool:
         input_schema=input_schema,
     )
 
-
-FindTool = Tool

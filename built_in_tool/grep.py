@@ -17,9 +17,6 @@ class GrepOperations:
         with open(absolute_path, "r", encoding="utf-8", errors="replace") as f:
             return f.read()
 
-    def is_file(self, path: str) -> bool:
-        return os.path.isfile(path)
-
 
 def create_grep_func(cwd: str = "."):
     operations = GrepOperations()
@@ -170,5 +167,3 @@ def create_grep_tool(cwd: str = ".") -> Tool:
         input_schema=input_schema,
     )
 
-
-GrepTool = Tool

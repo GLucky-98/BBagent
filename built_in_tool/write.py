@@ -95,5 +95,3 @@ def create_write_tool(
         input_schema=input_schema,
     )
 
-
-WriteTool = Tool

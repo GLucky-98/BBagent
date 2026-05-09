@@ -121,5 +121,3 @@ def create_ls_tool(cwd: str = ".") -> Tool:
         input_schema=input_schema,
     )
 
-
-LsTool = Tool

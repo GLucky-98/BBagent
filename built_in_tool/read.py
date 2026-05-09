@@ -14,21 +14,7 @@ DEFAULT_MAX_BYTES = 500_000
 DEFAULT_MAX_LINES = 10_000
 
 
-class ReadOperations:
-    def read_file(self, absolute_path: str) -> bytes:
-        with open(absolute_path, "rb") as f:
-            return f.read()
-
-    def access(self, absolute_path: str) -> None:
-        if not os.access(absolute_path, os.R_OK):
-            raise PermissionError(f"Cannot read file: {absolute_path}")
-
-    def exists(self, absolute_path: str) -> bool:
-        return os.path.exists(absolute_path)
-
-
 def create_read_func(cwd: str = ".", max_bytes: int = DEFAULT_MAX_BYTES, max_lines: int = DEFAULT_MAX_LINES):
-    operations = ReadOperations()
 
     def read_func(
         path: str,
@@ -43,12 +29,8 @@ def create_read_func(cwd: str = ".", max_bytes: int = DEFAULT_MAX_BYTES, max_lin
         else:
             resolved_path = os.path.join(cwd, path)
 
-        try:
-            operations.access(resolved_path)
-        except PermissionError as e:
-            return f"Error: {str(e)}"
-        except FileNotFoundError:
-            return f"Error: File not found: {path}"
+        if not os.access(resolved_path, os.R_OK):
+            return f"Error: Cannot read file: {resolved_path}"
 
         try:
             with open(resolved_path, "rb") as f:
@@ -73,20 +55,22 @@ def create_read_func(cwd: str = ".", max_bytes: int = DEFAULT_MAX_BYTES, max_lin
                 end = total_lines
 
             selected_lines = lines[start:end]
-            result_content = "\n".join(selected_lines)
 
             truncation_type = None
             truncated = False
 
-            if len(result_content.encode("utf-8")) > max_bytes:
-                truncated = True
-                truncation_type = "bytes"
-                result_content = result_content[:max_bytes]
-
             if len(selected_lines) > max_lines:
                 truncated = True
                 truncation_type = "lines"
-                result_content = "\n".join(selected_lines[:max_lines])
+                selected_lines = selected_lines[:max_lines]
+
+            result_content = "\n".join(selected_lines)
+
+            encoded = result_content.encode("utf-8")
+            if len(encoded) > max_bytes:
+                truncated = True
+                truncation_type = "bytes"
+                result_content = encoded[:max_bytes].decode("utf-8", errors="ignore")
 
             lines_read = len(selected_lines)
             bytes_read = len(result_content.encode("utf-8"))
@@ -139,5 +123,3 @@ def create_read_tool(
         input_schema=input_schema,
     )
 
-
-ReadTool = Tool

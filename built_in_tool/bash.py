@@ -16,45 +16,42 @@ DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_OUTPUT_LINES = 1000
 
 
-class BashOperations:
-    async def exec(
-        self,
-        command: str,
-        cwd: str,
-        timeout: Optional[int] = None,
-        env: Optional[dict[str, str]] = None,
-    ) -> tuple[int, str, str]:
-        process_env = dict(os.environ)
-        if env:
-            process_env.update(env)
+async def _exec_bash_command(
+    command: str,
+    cwd: str,
+    timeout: Optional[int] = None,
+    env: Optional[dict[str, str]] = None,
+) -> tuple[int, str, str]:
+    process_env = dict(os.environ)
+    if env:
+        process_env.update(env)
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+            env=process_env,
+        )
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                env=process_env,
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout
             )
-            
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=timeout
-                )
-                stdout = stdout.decode("utf-8", errors="replace")
-                stderr = stderr.decode("utf-8", errors="replace")
-                return proc.returncode, stdout, stderr
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                return -1, "", "Command timed out"
-        except Exception as e:
-            return -1, "", str(e)
+            stdout = stdout.decode("utf-8", errors="replace")
+            stderr = stderr.decode("utf-8", errors="replace")
+            return proc.returncode, stdout, stderr
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return -1, "", "Command timed out"
+    except Exception as e:
+        return -1, "", str(e)
 
 
 async def create_bash_func(cwd: str = ".", max_output_lines: int = DEFAULT_MAX_OUTPUT_LINES, default_timeout: int = DEFAULT_TIMEOUT):
-    operations = BashOperations()
 
     async def bash_func(command: str, timeout: Optional[int] = None) -> str:
         if not os.path.exists(cwd):
@@ -63,7 +60,7 @@ async def create_bash_func(cwd: str = ".", max_output_lines: int = DEFAULT_MAX_O
         timeout = timeout or default_timeout
 
         try:
-            exit_code, stdout, stderr = await operations.exec(
+            exit_code, stdout, stderr = await _exec_bash_command(
                 command=command,
                 cwd=cwd,
                 timeout=timeout,
@@ -131,5 +128,3 @@ async def create_bash_tool(
         input_schema=input_schema,
     )
 
-
-BashTool = Tool

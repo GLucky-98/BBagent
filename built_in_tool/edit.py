@@ -112,5 +112,3 @@ def create_edit_tool(cwd: str = ".") -> Tool:
         input_schema=input_schema,
     )
 
-
-EditTool = Tool
