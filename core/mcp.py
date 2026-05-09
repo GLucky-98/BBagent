@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -64,16 +65,21 @@ def make_notification(method: str, params: Optional[Dict] = None) -> str:
 # MCP 客户端类
 # ------------------------------------------------------------
 class MCPClient:
-    def __init__(self, MCPserver_config:MCPServerConfig, client_name: str):
+    def __init__(self, MCPserver_config: MCPServerConfig, client_name: str, logger: logging.Logger = None):
         self.name = MCPserver_config.name
         self.client_name = client_name
         self.command = [MCPserver_config.command] + MCPserver_config.args
-        self.env = {**os.environ, **MCPserver_config.env}   
+        self.env = {**os.environ, **MCPserver_config.env}
         self.process: Optional[asyncio.subprocess.Process] = None
         self.request_id = 0
         self.pending_requests: Dict[int, asyncio.Future] = {}
         self.state = 'inactive'
-        self._initial_tools: List[Dict] = []  # ⭐ 存储初始化时服务器推送的工具
+        self._initial_tools: List[Dict] = []
+        self._logger = logger or logging.getLogger(f"mcp.{self.name}")
+
+    def _log(self, msg: str, level: str = "info", context: dict = None):
+        log_func = getattr(self._logger, level, self._logger.info)
+        log_func(msg, extra={"context": context or {}})
 
     async def start(self):
         """启动 MCP 服务器子进程并开始读取消息"""
@@ -113,7 +119,7 @@ class MCPClient:
                     try:
                         msg = json.loads(line)
                     except json.JSONDecodeError:
-                        print(f"Invalid JSON: {line}", file=sys.stderr)
+                        self._log(f"Invalid JSON: {line}", level="warning")
                         continue
 
                     if "id" in msg and msg["id"] in self.pending_requests:
@@ -125,12 +131,12 @@ class MCPClient:
                     elif "method" in msg:
                         await self._handle_notification(msg)
                     else:
-                        print(f"Unhandled message: {msg}", file=sys.stderr)
+                        self._log(f"Unhandled message: {msg}", level="debug")
                         
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"Error reading stdout: {e}", file=sys.stderr)
+                self._log(f"Error reading stdout: {e}", level="error")
                 break
 
     async def _read_stderr(self):
@@ -138,18 +144,17 @@ class MCPClient:
         if not self.process or not self.process.stderr:
             return
         async for line in self.process.stderr:
-            print(f"[SERVER STDERR] {line.decode('utf-8').rstrip()}", file=sys.stderr)
+            self._log(f"[MCPServer {self.name}] {line.decode('utf-8').rstrip()}", level="debug")
 
     async def _handle_notification(self, msg: Dict):
-        """处理服务器通知（例如进度更新）"""
         method = msg.get("method")
         params = msg.get("params", {})
         if method == "notifications/progress":
             progress = params.get("progress")
             total = params.get("total")
-            print(f"Progress: {progress}/{total}")
+            self._log(f"Progress: {progress}/{total}", level="debug")
         else:
-            print(f"Received notification: {method} {params}")
+            self._log(f"Received notification: {method} {params}", level="debug")
 
     async def send_request(self, method: str, params: Optional[Dict] = None) -> Any:
         """发送 JSON-RPC 请求并等待响应"""
@@ -206,10 +211,10 @@ class MCPClient:
         try:
             tools_result = await asyncio.wait_for(tools_future, timeout=3.0)
             if tools_result:
-                print(f"Server pushed tools: {len(tools_result.get('tools', []))} tools")
+                self._log(f"Server pushed tools: {len(tools_result.get('tools', []))} tools", level="info")
                 self._initial_tools = tools_result.get("tools", [])
         except asyncio.TimeoutError:
-            print("No tools pushed by server during init")
+            self._log("No tools pushed by server during init", level="info")
             self._initial_tools = []
         
         self.state = 'active'
@@ -347,6 +352,7 @@ class MCPManager:
         self.configs: Dict[str, MCPServerConfig] = {}
         self.clients: Dict[str, MCPClient] = {}
         self.client_tools: Dict[str, List[MCPTool]] = {}
+        self._logger = logging.getLogger("mcp.manager")
         if config_dir:
             self._load_configs(config_dir)
 
@@ -360,7 +366,7 @@ class MCPManager:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            print(f"Warning: failed to parse {file_path}: {e}")
+            self._logger.warning(f"Failed to parse {file_path}: {e}")
             return []
 
         configs: List[MCPServerConfig] = []
@@ -388,7 +394,7 @@ class MCPManager:
     def _load_configs(self, config_dir: str) -> None:
         """扫描目录下所有 JSON 文件，加载符合格式的配置"""
         if not os.path.isdir(config_dir):
-            print(f"Warning: config directory not found: {config_dir}")
+            self._logger.warning(f"Config directory not found: {config_dir}")
             return
 
         count = 0
@@ -401,7 +407,7 @@ class MCPManager:
                 if cfg.name and cfg.command:
                     self.configs[cfg.name] = cfg
                     count += 1
-        print(f"Loaded {count} MCP server config(s) from {config_dir}")
+        self._logger.info(f"Loaded {count} MCP server config(s) from {config_dir}")
 
     def add_config(self, config: MCPServerConfig) -> None:
         """运行时手动添加单个配置"""
@@ -409,14 +415,13 @@ class MCPManager:
             self.configs[config.name] = config
 
     def create_client(self, name: str) -> Optional[MCPClient]:
-        """根据配置实例化 MCPClient（仅创建，不启动进程）"""
         if name not in self.configs:
-            print(f"Warning: config '{name}' not found")
+            self._logger.warning(f"Config '{name}' not found")
             return None
         if name in self.clients:
             return self.clients[name]
         config = self.configs[name]
-        client = MCPClient(config, client_name=name)
+        client = MCPClient(config, client_name=name, logger=self._logger)
         self.clients[name] = client
         return client
 
@@ -457,9 +462,9 @@ class MCPManager:
         if tools_data:
             tools = [MCPTool(client, t) for t in tools_data]
             self.client_tools[client.name] = tools
-            print(f"Activated mcp client: {client.name} ({len(tools)} tool(s))")
+            self._logger.info(f"Activated mcp client: {client.name} ({len(tools)} tool(s))")
             return tools
-        print(f"Activated mcp client: {client.name} (0 tools)")
+        self._logger.info(f"Activated mcp client: {client.name} (0 tools)")
         return []
 
     async def deactivate_client(self, name: str) -> List[MCPTool]:
@@ -469,7 +474,7 @@ class MCPManager:
         if client:
             await client.close()
             tools = self.client_tools.pop(name, [])
-            print(f"Deactivated mcp client: {name}")
+            self._logger.info(f"Deactivated mcp client: {name}")
         return tools
 
     async def deactivate_all(self) -> List[MCPTool]:

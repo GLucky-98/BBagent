@@ -42,6 +42,25 @@ class Model(ABC):
     @abstractmethod
     def model_response_parse(self, response:dict) -> ModelMessage | str:
         pass
+
+    @staticmethod
+    def _is_retryable(status_code: int) -> bool:
+        if status_code == 429:
+            return True
+        if status_code >= 500:
+            return True
+        return False
+
+    @staticmethod
+    def _classify_error(e: httpx.HTTPStatusError) -> str:
+        status = e.response.status_code
+        if status == 429:
+            return f"Rate limited (429): {e}"
+        if status >= 500:
+            return f"Server error ({status}): {e}"
+        if status in (401, 403):
+            return f"Authentication error ({status}): {e}"
+        return f"Client error ({status}): {e}"
 #----------------------------------------------------------------------------
 # Anthropic Model
 ##---------------------------------------------------------------------------
@@ -85,7 +104,6 @@ class AnthropicModel(Model):
     def invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
         
         self.payload_construct(model_input)
-        # print(self.payload)
         timeout = httpx.Timeout(60.0, read=300.0)
 
         for attempt in range(max_retries):
@@ -94,14 +112,18 @@ class AnthropicModel(Model):
                     response = client.post(self.base_url, headers=self.headers, json=self.payload)
                     response.raise_for_status()
                     return self.model_response_parse(response.json())
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                except httpx.HTTPStatusError as e:
+                    if self._is_retryable(e.response.status_code) and attempt < max_retries - 1:
+                        import time
+                        time.sleep(retry_delay * (2 ** attempt))
+                        continue
+                    raise RuntimeError(f"{self._classify_error(e)} (after {max_retries} attempts)") from e
+                except httpx.RequestError as e:
                     if attempt < max_retries - 1:
                         import time
-                        time.sleep(retry_delay * (2 ** attempt))  # exponential backoff
-                        print(f"Retry {attempt + 1}/{max_retries} after error: {e}")
+                        time.sleep(retry_delay * (2 ** attempt))
                         continue
-                    print(f"HTTP error after {max_retries} attempts: {e}")
-                    raise
+                    raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
     
     async def async_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
         self.payload_construct(model_input)
@@ -113,13 +135,16 @@ class AnthropicModel(Model):
                     response = await client.post(self.base_url, headers=self.headers, json=self.payload)
                     response.raise_for_status()
                     return self.model_response_parse(response.json())
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                except httpx.HTTPStatusError as e:
+                    if self._is_retryable(e.response.status_code) and attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay * (2 ** attempt))
+                        continue
+                    raise RuntimeError(f"{self._classify_error(e)} (after {max_retries} attempts)") from e
+                except httpx.RequestError as e:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay * (2 ** attempt))
-                        print(f"Retry {attempt + 1}/{max_retries} after error: {e}")
                         continue
-                    print(f"HTTP error after {max_retries} attempts: {e}")
-                    raise
+                    raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
     
     async def async_stream_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0):
         self.payload_construct(model_input)
@@ -210,13 +235,16 @@ class AnthropicModel(Model):
                                         return
                                 except json.JSONDecodeError:
                                     continue             
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                except httpx.HTTPStatusError as e:
+                    if self._is_retryable(e.response.status_code) and attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay * (2 ** attempt))
+                        continue
+                    raise RuntimeError(f"{self._classify_error(e)} (after {max_retries} attempts)") from e
+                except httpx.RequestError as e:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay * (2 ** attempt))
-                        print(f"Retry {attempt + 1}/{max_retries} after error: {e}")
                         continue
-                    print(f"HTTP error after {max_retries} attempts: {e}")
-                    raise Exception(f"HTTP error after {max_retries} attempts: {e}")    
+                    raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e    
 
     def payload_construct(self, model_input: Model_Input):
         self.payload = dict(self._base_payload)
@@ -494,7 +522,6 @@ class OpenAIModel(Model):
         return blocks
 
     def invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
-        """同步调用，返回 ModelMessage 或字符串（仅文本）"""
         self.payload_construct(model_input)
         timeout = httpx.Timeout(60.0, read=300.0)
 
@@ -504,17 +531,20 @@ class OpenAIModel(Model):
                     response = client.post(self.base_url, headers=self.headers, json=self.payload)
                     response.raise_for_status()
                     return self.model_response_parse(response.json())
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                except httpx.HTTPStatusError as e:
+                    if self._is_retryable(e.response.status_code) and attempt < max_retries - 1:
+                        import time
+                        time.sleep(retry_delay * (2 ** attempt))
+                        continue
+                    raise RuntimeError(f"{self._classify_error(e)} (after {max_retries} attempts)") from e
+                except httpx.RequestError as e:
                     if attempt < max_retries - 1:
                         import time
                         time.sleep(retry_delay * (2 ** attempt))
-                        print(f"Retry {attempt + 1}/{max_retries} after error: {e}")
                         continue
-                    print(f"HTTP error after {max_retries} attempts: {e}")
-                    raise
+                    raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
 
     async def async_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
-        """异步调用"""
         self.payload_construct(model_input)
         timeout = httpx.Timeout(60.0, read=300.0)
 
@@ -524,13 +554,16 @@ class OpenAIModel(Model):
                     response = await client.post(self.base_url, headers=self.headers, json=self.payload)
                     response.raise_for_status()
                     return self.model_response_parse(response.json())
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                except httpx.HTTPStatusError as e:
+                    if self._is_retryable(e.response.status_code) and attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay * (2 ** attempt))
+                        continue
+                    raise RuntimeError(f"{self._classify_error(e)} (after {max_retries} attempts)") from e
+                except httpx.RequestError as e:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay * (2 ** attempt))
-                        print(f"Retry {attempt + 1}/{max_retries} after error: {e}")
                         continue
-                    print(f"HTTP error after {max_retries} attempts: {e}")
-                    raise
+                    raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
 
     async def async_stream_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0):
         """异步流式调用，yield 事件（need_print, completed_tool_use, completed_message）"""
@@ -637,10 +670,13 @@ class OpenAIModel(Model):
                                 yield {"type": "completed_message", "content": self.model_response_parse(accumulated_response)}
                                 return  # 流结束
                             
-                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                except httpx.HTTPStatusError as e:
+                    if self._is_retryable(e.response.status_code) and attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay * (2 ** attempt))
+                        continue
+                    raise RuntimeError(f"{self._classify_error(e)} (after {max_retries} attempts)") from e
+                except httpx.RequestError as e:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay * (2 ** attempt))
-                        print(f"Retry {attempt + 1}/{max_retries} after error: {e}")
                         continue
-                    print(f"HTTP error after {max_retries} attempts: {e}")
-                    raise
+                    raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e

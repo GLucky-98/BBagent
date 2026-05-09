@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Dict, Literal, Optional, List
+import logging
 import yaml
 from pydantic import BaseModel,Field
 
@@ -35,7 +36,8 @@ class Skill():
 class SkillManager:
     def __init__(self, skill_dir: Path | str = None):
         self.skills: Dict[str, Skill] = {}
-        self.skill_dir = skill_dir      
+        self.skill_dir = skill_dir
+        self._logger = logging.getLogger("skill.manager")
         if skill_dir is not None:
             self.add_skills(skill_dir)
 
@@ -113,6 +115,7 @@ class SkillManager:
             }
 
         except Exception as e:
+            self._logger.warning(f"Failed to parse skill file {skill_path}: {e}")
             return None
             
     def show_skill_detail(self, name: str):

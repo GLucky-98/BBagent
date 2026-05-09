@@ -272,7 +272,7 @@ class Session:
     @staticmethod
     def _estimate_token_count(msg: Message) -> int:
         serialized = json.dumps(msg.to_dict(), ensure_ascii=False)
-        return max(1, len(serialized.encode('utf-8')) // 3)
+        return max(1, len(serialized.encode('utf-8')) // 4)
 
     def get_message_tokens(self, msg: Message) -> int:
         if msg.token_num > 0:
@@ -394,7 +394,9 @@ ever_used_tools: {tools_str}
 
         md_count = metadata.get('messages_count', len(messages))
         if len(messages) != md_count:
-            print(f"Warning: message count mismatch. JSONL: {len(messages)}, metadata: {md_count}")
+            session._load_warnings = getattr(session, '_load_warnings', []) + [
+                f"Message count mismatch. JSONL: {len(messages)}, metadata: {md_count}"
+            ]
 
         return session
 

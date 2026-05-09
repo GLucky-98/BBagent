@@ -1,8 +1,52 @@
 import inspect
-from typing import Any, get_type_hints
+import json
+import logging
+import re
+from dataclasses import dataclass
+from typing import Any, get_type_hints, Union
 from pydantic import BaseModel, TypeAdapter
 from typing import Callable, Dict, List
 import copy
+
+from .errors import ERROR_INFERENCE_RULES, ToolErrorType
+
+
+@dataclass
+class ToolResult:
+    content: Union[List['ContentBlock'], str] # type: ignore
+    success: bool = True
+    error_type: str = ""
+    suggestion: str = ""
+
+
+def format_for_model(tool_result: ToolResult) -> str:
+    if tool_result.success:
+        return tool_result.content
+
+    parts = [
+        "Tool execution failed.",
+        f"Error type: {tool_result.error_type or ToolErrorType.UNKNOWN.value}",
+        f"Message: {tool_result.content}",
+        f"Suggestion: {tool_result.suggestion or 'Check the error message and try again.'}",
+    ]
+    return "\n".join(parts)
+
+
+def infer_tool_error(error_str: str) -> ToolResult:
+    for rule in ERROR_INFERENCE_RULES:
+        if re.search(rule.pattern, error_str):
+            return ToolResult(
+                content=error_str,
+                success=False,
+                error_type=rule.error_type.value,
+                suggestion=rule.suggestion,
+            )
+    return ToolResult(
+        content=error_str,
+        success=False,
+        error_type=ToolErrorType.UNKNOWN.value,
+        suggestion="Check the error details and try again with corrected parameters.",
+    )
 
 # ------------------------------------------------------------
 # pydantic 输入参数类型解析辅助函数
@@ -169,6 +213,7 @@ class ToolManager:
         self._blueprints: Dict[str, Tool] = {}
         self._shared: Dict[str, Tool] = {}
         self._agent_tools: Dict[str, Dict[str, Tool]] = {}
+        self._logger = logging.getLogger("tool.manager")
 
     def _register(self, tools: List[Tool] | Tool):
         if isinstance(tools, Tool):

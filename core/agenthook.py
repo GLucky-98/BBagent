@@ -24,6 +24,9 @@ class HookType(Enum):
 
     ON_MESSAGE = "on_message"
 
+    ON_ERROR = "on_error"
+    ON_FATAL_ERROR = "on_fatal_error"
+
     AFTER_RUN = "after_run"
 
     NEW_SESSION = "new_session"
@@ -58,6 +61,7 @@ class Hook:
     handler: Callable
     priority: int = 100
     name: str = None
+    critical: bool = False
 
     def __post_init__(self):
         if self.name is None:
@@ -70,7 +74,16 @@ class Hook:
             else:
                 return self.handler(context, *args, **kwargs)
         except Exception as e:
-            print(f"[Hook Error] {self.name}: {e}")
+            agent = context.agent
+            agent.logger.warning(
+                f"Hook '{self.name}' execution failed: {e}",
+                context={"hook_type": self.hook_type.value, "hook_name": self.name},
+                exc_info=True
+            )
+            if self.hook_type != HookType.ON_ERROR:
+                await agent.hook.trigger(HookType.ON_ERROR, e)
+            if self.critical:
+                raise
             return None
 
 
@@ -93,7 +106,7 @@ class AgentHook:
     def set_context(self, agent):
         self.context.agent = agent
 
-    def hook(self, hook_type: HookType, priority: int = None):
+    def hook(self, hook_type: HookType, priority: int = None, critical: bool = False):
         """装饰器：注册 Hook"""
         if priority is None:
             priority = self.DEFAULT_PRIORITY
@@ -103,14 +116,15 @@ class AgentHook:
                 hook_type=hook_type,
                 handler=func,
                 priority=priority,
-                name=getattr(func, '__name__', str(func))
+                name=getattr(func, '__name__', str(func)),
+                critical=critical,
             )
             self._register(h)
             return func
         return decorator
 
     def register(self, hook_type: HookType, func: Callable,
-                 priority: int = None):
+                 priority: int = None, critical: bool = False):
         """函数方式注册 Hook"""
         if priority is None:
             priority = self.DEFAULT_PRIORITY
@@ -118,7 +132,8 @@ class AgentHook:
         h = Hook(
             hook_type=hook_type,
             handler=func,
-            priority=priority
+            priority=priority,
+            critical=critical,
         )
         self._register(h)
 
