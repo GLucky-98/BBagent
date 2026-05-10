@@ -4,12 +4,9 @@ Bash tool - Execute shell commands.
 import asyncio
 import os
 import subprocess
-import sys
-from pathlib import Path
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.tool import Tool
+from ..core.tool import Tool
 
 
 DEFAULT_TIMEOUT = 60

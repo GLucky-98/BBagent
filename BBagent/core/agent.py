@@ -10,7 +10,17 @@ from uuid import uuid4 as uuid
 
 from .model import Model, Model_Input
 from .tool import Tool, tool, ToolResult, format_for_model, infer_tool_error
-from .message import *
+from .message import (
+    Session,
+    Message,
+    HumanMessage,
+    ModelMessage,
+    ToolMessage,
+    ContentBlock,
+    TextBlock,
+    ImageBlock,
+    ToolUseBlock,
+)
 from .skill import Skill
 from .agenthook import AgentHook, HookType, Hook
 from .events import AgentEvent, EventType
@@ -21,7 +31,7 @@ from .logger import AgentLogger
 @dataclass
 class AgentConfig:
     model: Model
-    base_path: Path | str = Path.cwd()
+    base_dir: Path | str = Path.cwd()
     system_prompt: str = ""
     name: str = 'Agent_' + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '_' + uuid().hex[:8]
     session: Session = None
@@ -34,7 +44,7 @@ class AgentConfig:
             self.tools = []
         if self.skills is None:
             self.skills = []
-        self.base_path = Path(self.base_path) / self.name
+        self.base_dir = Path(self.base_dir) / self.name
 
 
 @dataclass
@@ -50,16 +60,16 @@ class Agent:
         self.name = agent_config.name
         self.model = agent_config.model
 
-        self.base_path = agent_config.base_path
-        self.base_path.mkdir(parents=True, exist_ok=True)
-        self.system_prompt_path = self.base_path / 'system_prompt.md'
+        self.base_dir = agent_config.base_dir
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.system_prompt_path = self.base_dir / 'system_prompt.md'
         self.system_prompt = agent_config.system_prompt
         if not self.system_prompt_path.exists():
             self.system_prompt_path.write_text(agent_config.system_prompt, encoding='utf-8')
-        self.session_path = self.base_path / 'session'
-        self.session_path.mkdir(parents=True, exist_ok=True)
+        self.session_dir = self.base_dir / 'session'
+        self.session_dir.mkdir(parents=True, exist_ok=True)
 
-        self.session = agent_config.session or Session.create(self.session_path)
+        self.session = agent_config.session or Session.create(self.session_dir)
 
         self.tools: dict[str, Tool] = {}
         if agent_config.tools:
@@ -84,7 +94,7 @@ class Agent:
 
         self.logger = AgentLogger(
             name=self.name,
-            log_dir=self.base_path,
+            log_dir=self.base_dir,
         )
 
         self.state = AgentState.Ready
@@ -95,9 +105,9 @@ class Agent:
     def change_model(self, model: Model):
         self.model = model
     
-    def change_base_path(self, path: Path | str):
+    def change_base_dir(self, path: Path | str):
         new_base = Path(path)
-        old_base = self.base_path
+        old_base = self.base_dir
         new_base.mkdir(parents=True, exist_ok=True)
 
         new_system_prompt = new_base / 'system_prompt.md'
@@ -114,9 +124,9 @@ class Agent:
             shutil.move(str(new_session), str(deprecated))
         shutil.copytree(old_base / 'session', new_session)
 
-        self.base_path = new_base
+        self.base_dir = new_base
         self.system_prompt_path = new_system_prompt
-        self.session_path = new_session
+        self.session_dir = new_session
     
     def change_system_prompt(self, prompt: str):
         self.system_prompt = prompt
@@ -135,7 +145,7 @@ class Agent:
         jsonl_src = src_dir / f'{session_id}.jsonl'
         md_src = src_dir / f'{session_id}.md'
 
-        dst_dir = self.session_path / session_id
+        dst_dir = self.session_dir / session_id
         dst_dir.mkdir(parents=True, exist_ok=True)
 
         for f in [jsonl_src, md_src]:
@@ -161,7 +171,7 @@ class Agent:
     async def new_session(self):
         await self.hook.trigger(HookType.NEW_SESSION)
         self.session.save()
-        self.session = Session.create(self.session_path)
+        self.session = Session.create(self.session_dir)
     
     def add_tools(self, tools: List[Tool]):
         for t in tools:
@@ -448,17 +458,40 @@ _SENTINEL = object()
 class SubAgent:
     def __init__(self, model: Model, tools: List[Tool] = None, system_prompt: str = "",
                 skills: List[Skill] = None, agent_id: str = None):
+        self._agent_id = agent_id or f'sub_{id(self)}'
         self.model = model
         self.system_prompt = system_prompt
-        self.skills = skills or []
-        self.skill_prompt = self._load_skill_prompt()
-        self._agent_id = agent_id or f'sub_{id(self)}'
 
+        self.skills: dict[str, Skill] = {}
+        if skills:
+            self._add_load_skills_tool()
+            for skill in skills:
+                self.skills[skill.name] = skill
+        self.skill_prompt = self._load_skill_prompt()
+        
         self.tools: dict[str, Tool] = {}
         if tools:
             for t in tools:
                 self.tools[t.name] = t
 
+    def add_tools(self, tools: List[Tool]):
+        for t in tools:
+            self.tools[t.name] = t
+    
+    def _add_load_skills_tool(self):
+        @tool
+        def load_skill(skill_name: str):
+            """Load a skill by name to get its full capabilities and instructions. Use this when you need to access a specific skill's detailed content."""
+            skill = self.skills.get(skill_name)
+            if not skill:
+                return f"Unknown skill: {skill_name}"
+            else:
+                if skill.metadata:
+                    return f"{skill.metadata.to_dict()}-{skill.body}"
+                else:
+                    return skill.body
+        
+        self.add_tools([load_skill])
 
     def _load_skill_prompt(self):
         if not self.skills:

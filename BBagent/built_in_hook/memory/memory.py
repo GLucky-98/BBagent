@@ -1,0 +1,283 @@
+import re
+import json
+import asyncio
+import hashlib
+import logging
+from dataclasses import dataclass, field, asdict
+from typing import Optional, List
+from datetime import datetime
+from pathlib import Path
+
+
+import jieba
+import chromadb
+from rank_bm25 import BM25Okapi
+
+from .embedding import Embedding, OllamaEmbedding
+
+@dataclass
+class Memory:
+    id: str
+    content: str
+    type: str
+    session_id: str
+    date_created: str
+    access_count: int = 0
+    last_accessed: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Memory':
+        return cls(
+            id=data.get("id", ""),
+            content=data.get("content", ""),
+            type=data.get("type", "user_profile"),
+            session_id=data.get("session_id", ""),
+            date_created=data.get("date_created", ""),
+            access_count=data.get("access_count", 0),
+            last_accessed=data.get("last_accessed", None),
+        )
+
+    def to_metadata(self) -> dict:
+        return {
+            "type": self.type,
+            "session_id": self.session_id,
+            "date_created": self.date_created,
+            "access_count": self.access_count,
+            "last_accessed": self.last_accessed or "",
+        }
+
+    @staticmethod
+    def create(content: str, memory_type: str, session_id: str) -> 'Memory':
+        return Memory(
+            id=hashlib.sha256(content.encode('utf-8')).hexdigest(),
+            content=content,
+            type=memory_type,
+            session_id=session_id,
+            date_created=datetime.now().isoformat(),
+            access_count=0,
+            last_accessed=None,
+        )
+  
+
+class MemoryManager:
+
+    memory_types = ("user_profile", "preference", "experience")
+
+    def __init__(self,
+                 name: str = "memories",
+                 embedding: Embedding = None,
+                 memory_dir: str | Path = "./memory",
+                 logger: Optional[logging.Logger] = None):        
+
+        if embedding is None:
+            embedding = OllamaEmbedding()
+        self.embedding = embedding
+        self.memory_dir = Path(memory_dir)
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
+
+        self.client = chromadb.PersistentClient(path=str(self.memory_dir / "chroma_db"))
+        self.collection = self.client.get_or_create_collection(
+            name=name,
+            metadata={"hnsw:space": "cosine"}
+        )
+
+        self.bm25 = None
+        self.doc_mapping = {}
+        self._bm25_dirty = True
+
+        self.logger = logger or logging.getLogger(__name__)
+
+        self._load_from_files()
+
+    def _json_path_for_type(self, memory_type: str) -> Path:
+        return self.memory_dir / f"{memory_type}.json"
+
+    def _load_from_files(self):
+        all_data = self.collection.get()
+        has_chroma_data = bool(all_data.get("ids"))
+
+        if not has_chroma_data:
+            self.logger.info("未检测到已有记忆数据，将新建记忆库")
+            self._bm25_dirty = True
+            return
+
+        self.logger.info(f"从 ChromaDB 恢复 {len(all_data['ids'])} 条记忆")
+
+        for mt in MemoryManager.memory_types:
+            self._sync_json_for_type(mt)
+
+        self._bm25_dirty = True
+
+    async def _add_to_chroma(self, memory: Memory, embedding: list[float] = None):
+        if embedding is None:
+            embedding = await self.embedding.get_embedding(memory.content)
+        self.collection.add(
+            ids=[memory.id],
+            embeddings=[embedding],
+            documents=[memory.content],
+            metadatas=[memory.to_metadata()],
+        )
+
+    def _remove_from_chroma(self, memory_id: str):
+        try:
+            self.collection.delete(ids=[memory_id])
+        except Exception:
+            pass
+
+    def _sync_json_for_type(self, memory_type: str):
+        path = self._json_path_for_type(memory_type)
+        data = self.collection.get(where={"type": memory_type})
+        memories = []
+        for i, doc_id in enumerate(data.get("ids", [])):
+            memories.append(Memory(
+                id=doc_id,
+                content=data["documents"][i],
+                type=memory_type,
+                session_id=data["metadatas"][i].get("session_id", ""),
+                date_created=data["metadatas"][i].get("date_created", ""),
+                access_count=data["metadatas"][i].get("access_count", 0),
+                last_accessed=data["metadatas"][i].get("last_accessed", None),
+            ).to_dict())
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(memories, f, ensure_ascii=False, indent=2)
+
+    async def add_memories(self, memories: List[Memory]):
+        new_ids = [m.id for m in memories]
+        existing = self.collection.get(ids=new_ids)
+        existing_ids = set(existing.get("ids", []))
+
+        pending = [m for m in memories if m.id not in existing_ids]
+        if not pending:
+            return
+
+        contents = [m.content for m in pending]
+        embeddings = await self.embedding.get_embeddings(contents)
+
+        for i, mem in enumerate(pending):
+            if mem.type not in MemoryManager.memory_types:
+                mem.type = "user_profile"
+            await self._add_to_chroma(mem, embeddings[i])
+
+        for i in MemoryManager.memory_types:
+            self._sync_json_for_type(i)
+
+        self._bm25_dirty = True
+
+    def delete_memory(self, memory_id: str):
+        doc_data = self.collection.get(ids=[memory_id], include=["metadatas"])
+        if not doc_data.get("ids"):
+            return
+
+        memory_type = doc_data["metadatas"][0].get("type", "user_profile")
+        self._remove_from_chroma(memory_id)
+        self._sync_json_for_type(memory_type)
+        self._bm25_dirty = True
+
+    def increment_access(self, memory_id: str):
+        data = self.collection.get(ids=[memory_id], include=["metadatas"])
+        if not data["metadatas"] or not data["metadatas"][0]:
+            return
+        metadata = data["metadatas"][0]
+        metadata["access_count"] = metadata.get("access_count", 0) + 1
+        metadata["last_accessed"] = datetime.now().isoformat()
+        self.collection.update(ids=[memory_id], metadatas=[metadata])
+
+    def _ensure_bm25(self):
+        if self._bm25_dirty:
+            self.build_bm25_index()
+            self._bm25_dirty = False
+
+    def build_bm25_index(self):
+        all_data = self.collection.get()
+        documents = all_data.get("documents", [])
+
+        if not documents:
+            self.bm25 = None
+            self.doc_mapping = {}
+            return
+
+        tokenized_docs = [self._tokenize(doc) for doc in documents]
+        self.bm25 = BM25Okapi(tokenized_docs)
+        self.doc_mapping = {i: doc_id for i, doc_id in enumerate(all_data["ids"])}
+
+    def _tokenize(self, text: str) -> list[str]:
+        text = text.lower()
+        text = re.sub(r'[^\w\s一-鿿]', ' ', text)
+        tokens = []
+        for word in text.split():
+            tokens.extend(jieba.lcut(word))
+        return [t for t in tokens if t.strip()]
+
+    def _bm25_search(self, query: str, n_results: int) -> list[str]:
+        self._ensure_bm25()
+
+        if self.bm25 is None:
+            return []
+
+        tokenized_query = self._tokenize(query)
+        scores = self.bm25.get_scores(tokenized_query)
+
+        doc_scores = [(doc_id, score) for doc_id, score in
+                      zip(self.doc_mapping.values(), scores) if score > 0]
+
+        doc_scores.sort(key=lambda x: x[1], reverse=True)
+
+        return [doc_id for doc_id, _ in doc_scores[:n_results]]
+
+    async def hybrid_search(self,
+                            query: str,
+                            n_results: int = 5,
+                            rrf_k: int = 60,
+                            vector_weight: float = 0.5,
+                            bm25_weight: float = 0.5,
+                            memory_type: Optional[str] = None) -> dict:
+
+        where_filter = None
+        if memory_type:
+            where_filter = {"type": memory_type}
+
+        vector_ids = []
+        try:
+            vector_results = self.collection.query(
+                query_embeddings=[await self.embedding.get_embedding(query)],
+                n_results=n_results * 3,
+                where=where_filter,
+            )
+            vector_ids = vector_results["ids"][0] if vector_results.get("ids") else []
+        except Exception:
+            pass
+
+        self._ensure_bm25()
+        bm25_ids = self._bm25_search(query, n_results=n_results * 3)
+
+        rrf_scores: dict[str, float] = {}
+        for rank, doc_id in enumerate(vector_ids, 1):
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + vector_weight / (rrf_k + rank)
+        for rank, doc_id in enumerate(bm25_ids, 1):
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + bm25_weight / (rrf_k + rank)
+
+        sorted_ids = sorted(rrf_scores.items(), key=lambda x: (-x[1], x[0]))
+        top_ids = [doc_id for doc_id, _ in sorted_ids[:n_results]]
+
+        if not top_ids:
+            return {"ids": [], "documents": []}
+
+        top_data = self.collection.get(ids=top_ids, include=["documents"])
+        id_to_doc = {}
+        for i, doc_id in enumerate(top_data.get("ids", [])):
+            id_to_doc[doc_id] = top_data["documents"][i]
+
+        results: dict = {"ids": [], "documents": []}
+        for doc_id in top_ids:
+            self.increment_access(doc_id)
+            if doc_id in id_to_doc:
+                results["ids"].append(doc_id)
+                results["documents"].append(id_to_doc[doc_id])
+
+        for i in MemoryManager.memory_types:
+            self._sync_json_for_type(i)
+
+        return results

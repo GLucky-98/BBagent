@@ -2,11 +2,9 @@
 Write tool - Write content to a file, creating directories as needed.
 """
 import os
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.tool import Tool
+from ..core.tool import Tool
 
 
 class WriteOperations:

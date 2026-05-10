@@ -18,10 +18,8 @@ class HookType(Enum):
 
     ON_TEXT_CHUNK = "on_text_chunk"
     ON_THINKING_CHUNK = "on_thinking_chunk"
-
     ON_TOOL_USE = "on_tool_use"
     ON_TOOL_RESULT = "on_tool_result"
-
     ON_MESSAGE = "on_message"
 
     ON_ERROR = "on_error"

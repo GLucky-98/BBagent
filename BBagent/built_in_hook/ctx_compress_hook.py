@@ -1,17 +1,12 @@
 import asyncio
 from typing import List
 
-from core.agenthook import HookContext
-from core.agent import SubAgent
-from core.model import Model
-from core.tool import Tool
-from core.message import Message, HumanMessage, ModelMessage
+from ..core.agenthook import HookContext
+from ..core.agent import SubAgent
+from ..core.model import Model
+from ..core.tool import Tool
+from ..core.message import Message, HumanMessage, ModelMessage
 
-
-KEEP_RECENT_MSG = 20
-KEEP_RECENT_TIME = 60 * 60
-MAX_CONTEXT_TOKENS = 200000
-COMPRESSION_THRESHOLD = 0.8
 DEFAULT_SUMMARY_PROMPT = """You are a conversation summarizer. Your task is to compress a conversation history into a concise summary.
 
 Rules:
@@ -27,10 +22,9 @@ DEFAULT_SUMMARY_USER_PREFIX = """Summarize the following conversation history in
 async def compress_session(
     session,
     subagent: SubAgent,
-    threshold: int,
-    keep_recent_msg: int = KEEP_RECENT_MSG,
-    keep_recent_time: int = KEEP_RECENT_TIME,
-    summary_prefix: str = DEFAULT_SUMMARY_USER_PREFIX,
+    threshold: float,
+    keep_recent_msg: int,
+    keep_recent_time: int,
 ) -> str:
     messages = session.messages
     compress_zone = list(messages[:-keep_recent_msg])
@@ -64,7 +58,7 @@ async def compress_session(
                 keep_zone = []
 
     if not compress_zone:
-        return 'no_compress_zone'
+        return 
 
     last_compress = compress_zone[-1]
     if not (isinstance(last_compress, ModelMessage) and
@@ -78,10 +72,7 @@ async def compress_session(
             compress_zone.extend(keep_zone[:split_idx])
             keep_zone = keep_zone[split_idx:]
 
-    if not compress_zone:
-        return 'no_compress_zone'
-
-    summary_input = [HumanMessage(content=summary_prefix)] + compress_zone
+    summary_input = [HumanMessage(content=DEFAULT_SUMMARY_USER_PREFIX)] + compress_zone
     last_exception = None
     for attempt in range(3):
         try:
@@ -98,18 +89,15 @@ async def compress_session(
 
     summary_msg = HumanMessage(content=summary)
     session.replace_messages([summary_msg] + keep_zone, summary=summary)
-    return 'ok'
+    return 
 
 
-def create_context_hook(
-    model: Model = None,
-    tools: List[Tool] = None,
-    keep_recent_msg: int = KEEP_RECENT_MSG,
-    keep_recent_time: int = KEEP_RECENT_TIME,
-    max_context_tokens: int = MAX_CONTEXT_TOKENS,
-    compression_threshold: float = COMPRESSION_THRESHOLD,
-    summary_prompt: str = DEFAULT_SUMMARY_PROMPT,
-    summary_prefix: str = DEFAULT_SUMMARY_USER_PREFIX,
+def create_ctx_compress_hook(
+    submodel: Model,
+    max_context_tokens: int,
+    keep_recent_msg: int,
+    keep_recent_time: int,
+    compression_threshold: float
 ):
 
     threshold = int(max_context_tokens * compression_threshold)
@@ -122,7 +110,6 @@ def create_context_hook(
         needed = total_tokens >= threshold
 
         ctx.set('compression_needed', needed)
-        ctx.set('compression_total_tokens', total_tokens)
 
     async def execute_compression(ctx: HookContext):
         needed = ctx.get('compression_needed', False)
@@ -132,22 +119,15 @@ def create_context_hook(
 
         agent = ctx.agent
         session = agent.session
+        
+        subagent = SubAgent(model=submodel, system_prompt=DEFAULT_SUMMARY_PROMPT)
 
-        sub_model = model if model else agent.model[0]
-        subagent = SubAgent(model=sub_model, tools=tools, system_prompt=summary_prompt)
-
-        status = await compress_session(
+        await compress_session(
             session=session,
             subagent=subagent,
             threshold=threshold,
             keep_recent_msg=keep_recent_msg,
             keep_recent_time=keep_recent_time,
-            summary_prefix=summary_prefix,
         )
-
-        ctx.set('compression_result', status)
-
-        if status == 'keep_zone_overflow':
-            ctx.break_loop()
 
     return check_compression_needed, execute_compression

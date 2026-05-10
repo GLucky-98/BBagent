@@ -76,6 +76,7 @@ class MCPClient:
         self.state = 'inactive'
         self._initial_tools: List[Dict] = []
         self._logger = logger or logging.getLogger(f"mcp.{self.name}")
+        self._background_tasks: List[asyncio.Task] = []
 
     def _log(self, msg: str, level: str = "info", context: dict = None):
         log_func = getattr(self._logger, level, self._logger.info)
@@ -90,10 +91,8 @@ class MCPClient:
             stderr=subprocess.PIPE,
             env=self.env
         )
-        # 启动后台任务读取 stdout 消息
-        asyncio.create_task(self._read_stdout())
-        # 可选：打印 stderr 用于调试
-        asyncio.create_task(self._read_stderr())
+        self._background_tasks.append(asyncio.create_task(self._read_stdout()))
+        self._background_tasks.append(asyncio.create_task(self._read_stderr()))
 
     async def _read_stdout(self):
         """持续读取服务器 stdout，解析 JSON-RPC 消息"""
@@ -241,6 +240,14 @@ class MCPClient:
     async def close(self):
         """关闭子进程"""
         if self.process:
+            for task in self._background_tasks:
+                task.cancel()
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
+
+            if self.process.stdin and not self.process.stdin.is_closing():
+                self.process.stdin.close()
+
             self.process.terminate()
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=5.0)

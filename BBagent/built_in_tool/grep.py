@@ -4,12 +4,10 @@ Grep tool - Search for patterns in files using regular expressions.
 import fnmatch
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.tool import Tool
+from ..core.tool import Tool
 
 
 class GrepOperations:

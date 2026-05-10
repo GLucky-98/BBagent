@@ -2,12 +2,10 @@
 Read tool - Read file contents with optional truncation and offset/limit support.
 """
 import os
-import sys
 from pathlib import Path
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.tool import Tool
+from ..core.tool import Tool
 
 
 DEFAULT_MAX_BYTES = 500_000
