@@ -31,7 +31,7 @@ ADD_MEMORY_TOOL_DESCRIPTION = (
     '- Multiple discoveries → combine into one call with a list of items'
 ) # for main agent only , not for memory extractor subagent
 
-def create_add_memory_tool(memory_manager: MemoryManager, session_id_getter) -> Tool:
+def create_add_memory_tool(memory_manager: MemoryManager, session_id_getter, prompt: str = ADD_MEMORY_TOOL_DESCRIPTION) -> Tool:
 
     async def add_memory(memories: List[MemoryItem]) -> str:
         valid_memories = []
@@ -66,7 +66,7 @@ def create_add_memory_tool(memory_manager: MemoryManager, session_id_getter) -> 
 
     return Tool(add_memory, 
                 name="add_memory", 
-                description=ADD_MEMORY_TOOL_DESCRIPTION)
+                description=prompt if prompt else ADD_MEMORY_TOOL_DESCRIPTION)
 
 
 DELETE_MEMORY_TOOL_DESCRIPTION = (
