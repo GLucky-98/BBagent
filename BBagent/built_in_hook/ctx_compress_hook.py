@@ -25,6 +25,7 @@ async def compress_session(
     threshold: float,
     keep_recent_msg: int,
     keep_recent_time: int,
+    compress_user_prefix: str = DEFAULT_SUMMARY_USER_PREFIX
 ) -> str:
     messages = session.messages
     compress_zone = list(messages[:-keep_recent_msg])
@@ -72,7 +73,7 @@ async def compress_session(
             compress_zone.extend(keep_zone[:split_idx])
             keep_zone = keep_zone[split_idx:]
 
-    summary_input = [HumanMessage(content=DEFAULT_SUMMARY_USER_PREFIX)] + compress_zone
+    summary_input = [HumanMessage(content=compress_user_prefix)] + compress_zone
     last_exception = None
     for attempt in range(3):
         try:
@@ -97,8 +98,12 @@ def create_ctx_compress_hook(
     max_context_tokens: int,
     keep_recent_msg: int,
     keep_recent_time: int,
-    compression_threshold: float
+    compression_threshold: float,
+    compress_prompt: str = None,
+    compress_user_prefix: str = None,
 ):
+    compress_prompt = compress_prompt or DEFAULT_SUMMARY_PROMPT
+    compress_user_prefix = compress_user_prefix or DEFAULT_SUMMARY_USER_PREFIX
 
     threshold = int(max_context_tokens * compression_threshold)
 
@@ -120,7 +125,7 @@ def create_ctx_compress_hook(
         agent = ctx.agent
         session = agent.session
         
-        subagent = SubAgent(model=submodel, system_prompt=DEFAULT_SUMMARY_PROMPT)
+        subagent = SubAgent(model=submodel, system_prompt=compress_prompt)
 
         await compress_session(
             session=session,
@@ -128,6 +133,7 @@ def create_ctx_compress_hook(
             threshold=threshold,
             keep_recent_msg=keep_recent_msg,
             keep_recent_time=keep_recent_time,
+            compress_user_prefix=compress_user_prefix,
         )
 
     return check_compression_needed, execute_compression

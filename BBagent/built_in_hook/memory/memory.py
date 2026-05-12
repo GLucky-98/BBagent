@@ -19,7 +19,6 @@ from .embedding import Embedding, OllamaEmbedding
 class Memory:
     id: str
     content: str
-    type: str
     session_id: str
     date_created: str
     access_count: int = 0
@@ -33,7 +32,6 @@ class Memory:
         return cls(
             id=data.get("id", ""),
             content=data.get("content", ""),
-            type=data.get("type", "user_profile"),
             session_id=data.get("session_id", ""),
             date_created=data.get("date_created", ""),
             access_count=data.get("access_count", 0),
@@ -42,7 +40,6 @@ class Memory:
 
     def to_metadata(self) -> dict:
         return {
-            "type": self.type,
             "session_id": self.session_id,
             "date_created": self.date_created,
             "access_count": self.access_count,
@@ -50,11 +47,10 @@ class Memory:
         }
 
     @staticmethod
-    def create(content: str, memory_type: str, session_id: str) -> 'Memory':
+    def create(content: str, session_id: str) -> 'Memory':
         return Memory(
             id=hashlib.sha256(content.encode('utf-8')).hexdigest(),
             content=content,
-            type=memory_type,
             session_id=session_id,
             date_created=datetime.now().isoformat(),
             access_count=0,
@@ -64,13 +60,11 @@ class Memory:
 
 class MemoryManager:
 
-    memory_types = ("user_profile", "preference", "experience")
-
     def __init__(self,
                  name: str = "memories",
                  embedding: Embedding = None,
                  memory_dir: str | Path = "./memory",
-                 logger: Optional[logging.Logger] = None):        
+                 logger: Optional[logging.Logger] = None):
 
         if embedding is None:
             embedding = OllamaEmbedding()
@@ -89,26 +83,37 @@ class MemoryManager:
         self._bm25_dirty = True
 
         self.logger = logger or logging.getLogger(__name__)
+        self.logger.info(f"MemoryManager initialized: collection={name}, dir={self.memory_dir}")
 
         self._load_from_files()
 
-    def _json_path_for_type(self, memory_type: str) -> Path:
-        return self.memory_dir / f"{memory_type}.json"
+    def _dump_memories_json(self):
+        path = self.memory_dir / "memories.json"
+        all_data = self.collection.get()
+        memories = []
+        for i, doc_id in enumerate(all_data.get("ids", [])):
+            memories.append(Memory(
+                id=doc_id,
+                content=all_data["documents"][i],
+                session_id=all_data["metadatas"][i].get("session_id", ""),
+                date_created=all_data["metadatas"][i].get("date_created", ""),
+                access_count=all_data["metadatas"][i].get("access_count", 0),
+                last_accessed=all_data["metadatas"][i].get("last_accessed", None),
+            ).to_dict())
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(memories, f, ensure_ascii=False, indent=2)
+        self.logger.debug(f"Dumped {len(memories)} memories to {path}")
 
     def _load_from_files(self):
         all_data = self.collection.get()
         has_chroma_data = bool(all_data.get("ids"))
 
         if not has_chroma_data:
-            self.logger.info("未检测到已有记忆数据，将新建记忆库")
+            self.logger.info("No existing memory data found, creating new memory store")
             self._bm25_dirty = True
             return
 
-        self.logger.info(f"从 ChromaDB 恢复 {len(all_data['ids'])} 条记忆")
-
-        for mt in MemoryManager.memory_types:
-            self._sync_json_for_type(mt)
-
+        self.logger.info(f"Restored {len(all_data['ids'])} memories from ChromaDB")
         self._bm25_dirty = True
 
     async def _add_to_chroma(self, memory: Memory, embedding: list[float] = None):
@@ -124,25 +129,8 @@ class MemoryManager:
     def _remove_from_chroma(self, memory_id: str):
         try:
             self.collection.delete(ids=[memory_id])
-        except Exception:
-            pass
-
-    def _sync_json_for_type(self, memory_type: str):
-        path = self._json_path_for_type(memory_type)
-        data = self.collection.get(where={"type": memory_type})
-        memories = []
-        for i, doc_id in enumerate(data.get("ids", [])):
-            memories.append(Memory(
-                id=doc_id,
-                content=data["documents"][i],
-                type=memory_type,
-                session_id=data["metadatas"][i].get("session_id", ""),
-                date_created=data["metadatas"][i].get("date_created", ""),
-                access_count=data["metadatas"][i].get("access_count", 0),
-                last_accessed=data["metadatas"][i].get("last_accessed", None),
-            ).to_dict())
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(memories, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.logger.warning(f"Failed to delete memory from ChromaDB: id={memory_id}, error={e}")
 
     async def add_memories(self, memories: List[Memory]):
         new_ids = [m.id for m in memories]
@@ -151,29 +139,29 @@ class MemoryManager:
 
         pending = [m for m in memories if m.id not in existing_ids]
         if not pending:
+            self.logger.debug(f"All {len(memories)} memories already exist, skipping")
             return
 
+        skipped = len(memories) - len(pending)
         contents = [m.content for m in pending]
         embeddings = await self.embedding.get_embeddings(contents)
 
         for i, mem in enumerate(pending):
-            if mem.type not in MemoryManager.memory_types:
-                mem.type = "user_profile"
             await self._add_to_chroma(mem, embeddings[i])
 
-        for i in MemoryManager.memory_types:
-            self._sync_json_for_type(i)
-
+        self.logger.info(f"Added {len(pending)} memories" + (f", skipped {skipped} duplicates" if skipped else ""))
+        self._dump_memories_json()
         self._bm25_dirty = True
 
     def delete_memory(self, memory_id: str):
-        doc_data = self.collection.get(ids=[memory_id], include=["metadatas"])
+        doc_data = self.collection.get(ids=[memory_id])
         if not doc_data.get("ids"):
+            self.logger.debug(f"Delete memory: id={memory_id} not found, skipping")
             return
 
-        memory_type = doc_data["metadatas"][0].get("type", "user_profile")
         self._remove_from_chroma(memory_id)
-        self._sync_json_for_type(memory_type)
+        self.logger.info(f"Deleted memory: id={memory_id}")
+        self._dump_memories_json()
         self._bm25_dirty = True
 
     def increment_access(self, memory_id: str):
@@ -197,11 +185,13 @@ class MemoryManager:
         if not documents:
             self.bm25 = None
             self.doc_mapping = {}
+            self.logger.debug("BM25 index is empty (no documents)")
             return
 
         tokenized_docs = [self._tokenize(doc) for doc in documents]
         self.bm25 = BM25Okapi(tokenized_docs)
         self.doc_mapping = {i: doc_id for i, doc_id in enumerate(all_data["ids"])}
+        self.logger.debug(f"BM25 index built: {len(documents)} documents")
 
     def _tokenize(self, text: str) -> list[str]:
         text = text.lower()
@@ -232,23 +222,17 @@ class MemoryManager:
                             n_results: int = 5,
                             rrf_k: int = 60,
                             vector_weight: float = 0.5,
-                            bm25_weight: float = 0.5,
-                            memory_type: Optional[str] = None) -> dict:
-
-        where_filter = None
-        if memory_type:
-            where_filter = {"type": memory_type}
+                            bm25_weight: float = 0.5) -> dict:
 
         vector_ids = []
         try:
             vector_results = self.collection.query(
                 query_embeddings=[await self.embedding.get_embedding(query)],
                 n_results=n_results * 3,
-                where=where_filter,
             )
             vector_ids = vector_results["ids"][0] if vector_results.get("ids") else []
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.warning(f"Vector search failed: {e}")
 
         self._ensure_bm25()
         bm25_ids = self._bm25_search(query, n_results=n_results * 3)
@@ -277,7 +261,5 @@ class MemoryManager:
                 results["ids"].append(doc_id)
                 results["documents"].append(id_to_doc[doc_id])
 
-        for i in MemoryManager.memory_types:
-            self._sync_json_for_type(i)
-
+        self.logger.debug(f"Hybrid search returned {len(results['ids'])} results: query={query[:50]}")
         return results

@@ -10,7 +10,6 @@ for automatic lifecycle management.
 from .memory import Memory, MemoryManager
 from .embedding import Embedding, OllamaEmbedding
 from .memory_tool import (
-    MemoryItem,
     create_add_memory_tool,
     create_delete_memory_tool,
     create_search_memory_tool,
@@ -24,7 +23,6 @@ from .memory_hook import create_memory_hook,extract_memories
 __all__ = [
     "Memory", "MemoryManager",
     "Embedding", "OllamaEmbedding",
-    "MemoryItem",
     "create_add_memory_tool", "create_delete_memory_tool", "create_search_memory_tool",
     "create_memory_hook",
     "extract_memories",

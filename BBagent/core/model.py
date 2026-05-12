@@ -320,8 +320,10 @@ class AnthropicModel(Model):
         else:
             content = raw_content
         
-        input_tokens = usage_data.get('input_tokens',0)
-        token_num = usage_data.get('output_tokens',0)
+        input_tokens = (usage_data.get('input_tokens', 0)
+                        + usage_data.get('cache_read_input_tokens', 0)
+                        + usage_data.get('cache_creation_input_tokens', 0))
+        output_tokens = usage_data.get('output_tokens', 0)
 
         return ModelMessage(id=id,
                             raw_json=raw_json,
@@ -331,7 +333,7 @@ class AnthropicModel(Model):
                             stop_reason=stop_reason,
                             usage_data=usage_data,
                             input_tokens=input_tokens,
-                            token_num=token_num)       
+                            output_tokens=output_tokens)       
 
 
 
@@ -494,9 +496,8 @@ class OpenAIModel(Model):
                     ))
         
         input_tokens = usage.get("prompt_tokens", 0)
-        token_num = usage.get("completion_tokens", 0)
-        
-        # 构造 ModelMessage，需要 id（从响应中获取）
+        output_tokens = usage.get("completion_tokens", 0)
+
         return ModelMessage(
             id=msg_id,
             raw_json=raw_json,
@@ -506,7 +507,7 @@ class OpenAIModel(Model):
             stop_reason=finish_reason,
             usage_data=usage,
             input_tokens=input_tokens,
-            token_num=token_num
+            output_tokens=output_tokens
         )
 
     def _parse_content_parts(self, parts: list) -> List[ContentBlock]:
@@ -579,7 +580,7 @@ class OpenAIModel(Model):
         payload = {**self.payload, "stream": True, "stream_options": {"include_usage": True}}
         timeout = httpx.Timeout(60.0, read=300.0)
 
-        accumulated_response = {}      # 累积文本块（用于构建最终文本）
+        accumulated_response = {}
         accumulated_response['usage'] = {}
         accumulated_response['id'] = ''
         accumulated_response['choices'] = [{}]
@@ -588,7 +589,8 @@ class OpenAIModel(Model):
         accumulated_message = accumulated_response['choices'][0]['message']
         accumulated_message['role'] = 'assistant'
 
-        accumulated_tool_calls = {}   # {index: {id, name, arguments}}
+        accumulated_tool_calls = {}
+        _stream_finished = False
 
         for attempt in range(max_retries):
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -600,16 +602,21 @@ class OpenAIModel(Model):
                                 continue
                             data_str = line[5:].lstrip()
                             if data_str == "[DONE]":
+                                if _stream_finished:
+                                    if accumulated_response.get('usage'):
+                                        yield {"type": "completed_message", "content": self.model_response_parse(accumulated_response)}
+                                    return
                                 continue
                             try:
                                 chunk = json.loads(data_str)
                             except json.JSONDecodeError:
                                 continue
 
-                            # 处理 usage（通常在最后一个 usage chunk 中）
                             if "usage" in chunk and chunk["usage"]:
                                 accumulated_response['usage'] = chunk["usage"]
-                                # 不立即结束，等待最终 done
+                                if _stream_finished:
+                                    yield {"type": "completed_message", "content": self.model_response_parse(accumulated_response)}
+                                    return
 
                             choices = chunk.get("choices", [])
                             if not choices:
@@ -618,16 +625,14 @@ class OpenAIModel(Model):
                             delta = choices[0].get("delta", {})
                             finish_reason = choices[0].get("finish_reason")
 
-                            # 文本内容增量
                             if "content" in delta and delta["content"] is not None:
                                 accumulated_message['content'] = accumulated_message.get('content', '') + delta["content"]
                                 yield {"type": "text", "content": delta["content"]}
-                            
+
                             if "reasoning_content" in delta and delta["reasoning_content"] is not None:
                                 accumulated_message['reasoning_content'] = accumulated_message.get('reasoning_content', '') + delta["reasoning_content"]
                                 yield {"type": "thinking", "content": delta["reasoning_content"]}
 
-                            # 工具调用增量
                             if "tool_calls" in delta and delta["tool_calls"] is not None:
                                 for tc_delta in delta["tool_calls"]:
                                     idx = tc_delta.get("index", 0)
@@ -637,7 +642,6 @@ class OpenAIModel(Model):
                                             "name": None,
                                             "arguments": ""
                                         }
-                                    # 更新 id 和 name
                                     if "id" in tc_delta:
                                         accumulated_tool_calls[idx]["id"] = tc_delta["id"]
                                     if "function" in tc_delta:
@@ -646,19 +650,16 @@ class OpenAIModel(Model):
                                             accumulated_tool_calls[idx]["name"] = func["name"]
                                         if "arguments" in func:
                                             accumulated_tool_calls[idx]["arguments"] += func["arguments"]
-                                
 
-                            # 若 finish_reason 为 tool_calls 或 stop，表示当前 choice 结束
                             if finish_reason:
                                 accumulated_response['id'] = chunk.get("id", "")
                                 accumulated_response['choices'][0]['finish_reason'] = finish_reason
-                                # 如果有未完成的 tool_calls，输出完整工具调用
                                 if accumulated_tool_calls:
                                     accumulated_message['tool_calls'] = []
                                     for idx, tc in accumulated_tool_calls.items():
                                         accumulated_message['tool_calls'].append({})
                                         accumulated_message['tool_calls'][idx]["index"] = idx
-                                        
+
                                         if tc["id"] and tc["name"]:
                                             try:
                                                 args = json.loads(tc["arguments"])
@@ -675,9 +676,11 @@ class OpenAIModel(Model):
                                             yield {"type": "completed_tool_use", "content": tool_use}
                                     accumulated_tool_calls.clear()
 
-                                yield {"type": "completed_message", "content": self.model_response_parse(accumulated_response)}
-                                return  # 流结束
-                            
+                                _stream_finished = True
+                                if accumulated_response.get('usage'):
+                                    yield {"type": "completed_message", "content": self.model_response_parse(accumulated_response)}
+                                    return
+
                 except httpx.HTTPStatusError as e:
                     if self._is_retryable(e.response.status_code) and attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay * (2 ** attempt))

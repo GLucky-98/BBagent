@@ -1,6 +1,4 @@
-from typing import Literal, List
-
-from pydantic import BaseModel, Field
+from typing import List
 
 from ...core.tool import Tool
 from ...core.message import HumanMessage
@@ -9,60 +7,38 @@ from ...core.model import Model
 from .memory import Memory, MemoryManager
 
 
-class MemoryItem(BaseModel):
-    content: str = Field(description="The memory content to save. Make it self-contained and understandable without additional context.")
-    memory_type: Literal["user_profile", "preference", "experience"] = Field(description="One of 'user_profile', 'preference', or 'experience'.")
-
-
 ADD_MEMORY_TOOL_DESCRIPTION = (
     "Save one or more memories to the agent's long-term memory in batch. "
     "Use this tool when the user explicitly asks you to remember something, "
     "or when you discover important information about the user that will be "
     "useful in future conversations. You can add multiple memories at once.\n\n"
     "Parameters:\n"
-    "- memories (List[MemoryItem]): A list of memory items to save. Each item has:\n"
-    "  - content (str): The memory content to save. Make it self-contained and "
-    "understandable without additional context.\n"
-    "  - memory_type (str): One of 'user_profile', 'preference', or 'experience'.\n\n"
+    "- memories (List[str]): A list of memory content strings to save. Each content "
+    "should be self-contained and understandable without additional context.\n\n"
     "Examples of when to use this tool:\n"
-    '- User says "remember that I prefer dark mode" → [{"content": "User prefers dark mode", "memory_type": "preference"}]\n'
-    '- User says "my name is Alice, I work at Google" → [{"content": "User name is Alice", "memory_type": "user_profile"}, {"content": "User works at Google", "memory_type": "user_profile"}]\n'
-    '- User says "I fixed that bug by restarting the service" → [{"content": "User fixed a bug by restarting the service", "memory_type": "experience"}]\n'
-    '- Multiple discoveries → combine into one call with a list of items'
+    '- User says "remember that I prefer dark mode" → ["User prefers dark mode"]\n'
+    '- User says "my name is Alice, I work at Google" → ["User name is Alice", "User works at Google"]\n'
+    '- User says "I fixed that bug by restarting the service" → ["User fixed a bug by restarting the service"]\n'
+    '- Multiple discoveries → combine into one call with a list of strings'
 ) # for main agent only , not for memory extractor subagent
 
 def create_add_memory_tool(memory_manager: MemoryManager, session_id_getter, prompt: str = ADD_MEMORY_TOOL_DESCRIPTION) -> Tool:
 
-    async def add_memory(memories: List[MemoryItem]) -> str:
+    async def add_memory(memories: List[str]) -> str:
         valid_memories = []
-        rejected = []
-
-        for item in memories:
-            if item.memory_type not in MemoryManager.memory_types:
-                rejected.append(f"[{item.memory_type}] {item.content}")
-                continue
+        for content in memories:
             memory = Memory.create(
-                content=item.content,
-                memory_type=item.memory_type,
+                content=content,
                 session_id=session_id_getter(),
             )
             valid_memories.append(memory)
 
-        result_parts = []
-
         if valid_memories:
             await memory_manager.add_memories(valid_memories)
-            saved_list = "\n".join(f"  - [{m.type}] {m.content}" for m in valid_memories)
-            result_parts.append(f"Saved {len(valid_memories)} memories:\n{saved_list}")
+            saved_list = "\n".join(f"  - {m.content}" for m in valid_memories)
+            return f"Saved {len(valid_memories)} memories:\n{saved_list}"
 
-        if rejected:
-            rejected_list = "\n".join(f"  - {r}" for r in rejected)
-            result_parts.append(f"Rejected {len(rejected)} items (invalid memory_type):\n{rejected_list}")
-
-        if not result_parts:
-            return "No memories provided."
-
-        return "\n\n".join(result_parts)
+        return "No memories provided."
 
     return Tool(add_memory, 
                 name="add_memory", 
@@ -132,7 +108,7 @@ SEARCH_MEMORY_TOOL_DESCRIPTION = (
     '- User asks "what was that bug I told you about last time?" → query="What bugs did the user report or fix recently?"\n'
 )
 
-def create_search_memory_tool(memory_manager: MemoryManager, submodel: Model, agent_dir_getter, n_results: int , rrf_k: int, bm25_weight: float, vector_weight: float) -> Tool:
+def create_search_memory_tool(memory_manager: MemoryManager, submodel: Model, agent_dir_getter, n_results: int , rrf_k: int, bm25_weight: float, vector_weight: float, subagent_prompt: str = None, tool_prompt: str = SEARCH_MEMORY_TOOL_DESCRIPTION) -> Tool:
     
     async def search_memory(query: str) -> str:
         from ...built_in_tool import create_read_tool, create_find_tool, create_grep_tool
@@ -176,9 +152,11 @@ def create_search_memory_tool(memory_manager: MemoryManager, submodel: Model, ag
 - Relevant memories found: Concisely list the key information. No fluff.
 - No relevant memories: Directly say "no relevant memories found". Do not fabricate or over-explain."""
 
+        subagent_prompt = subagent_prompt if subagent_prompt else MEMSEARCH_SUBAGENT_PROMPT
+
         sub_agent = SubAgent(
             model=submodel,
-            system_prompt=MEMSEARCH_SUBAGENT_PROMPT,
+            system_prompt=subagent_prompt,
             tools=[read_tool, glob_tool, grep_tool],
         )
 
@@ -191,4 +169,4 @@ def create_search_memory_tool(memory_manager: MemoryManager, submodel: Model, ag
 
     return Tool(search_memory,
                 name="search_memory",
-                description=SEARCH_MEMORY_TOOL_DESCRIPTION)
+                description=tool_prompt)

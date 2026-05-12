@@ -12,7 +12,7 @@ from .memory_tool import create_add_memory_tool, create_delete_memory_tool
 EXTRACT_SYSTEM_PROMPT = """You are a memory extraction assistant. Your task is to analyze conversations and identify information worth preserving as long-term memories about the user.
 
 ## Memory Types
-You can extract three types of memories:
+When extracting memories, consider three categories of information:
 
 1. **user_profile**: User identity and factual information — name, occupation, identity, skill background, technical expertise, etc.
 2. **preference**: Long-term preferences and styles — work habits, tool preferences, code style preferences, communication style, etc.
@@ -21,7 +21,6 @@ You can extract three types of memories:
 ## How to Extract Memories
 - Use the `add_memory` tool to save all discovered memories at once in a single batch call.
 - Each memory must be self-contained and understandable without additional context from the current conversation.
-- Assign the correct `memory_type` to each memory.
 
 ## What to Extract — Criteria
 Extract ONLY information that meets ALL of the following:
@@ -40,11 +39,11 @@ Extract ONLY information that meets ALL of the following:
 ## Examples
 
 Good memories worth extracting:
-- "User is a Python backend engineer specializing in FastAPI and SQLAlchemy" → memory_type="user_profile"
-- "User prefers concise code with minimal comments, values readability through good naming" → memory_type="preference"
-- "When debugging async database issues, the user found that checking the connection pool configuration first saved hours of troubleshooting" → memory_type="experience"
-- "User works at Google as a Senior Software Engineer on the Cloud Storage team" → memory_type="user_profile"
-- "User strongly prefers dark theme in all development tools and IDEs" → memory_type="preference"
+- "User is a Python backend engineer specializing in FastAPI and SQLAlchemy"
+- "User prefers concise code with minimal comments, values readability through good naming"
+- "When debugging async database issues, the user found that checking the connection pool configuration first saved hours of troubleshooting"
+- "User works at Google as a Senior Software Engineer on the Cloud Storage team"
+- "User strongly prefers dark theme in all development tools and IDEs"
 
 NOT worth extracting:
 - "User asked about Python list comprehensions" → too generic, no personal info revealed
@@ -63,15 +62,13 @@ ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT = (
     "Save one or more memories to the agent's long-term memory in batch. "
     "You can add multiple memories in a single call.\n\n"
     "Parameters:\n"
-    "- memories (List[MemoryItem]): A list of memory items to save. Each item has:\n"
-    "  - content (str): The memory content to save. Make it self-contained and "
-    "understandable without additional context.\n"
-    "  - memory_type (str): One of 'user_profile', 'preference', or 'experience'.\n\n"
+    "- memories (List[str]): A list of memory content strings to save. Each content "
+    "should be self-contained and understandable without additional context.\n\n"
     "Examples:\n"
-    '- [{"content": "User prefers dark mode in all code editors", "memory_type": "preference"}]\n'
-    '- [{"content": "User is a senior backend engineer at Google", "memory_type": "user_profile"}]\n'
-    '- [{"content": "User once fixed a deadlock by switching from threading to asyncio", "memory_type": "experience"}]\n'
-    '- Combine multiple memories in one call: [{"content": "...", "memory_type": "..."}, {"content": "...", "memory_type": "..."}]'
+    '- ["User prefers dark mode in all code editors"]\n'
+    '- ["User is a senior backend engineer at Google"]\n'
+    '- ["User once fixed a deadlock by switching from threading to asyncio"]\n'
+    '- Combine multiple memories in one call: ["...", "..."]'
 )
 
 
@@ -102,7 +99,7 @@ def _format_messages_for_extraction(messages: List[Message]) -> str:
     return "\n\n".join(lines)
 
 
-async def extract_memories(submodel: Model, session: Session, memory_manager: MemoryManager):
+async def extract_memories(submodel: Model, session: Session, memory_manager: MemoryManager, extract_prompt: str = EXTRACT_SYSTEM_PROMPT):
     add_memory_tool = create_add_memory_tool(
         memory_manager, lambda: session.id,
         prompt=ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
@@ -110,7 +107,7 @@ async def extract_memories(submodel: Model, session: Session, memory_manager: Me
 
     subagent = SubAgent(
         model=submodel,
-        system_prompt=EXTRACT_SYSTEM_PROMPT,
+        system_prompt=extract_prompt,
         tools=[add_memory_tool],
     )
 
@@ -130,17 +127,14 @@ Review the conversation above carefully. Identify information about the user tha
 CLEAN_SYSTEM_PROMPT = """You are a memory maintenance assistant. Your task is to analyze the agent's long-term memory store and clean up obsolete, conflicting, or low-quality memories to keep the memory system healthy and efficient.
 
 ## How Memory Storage Works
-- Memories are stored as JSON files in the memory directory, one file per memory_type: `user_profile.json`, `preference.json`, `experience.json`
-- Each memory has: `id` (hash), `content` (text), `type`, `session_id`, `date_created`, `access_count`, `last_accessed`
+- Memories are stored as a JSON file in the memory directory: `memories.json`
+- Each memory has: `id` (hash), `content` (text), `session_id`, `date_created`, `access_count`, `last_accessed`
 - Last accessed being `null` means the memory was never accessed since creation
 
-## Step 1: Read the Memory Files
-Use the Read tool to read each JSON file:
-- `user_profile.json`
-- `preference.json`
-- `experience.json`
+## Step 1: Read the Memory File
+Use the Read tool to read `memories.json`.
 
-Examine the contents carefully. Note each memory's `id`, `content`, `type`, `date_created`, `access_count`, and `last_accessed`.
+Examine the contents carefully. Note each memory's `id`, `content`, `date_created`, `access_count`, and `last_accessed`.
 
 ## Step 2: Identify Memories to Clean Using These Rules
 
@@ -151,7 +145,7 @@ Delete memories where:
 Rationale: Memories that are never used or haven't been used in a month are likely irrelevant.
 
 ### Rule 2: Conflicting Information
-When two memories within the same memory_type contain contradictory or conflicting information about the same topic, keep the one with the more recent `date_created` and delete the older one.
+When two memories contain contradictory or conflicting information about the same topic, keep the one with the more recent `date_created` and delete the older one.
 Examples:
 - "User is a junior developer" vs "User is a senior developer" → keep the newer one
 - "User prefers tabs for indentation" vs "User prefers spaces for indentation" → keep the newer one
@@ -162,7 +156,7 @@ When a newer memory makes an older one clearly outdated:
 - "User is learning Python basics" (old) vs "User is proficient in Python async programming" (new) → delete the old one
 
 ### Rule 4: Near-Duplicate Memories
-When two memories in the same type are nearly identical in meaning (paraphrases of the same fact), keep the one with higher `access_count` (or more recent `date_created` if access counts are equal) and delete the other.
+When two memories are nearly identical in meaning (paraphrases of the same fact), keep the one with higher `access_count` (or more recent `date_created` if access counts are equal) and delete the other.
 
 ### Rule 5: Trivial / Low-Quality Memories
 Delete memories that:
@@ -172,7 +166,7 @@ Delete memories that:
 - Contain generic information that applies to anyone (e.g., "User uses a computer for work")
 
 ### Rule 6: Empty or Corrupted
-Delete any memory whose `content` is empty, or that has an invalid/missing type.
+Delete any memory whose `content` is empty, or that has an invalid/missing `id`.
 
 ## Step 3: Execute Cleanup
 Use the `delete_memory` tool with the list of memory IDs to delete. Batch all deletions into a single call for efficiency.
@@ -185,7 +179,7 @@ Use the `delete_memory` tool with the list of memory IDs to delete. Batch all de
 - Count and report: how many total memories were examined, how many were deleted, and the reason categories."""
 
 
-async def clean_memory(submodel: Model, memory_manager: MemoryManager):
+async def clean_memory(submodel: Model, memory_manager: MemoryManager, clean_prompt: str = CLEAN_SYSTEM_PROMPT):
     from ...built_in_tool import create_read_tool, create_find_tool, create_grep_tool
 
     delete_tool = create_delete_memory_tool(memory_manager)
@@ -195,30 +189,33 @@ async def clean_memory(submodel: Model, memory_manager: MemoryManager):
 
     subagent = SubAgent(
         model=submodel,
-        system_prompt=CLEAN_SYSTEM_PROMPT,
+        system_prompt=clean_prompt,
         tools=[read_tool, glob_tool, grep_tool, delete_tool],
     )
 
     prompt = f"""Please perform a thorough cleanup of the agent's long-term memory.
 
 Memory directory: {memory_manager.memory_dir}
-Available memory type files: user_profile.json, preference.json, experience.json
+Memory file: memories.json
 
-Read each JSON file, analyze the memories against the cleanup rules in your system prompt, and delete any memories that should be removed. Use the delete_memory tool with all IDs to delete in one batch call."""
+Read the JSON file, analyze the memories against the cleanup rules in your system prompt, and delete any memories that should be removed. Use the delete_memory tool with all IDs to delete in one batch call."""
 
     await subagent.run(HumanMessage(content=prompt))
     return
 
 
-def create_memory_hook(memory_manager: MemoryManager, submodel: Model) -> AgentHook:
+def create_memory_hook(memory_manager: MemoryManager, submodel: Model, extract_prompt: str = None, clean_prompt: str = None) -> AgentHook:
+    extract_prompt = extract_prompt or EXTRACT_SYSTEM_PROMPT
+    clean_prompt = clean_prompt or CLEAN_SYSTEM_PROMPT
+
     async def memory_extract_hook(ctx: HookContext):
         agent = ctx.agent
         if not agent or not agent.session:
             return
 
-        await extract_memories(submodel, agent.session, memory_manager)
+        await extract_memories(submodel, agent.session, memory_manager, extract_prompt)
     
     async def clean_memory_hook(ctx: HookContext):
-        await clean_memory(submodel, memory_manager)
+        await clean_memory(submodel, memory_manager, clean_prompt)
     
     return memory_extract_hook, clean_memory_hook

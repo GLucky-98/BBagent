@@ -101,7 +101,6 @@ class Message:
 @dataclass
 class HumanMessage(Message):
     content: List[ContentBlock] | str
-    token_num: int = 0
     role: str = "user"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
 
@@ -109,7 +108,6 @@ class HumanMessage(Message):
         return {
             "role": self.role,
             "content": Message._serialize_content(self.content),
-            "token_num": self.token_num,
             "timestamp": self.timestamp,
         }
 
@@ -117,7 +115,6 @@ class HumanMessage(Message):
     def _from_dict(cls, data: dict) -> 'HumanMessage':
         return cls(
             content=Message._deserialize_content(data['content']),
-            token_num=data.get('token_num', 0),
             timestamp=data.get('timestamp', 0),
         )
 
@@ -127,7 +124,6 @@ class ToolMessage(Message):
     id: str
     name: str
     content: List[ContentBlock] | str
-    token_num: int = 0 
     role: str = "tool"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
 
@@ -137,7 +133,6 @@ class ToolMessage(Message):
             "id": self.id,
             "name": self.name,
             "content": Message._serialize_content(self.content),
-            "token_num": self.token_num,
             "timestamp": self.timestamp,
         }
 
@@ -147,7 +142,6 @@ class ToolMessage(Message):
             id=data['id'],
             name=data['name'],
             content=Message._deserialize_content(data['content']),
-            token_num=data.get('token_num', 0),
             timestamp=data.get('timestamp', 0),
         )
 
@@ -162,7 +156,7 @@ class ModelMessage(Message):
     thinking: str = ''
     tool_calls: List[ToolUseBlock] = field(default_factory=list)
     input_tokens: int = 0
-    token_num: int = 0
+    output_tokens: int = 0
     role: str = "model"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
 
@@ -177,7 +171,7 @@ class ModelMessage(Message):
             "thinking": self.thinking,
             "tool_calls": [tc.to_dict() for tc in self.tool_calls],
             "input_tokens": self.input_tokens,
-            "token_num": self.token_num,
+            "output_tokens": self.output_tokens,
             "timestamp": self.timestamp,
         }
 
@@ -192,7 +186,7 @@ class ModelMessage(Message):
             thinking=data.get('thinking', ''),
             tool_calls=[ContentBlock.from_dict(tc) for tc in data.get('tool_calls', [])],
             input_tokens=data.get('input_tokens', 0),
-            token_num=data.get('token_num', 0),
+            output_tokens=data.get('output_tokens', data.get('token_num', 0)),
             timestamp=data.get('timestamp', 0),
         )
 
@@ -204,7 +198,9 @@ class Session:
         self.path = Path(path) if path else None
         self.messages = messages if messages else []
         
-        self.total_tokens = 0
+        self.context_length = 0
+        self.total_input_cost_tokens = 0
+        self.total_output_cost_tokens = 0
         self.compress_num = 0
         self.summary = ''
         self.compact_summary = []
@@ -231,68 +227,37 @@ class Session:
         messages = message if isinstance(message, list) else [message]
         for msg in messages:
             if isinstance(msg, ModelMessage) and msg.input_tokens > 0:
-                self._token_calculate(msg)
+                self._update_token_stats(msg)
             self.messages.append(msg)
         if self.path:
             with open(self._messages_path(), 'a', encoding='utf-8') as f:
                 for msg in messages:
                     f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
 
-    def _token_calculate(self, model_msg: ModelMessage):
-        last_model_idx = -1
-        for i in range(len(self.messages) - 1, -1, -1):
-            if isinstance(self.messages[i], ModelMessage):
-                last_model_idx = i
-                break
-
-        last_model_token = self.messages[last_model_idx].token_num if last_model_idx >= 0 else 0
-
-        since_last = self.messages[last_model_idx + 1:] if last_model_idx >= 0 else self.messages
-
-        known_sum = last_model_token
-        unknown_indices = []
-        for i, m in enumerate(since_last):
-            if m.token_num > 0:
-                known_sum += m.token_num
-            else:
-                unknown_indices.append(i)
-
-        unknown_total = max(0, model_msg.input_tokens - known_sum)
-
-        if len(unknown_indices) == 1:
-            since_last[unknown_indices[0]].token_num = unknown_total
-        elif len(unknown_indices) > 1:
-            per_msg = unknown_total // len(unknown_indices)
-            remainder = unknown_total % len(unknown_indices)
-            for j, idx in enumerate(unknown_indices):
-                since_last[idx].token_num = per_msg + (1 if j < remainder else 0)
-
-        self.total_tokens = model_msg.input_tokens + model_msg.token_num
+    def _update_token_stats(self, model_msg: ModelMessage):
+        self.context_length = model_msg.input_tokens + model_msg.output_tokens
+        self.total_input_cost_tokens += model_msg.input_tokens
+        self.total_output_cost_tokens += model_msg.output_tokens
 
     @staticmethod
     def _estimate_token_count(msg: Message) -> int:
         serialized = json.dumps(msg.to_dict(), ensure_ascii=False)
         return max(1, len(serialized.encode('utf-8')) // 4)
 
-    def get_message_tokens(self, msg: Message) -> int:
-        if msg.token_num > 0:
-            return msg.token_num
-        return self._estimate_token_count(msg)
-
     def get_session_token_count(self) -> int:
         messages = self.messages
         if not messages:
             return 0
         if isinstance(messages[-1], ModelMessage):
-            return self.total_tokens
+            return self.context_length
         last_model_idx = -1
         for i in range(len(messages) - 1, -1, -1):
             if isinstance(messages[i], ModelMessage):
                 last_model_idx = i
                 break
         if last_model_idx < 0:
-            return sum(self.get_message_tokens(m) for m in messages)
-        return self.total_tokens + sum(self.get_message_tokens(m) for m in messages[last_model_idx + 1:])
+            return sum(self._estimate_token_count(m) for m in messages)
+        return self.context_length + sum(self._estimate_token_count(m) for m in messages[last_model_idx + 1:])
 
     def replace_messages(self, new_messages: List[Message], summary: str = ''):
         if self.path:
@@ -312,7 +277,10 @@ class Session:
         if summary:
             self.compact_summary.append(summary)
         self.messages = new_messages
-        self.total_tokens = sum(self.get_message_tokens(m) for m in self.messages)
+        if self.messages and isinstance(self.messages[-1], ModelMessage):
+            self.context_length = self.messages[-1].input_tokens + self.messages[-1].output_tokens
+        else:
+            self.context_length = sum(self._estimate_token_count(m) for m in self.messages)
 
     def save(self):
         if not self.path:
@@ -330,7 +298,9 @@ class Session:
 
 id: {self.id}
 timestamp: {self.timestamp}
-total_tokens: {self.total_tokens}
+context_length: {self.context_length}
+total_input_cost_tokens: {self.total_input_cost_tokens}
+total_output_cost_tokens: {self.total_output_cost_tokens}
 compress_num: {self.compress_num}
 messages_count: {len(self.messages)}
 ever_used_tools: {tools_str}
@@ -386,7 +356,9 @@ ever_used_tools: {tools_str}
             messages=messages,
         )
         session.timestamp = metadata.get('timestamp', session.timestamp)
-        session.total_tokens = metadata.get('total_tokens', 0)
+        session.context_length = metadata.get('context_length', 0)
+        session.total_input_cost_tokens = metadata.get('total_input_cost_tokens', 0)
+        session.total_output_cost_tokens = metadata.get('total_output_cost_tokens', 0)
         session.compress_num = metadata.get('compress_num', 0)
         session.summary = metadata.get('summary', '')
         session.compact_summary = metadata.get('compact_summary', [])
@@ -426,7 +398,7 @@ ever_used_tools: {tools_str}
             if section == 'header' and ':' in stripped and not stripped.startswith('#'):
                 key, _, value = stripped.partition(':')
                 key, value = key.strip(), value.strip()
-                if key in ('total_tokens', 'compress_num', 'messages_count'):
+                if key in ('context_length', 'total_input_cost_tokens', 'total_output_cost_tokens', 'compress_num', 'messages_count'):
                     result[key] = int(value) if value.isdigit() else 0
                 elif key == 'ever_used_tools':
                     result[key] = [t.strip() for t in value.split(',') if t.strip()] if value != 'None' else []
