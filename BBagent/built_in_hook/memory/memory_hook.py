@@ -99,10 +99,25 @@ def _format_messages_for_extraction(messages: List[Message]) -> str:
     return "\n\n".join(lines)
 
 
-async def extract_memories(submodel: Model, session: Session, memory_manager: MemoryManager, extract_prompt: str = EXTRACT_SYSTEM_PROMPT):
+DEFAULT_EXTRACT_USER_PROMPT = """Please analyze the following conversation and extract any valuable long-term memories.
+
+## Conversation
+{messages_text}
+
+Review the conversation above carefully. Identify information about the user that is worth preserving for future interactions. Use the `add_memory` tool to save all discovered memories at once in a single batch call. If there is nothing worth remembering, simply respond with "No valuable memories found.\""""
+
+
+async def extract_memories(
+    submodel: Model,
+    session: Session,
+    memory_manager: MemoryManager,
+    extract_prompt: str = EXTRACT_SYSTEM_PROMPT,
+    subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
+    extract_user_prompt: str = DEFAULT_EXTRACT_USER_PROMPT,
+):
     add_memory_tool = create_add_memory_tool(
         memory_manager, lambda: session.id,
-        prompt=ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
+        prompt=subagent_add_memory_tool_prompt,
     )
 
     subagent = SubAgent(
@@ -112,16 +127,10 @@ async def extract_memories(submodel: Model, session: Session, memory_manager: Me
     )
 
     messages_text = _format_messages_for_extraction(session.messages)
-
-    prompt = f"""Please analyze the following conversation and extract any valuable long-term memories.
-
-## Conversation
-{messages_text}
-
-Review the conversation above carefully. Identify information about the user that is worth preserving for future interactions. Use the `add_memory` tool to save all discovered memories at once in a single batch call. If there is nothing worth remembering, simply respond with "No valuable memories found.\""""
+    prompt = extract_user_prompt.format(messages_text=messages_text)
 
     await subagent.run(HumanMessage(content=prompt))
-    return 
+    return
 
 
 CLEAN_SYSTEM_PROMPT = """You are a memory maintenance assistant. Your task is to analyze the agent's long-term memory store and clean up obsolete, conflicting, or low-quality memories to keep the memory system healthy and efficient.
@@ -179,7 +188,20 @@ Use the `delete_memory` tool with the list of memory IDs to delete. Batch all de
 - Count and report: how many total memories were examined, how many were deleted, and the reason categories."""
 
 
-async def clean_memory(submodel: Model, memory_manager: MemoryManager, clean_prompt: str = CLEAN_SYSTEM_PROMPT):
+DEFAULT_CLEAN_USER_PROMPT = """Please perform a thorough cleanup of the agent's long-term memory.
+
+Memory directory: {memory_dir}
+Memory file: memories.json
+
+Read the JSON file, analyze the memories against the cleanup rules in your system prompt, and delete any memories that should be removed. Use the delete_memory tool with all IDs to delete in one batch call."""
+
+
+async def clean_memory(
+    submodel: Model,
+    memory_manager: MemoryManager,
+    clean_prompt: str = CLEAN_SYSTEM_PROMPT,
+    clean_user_prompt: str = DEFAULT_CLEAN_USER_PROMPT,
+):
     from ...built_in_tool import create_read_tool, create_find_tool, create_grep_tool
 
     delete_tool = create_delete_memory_tool(memory_manager)
@@ -193,29 +215,44 @@ async def clean_memory(submodel: Model, memory_manager: MemoryManager, clean_pro
         tools=[read_tool, glob_tool, grep_tool, delete_tool],
     )
 
-    prompt = f"""Please perform a thorough cleanup of the agent's long-term memory.
-
-Memory directory: {memory_manager.memory_dir}
-Memory file: memories.json
-
-Read the JSON file, analyze the memories against the cleanup rules in your system prompt, and delete any memories that should be removed. Use the delete_memory tool with all IDs to delete in one batch call."""
+    prompt = clean_user_prompt.format(memory_dir=memory_manager.memory_dir)
 
     await subagent.run(HumanMessage(content=prompt))
     return
 
 
-def create_memory_hook(memory_manager: MemoryManager, submodel: Model, extract_prompt: str = None, clean_prompt: str = None) -> AgentHook:
+def create_memory_hook(
+    memory_manager: MemoryManager,
+    submodel: Model,
+    extract_prompt: str = None,
+    clean_prompt: str = None,
+    subagent_add_memory_tool_prompt: str = None,
+    extract_user_prompt: str = None,
+    clean_user_prompt: str = None,
+):
     extract_prompt = extract_prompt or EXTRACT_SYSTEM_PROMPT
     clean_prompt = clean_prompt or CLEAN_SYSTEM_PROMPT
+    subagent_add_memory_tool_prompt = subagent_add_memory_tool_prompt or ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT
+    extract_user_prompt = extract_user_prompt or DEFAULT_EXTRACT_USER_PROMPT
+    clean_user_prompt = clean_user_prompt or DEFAULT_CLEAN_USER_PROMPT
 
     async def memory_extract_hook(ctx: HookContext):
         agent = ctx.agent
         if not agent or not agent.session:
             return
 
-        await extract_memories(submodel, agent.session, memory_manager, extract_prompt)
-    
+        await extract_memories(
+            submodel, agent.session, memory_manager,
+            extract_prompt=extract_prompt,
+            subagent_add_memory_tool_prompt=subagent_add_memory_tool_prompt,
+            extract_user_prompt=extract_user_prompt,
+        )
+
     async def clean_memory_hook(ctx: HookContext):
-        await clean_memory(submodel, memory_manager, clean_prompt)
-    
+        await clean_memory(
+            submodel, memory_manager,
+            clean_prompt=clean_prompt,
+            clean_user_prompt=clean_user_prompt,
+        )
+
     return memory_extract_hook, clean_memory_hook
