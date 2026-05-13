@@ -126,6 +126,14 @@ class MemoryManager:
             metadatas=[memory.to_metadata()],
         )
 
+    async def _add_batch_to_chroma(self, memories: List[Memory], embeddings: List[List[float]]):
+        self.collection.add(
+            ids=[m.id for m in memories],
+            embeddings=embeddings,
+            documents=[m.content for m in memories],
+            metadatas=[m.to_metadata() for m in memories],
+        )
+
     def _remove_from_chroma(self, memory_id: str):
         try:
             self.collection.delete(ids=[memory_id])
@@ -144,10 +152,23 @@ class MemoryManager:
 
         skipped = len(memories) - len(pending)
         contents = [m.content for m in pending]
-        embeddings = await self.embedding.get_embeddings(contents)
+        try:
+            embeddings = await self.embedding.get_embeddings(contents)
+        except Exception as e:
+            self.logger.error(f"Failed to get embeddings for {len(contents)} memories: {e}")
+            return
 
-        for i, mem in enumerate(pending):
-            await self._add_to_chroma(mem, embeddings[i])
+        valid_pairs = [(m, e) for m, e in zip(pending, embeddings) if e is not None]
+        if len(valid_pairs) < len(pending):
+            failed_count = len(pending) - len(valid_pairs)
+            self.logger.warning(
+                "Partial embedding: %d/%d memories embedded, %d failed",
+                len(valid_pairs), len(pending), failed_count,
+            )
+        pending = [m for m, _ in valid_pairs]
+        embeddings = [e for _, e in valid_pairs]
+
+        await self._add_batch_to_chroma(pending, embeddings)
 
         self.logger.info(f"Added {len(pending)} memories" + (f", skipped {skipped} duplicates" if skipped else ""))
         self._dump_memories_json()
