@@ -13,18 +13,15 @@ from .memory_tool import (
     create_add_memory_tool,
     create_delete_memory_tool,
     create_search_memory_tool,
+    search_memory_context,
 )
-from .memory_hook import create_memory_hook,extract_memories
-
-# =============================================================================
-# Public API
-# =============================================================================
+from .memory_hook import create_memory_hook, extract_memories
 
 __all__ = [
     "Memory", "MemoryManager",
     "Embedding", "OllamaEmbedding",
     "create_add_memory_tool", "create_delete_memory_tool", "create_search_memory_tool",
+    "search_memory_context",
     "create_memory_hook",
     "extract_memories",
 ]
-

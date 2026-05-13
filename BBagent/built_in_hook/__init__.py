@@ -28,22 +28,20 @@ You have access to a long-term memory system that stores important information a
 - Memory data is persisted at: {memory_dir}
 - The memory system uses hybrid search (semantic vectors + keyword matching) to find relevant memories.
 
-### Available Memory Tools
+### Automatic Memory Retrieval
+Before you receive each user message, the system automatically searches the memory store for relevant information. When found, memory context will be prepended to the user's message under a "[Relevant memories from past conversations]" section. Simply read it and use the provided context when it helps answer the user's question — you do not need to search for memories yourself.
 
-1. **`{add_tool_name}`**: Use this to save important information about the user. Call it when:
-   - The user explicitly asks you to remember something
-   - You discover personal facts, preferences, or experiences about the user that will be useful in future conversations
-   - Save only things with lasting value — avoid trivial or temporary information
+### Available Memory Tool
 
-2. **`{search_tool_name}`**: Use this to retrieve relevant memories. Call it when:
-   - The user asks about something they have told you before ("do you remember...", "what do you know about...")
-   - You need historical context about the user to answer accurately
-   - The user's question involves their personal information, preferences, or past experiences
+**`{add_tool_name}`**: Use this to save important information about the user. Call it when:
+- The user explicitly asks you to remember something
+- You discover personal facts, preferences, or experiences about the user that will be useful in future conversations
+- Save only things with lasting value — avoid trivial or temporary information
 
 ### Best Practices
 - Proactively save discoveries about the user when they share meaningful new information
-- Search memory before answering questions that might benefit from historical context
-- Do not overuse search — only search when you genuinely need remembered context
+- Read the automatically provided memory context carefully — it may contain answers the user is asking for
+- Do not overuse add_memory — only save genuinely useful, lasting information
 """
 
 
@@ -60,6 +58,9 @@ def setup_agent_hook(agent: Agent,
                      clean_user_prompt: str = None,
                      compress_prompt: str = None,
                      compress_prefix: str = None,
+                     auto_search: bool = True,
+                     search_prompt: str = None,
+                     search_user_prompt: str = None,
                      submodel: Model = None,
                      embedding_model: Embedding = None,
                      ):
@@ -78,6 +79,8 @@ def setup_agent_hook(agent: Agent,
         lambda: agent.session.id,
         prompt=add_memory_tool_prompt,
     )
+    agent.add_tools([add_tool])
+
     search_tool = create_search_memory_tool(
         memory_manager,
         submodel,
@@ -86,7 +89,6 @@ def setup_agent_hook(agent: Agent,
         subagent_prompt=search_memory_subagent_prompt,
         tool_prompt=search_memory_tool_prompt,
     )
-    agent.add_tools([add_tool, search_tool])
 
     check_compress, do_compress = create_ctx_compress_hook(
         submodel,
@@ -96,31 +98,37 @@ def setup_agent_hook(agent: Agent,
         compress_user_prefix=compress_prefix,
     )
 
-    memory_extract_hook, clean_memory_hook = create_memory_hook(
+    extract_memory_hook, clean_memory_hook, search_memory_hook = create_memory_hook(
         memory_manager, submodel,
         extract_prompt=extract_prompt,
         clean_prompt=clean_prompt,
         subagent_add_memory_tool_prompt=extract_subagent_add_memory_tool_prompt,
         extract_user_prompt=extract_user_prompt,
         clean_user_prompt=clean_user_prompt,
+        search_prompt=search_prompt,
+        search_user_prompt=search_user_prompt,
+        search_n_results=N_RESULTS,
+        search_rrf_k=RRF_K,
+        search_bm25_weight=BM25_WEIGHT,
+        search_vector_weight=VECTOR_WEIGHT,
     )
 
-    async def memory_extract_before_compress(ctx: HookContext):
+    async def extract_memory_before_compress(ctx: HookContext):
         if ctx.get('compression_needed'):
-            await memory_extract_hook(ctx)
+            await extract_memory_hook(ctx)
 
     hook = agent.hook
+    hook.register(func=search_memory_hook, hook_type=HookType.BEFORE_STREAM, priority=99)
     hook.register(func=check_compress, hook_type=HookType.BEFORE_STREAM, priority=100)
-    hook.register(func=memory_extract_before_compress, hook_type=HookType.BEFORE_STREAM, priority=101)
+    hook.register(func=extract_memory_before_compress, hook_type=HookType.BEFORE_STREAM, priority=101)
     hook.register(func=do_compress, hook_type=HookType.BEFORE_STREAM, priority=102)
-    hook.register(func=memory_extract_hook, hook_type=HookType.NEW_SESSION, priority=100)
+    hook.register(func=extract_memory_hook, hook_type=HookType.NEW_SESSION, priority=100)
     hook.register(func=clean_memory_hook, hook_type=HookType.NEW_SESSION, priority=101)
 
     prompt = memory_system_prompt or DEFAULT_MEMORY_SYSTEM_PROMPT
     prompt = prompt.format(
         memory_dir=memory_manager.memory_dir,
         add_tool_name=add_tool.name,
-        search_tool_name=search_tool.name,
     )
     agent.change_system_prompt(agent.system_prompt + prompt)
 

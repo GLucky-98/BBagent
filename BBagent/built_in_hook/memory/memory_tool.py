@@ -108,64 +108,94 @@ SEARCH_MEMORY_TOOL_DESCRIPTION = (
     '- User asks "what was that bug I told you about last time?" → query="What bugs did the user report or fix recently?"\n'
 )
 
-def create_search_memory_tool(memory_manager: MemoryManager, submodel: Model, agent_dir_getter, n_results: int , rrf_k: int, bm25_weight: float, vector_weight: float, subagent_prompt: str = None, tool_prompt: str = SEARCH_MEMORY_TOOL_DESCRIPTION) -> Tool:
-    
-    async def search_memory(query: str) -> str:
-        from ...built_in_tool import create_read_tool, create_find_tool, create_grep_tool
 
-        preliminary = await memory_manager.hybrid_search(
-            query=query,
-            n_results=n_results,
-            rrf_k=rrf_k,
-            bm25_weight=bm25_weight,
-            vector_weight=vector_weight,
-        )
+async def search_memory_context(
+    query: str,
+    memory_manager: MemoryManager,
+    submodel: Model,
+    agent_dir: str,
+    n_results: int,
+    rrf_k: int,
+    bm25_weight: float,
+    vector_weight: float,
+    subagent_prompt: str = None,
+) -> str:
+    from ...built_in_tool import create_read_tool, create_find_tool, create_grep_tool, create_ls_tool
 
-        preliminary_text = ""
-        if preliminary.get("documents"):
-            preliminary_text = "\n".join(preliminary["documents"])
+    preliminary = await memory_manager.hybrid_search(
+        query=query,
+        n_results=n_results,
+        rrf_k=rrf_k,
+        bm25_weight=bm25_weight,
+        vector_weight=vector_weight,
+    )
 
-        cwd = str(agent_dir_getter())
-        read_tool = create_read_tool(cwd=cwd)
-        glob_tool = create_find_tool(cwd=cwd)
-        grep_tool = create_grep_tool(cwd=cwd)
+    preliminary_text = ""
+    if preliminary.get("documents"):
+        preliminary_text = "\n".join(preliminary["documents"])
 
-        MEMSEARCH_SUBAGENT_PROMPT = f"""You are a memory search assistant. Your task is to retrieve relevant memory information from the memory store based on the user's query, to help answer their question.
+    session_dir = f"{agent_dir}/session"
+    memory_dir = str(memory_manager.memory_dir)
 
-## Efficiency First (Critical)
-- First, carefully analyze the automatic search results to determine if they are already sufficient to answer the question.
-- Only perform additional tool-based searches if the automatic results are clearly insufficient, and limit to 1-3 supplementary searches at most.
-- If the search results are irrelevant or only weakly related to the user's question, honestly report "no relevant memories found" — do not keep searching repeatedly.
-- Do not repeatedly try different search strategies for the same query. Keep it concise and efficient.
-- If relevant memories are found, concisely extract the most valuable content. Do not pile up irrelevant information.
+    DEFAULT_SEARCH_SUBAGENT_PROMPT = f"""You are a memory search assistant. Your task is to retrieve relevant memory information based on the user's query.
+
+## Efficiency & Cost (Critical)
+- Memory searches consume compute resources and API tokens. Be extremely cost-conscious.
+- First, carefully analyze the automatic search results. They are often sufficient.
+- Only perform additional file-based searches if the automatic results are clearly insufficient.
+- Limit supplementary searches to 1-2 at most. Do NOT keep searching repeatedly.
+- If results are irrelevant or only weakly related, honestly report "no relevant memories found" — do not keep trying.
+- If relevant memories are found, concisely extract the most valuable content. No fluff.
+- Think of yourself as a cost center: every unnecessary search wastes money. Be frugal.
 
 ## Available Tools
 - Read: Read file contents
 - Glob: Search for files by pattern
 - Grep: Search for text within files
+- Ls: List directory contents
 
 ## Search Paths
-- Memory store: {memory_manager.memory_dir}
-- Chat history: {str(agent_dir_getter()/'session')}
+- Memory store: {memory_dir} (memories.json)
+- Chat history: {session_dir} (JSONL conversation files per session)
+- Session metadata: {session_dir} (JSONL files containing session timestamps, tool usage records, and summary data)
 
 ## Response Guidelines
 - Relevant memories found: Concisely list the key information. No fluff.
 - No relevant memories: Directly say "no relevant memories found". Do not fabricate or over-explain."""
 
-        subagent_prompt = subagent_prompt if subagent_prompt else MEMSEARCH_SUBAGENT_PROMPT
+    subagent_prompt = subagent_prompt or DEFAULT_SEARCH_SUBAGENT_PROMPT
 
-        sub_agent = SubAgent(
-            model=submodel,
-            system_prompt=subagent_prompt,
-            tools=[read_tool, glob_tool, grep_tool],
+    sub_agent = SubAgent(
+        model=submodel,
+        system_prompt=subagent_prompt,
+        tools=[create_read_tool(cwd=agent_dir),
+               create_find_tool(cwd=agent_dir),
+               create_grep_tool(cwd=agent_dir),
+               create_ls_tool(cwd=agent_dir)],
+    )
+
+    prompt = f"User query: {query}"
+    if preliminary_text:
+        prompt += f"\n\nautomatic search results:\n{preliminary_text}"
+
+    result = await sub_agent.run([HumanMessage(content=prompt)])
+    return result if isinstance(result, str) else str(result)
+
+
+def create_search_memory_tool(memory_manager: MemoryManager, submodel: Model, agent_dir_getter, n_results: int , rrf_k: int, bm25_weight: float, vector_weight: float, subagent_prompt: str = None, tool_prompt: str = SEARCH_MEMORY_TOOL_DESCRIPTION) -> Tool:
+    
+    async def search_memory(query: str) -> str:
+        return await search_memory_context(
+            query=query,
+            memory_manager=memory_manager,
+            submodel=submodel,
+            agent_dir=str(agent_dir_getter()),
+            n_results=n_results,
+            rrf_k=rrf_k,
+            bm25_weight=bm25_weight,
+            vector_weight=vector_weight,
+            subagent_prompt=subagent_prompt,
         )
-
-        prompt = f"User query: {query}"
-        if preliminary_text:
-            prompt += f"\n\nautomatic search results:\n{preliminary_text}"
-
-        result = await sub_agent.run([HumanMessage(content=prompt)])
-        return result
 
     return Tool(search_memory,
                 name="search_memory",

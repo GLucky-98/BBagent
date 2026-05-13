@@ -1,4 +1,5 @@
 from typing import List
+import hashlib
 
 from ...core.agenthook import AgentHook, HookType, HookContext
 from ...core.message import HumanMessage, TextBlock
@@ -7,7 +8,7 @@ from ...core.agent import SubAgent
 from ...core.model import Model
 
 from .memory import MemoryManager
-from .memory_tool import create_add_memory_tool, create_delete_memory_tool
+from .memory_tool import create_add_memory_tool, create_delete_memory_tool, search_memory_context
 
 EXTRACT_SYSTEM_PROMPT = """You are a memory extraction assistant. Your task is to analyze conversations and identify information worth preserving as long-term memories about the user.
 
@@ -21,6 +22,14 @@ When extracting memories, consider three categories of information:
 ## How to Extract Memories
 - Use the `add_memory` tool to save all discovered memories at once in a single batch call.
 - Each memory must be self-contained and understandable without additional context from the current conversation.
+
+## File-Based Memory for Long Tool Results
+When the conversation involves many rounds of tool calls that produced a substantial, valuable result (e.g., a complex code output, a detailed analysis report, a large dataset summary), the tool output itself may be worth preserving. In such cases:
+
+1. Use the `write_to_file` tool to save the full result to a file under `extracted_data/` in the memory directory. Use descriptive filenames (e.g., `extracted_data/database_migration_analysis.txt`).
+2. Use the `add_memory` tool to save a concise index entry that describes what the file contains and references it by path. Example index entry: "User performed a complex database migration analysis; full output saved at extracted_data/migration_analysis_2026.txt — key finding: connection pool size was the root cause".
+3. Only do this for results that are genuinely substantial and reusable — avoid saving trivial or one-line outputs.
+4. Use the `ls` tool to check what files already exist in `extracted_data/` before writing new ones to avoid duplication.
 
 ## What to Extract — Criteria
 Extract ONLY information that meets ALL of the following:
@@ -44,6 +53,7 @@ Good memories worth extracting:
 - "When debugging async database issues, the user found that checking the connection pool configuration first saved hours of troubleshooting"
 - "User works at Google as a Senior Software Engineer on the Cloud Storage team"
 - "User strongly prefers dark theme in all development tools and IDEs"
+- "User ran a comprehensive performance benchmark; full results saved at extracted_data/perf_bench_2026.txt"
 
 NOT worth extracting:
 - "User asked about Python list comprehensions" → too generic, no personal info revealed
@@ -115,15 +125,23 @@ async def extract_memories(
     subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
     extract_user_prompt: str = DEFAULT_EXTRACT_USER_PROMPT,
 ):
+    from ...built_in_tool import create_write_tool, create_ls_tool, create_read_tool
+
+    extracted_data_dir = memory_manager.memory_dir / "extracted_data"
+    extracted_data_dir.mkdir(parents=True, exist_ok=True)
+
     add_memory_tool = create_add_memory_tool(
         memory_manager, lambda: session.id,
         prompt=subagent_add_memory_tool_prompt,
     )
+    write_tool = create_write_tool(cwd=str(memory_manager.memory_dir))
+    ls_tool = create_ls_tool(cwd=str(memory_manager.memory_dir))
+    read_tool = create_read_tool(cwd=str(memory_manager.memory_dir))
 
     subagent = SubAgent(
         model=submodel,
         system_prompt=extract_prompt,
-        tools=[add_memory_tool],
+        tools=[add_memory_tool, write_tool, ls_tool, read_tool],
     )
 
     messages_text = _format_messages_for_extraction(session.messages)
@@ -221,6 +239,9 @@ async def clean_memory(
     return
 
 
+DEFAULT_SEARCH_USER_PREFIX = "[Relevant memories from past conversations]\n{search_context}"
+
+
 def create_memory_hook(
     memory_manager: MemoryManager,
     submodel: Model,
@@ -229,14 +250,24 @@ def create_memory_hook(
     subagent_add_memory_tool_prompt: str = None,
     extract_user_prompt: str = None,
     clean_user_prompt: str = None,
+    search_prompt: str = None,
+    search_user_prompt: str = None,
+    search_n_results: int = 5,
+    search_rrf_k: int = 60,
+    search_bm25_weight: float = 0.5,
+    search_vector_weight: float = 0.5,
 ):
     extract_prompt = extract_prompt or EXTRACT_SYSTEM_PROMPT
     clean_prompt = clean_prompt or CLEAN_SYSTEM_PROMPT
     subagent_add_memory_tool_prompt = subagent_add_memory_tool_prompt or ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT
     extract_user_prompt = extract_user_prompt or DEFAULT_EXTRACT_USER_PROMPT
     clean_user_prompt = clean_user_prompt or DEFAULT_CLEAN_USER_PROMPT
+    search_user_prompt = search_user_prompt or DEFAULT_SEARCH_USER_PREFIX
 
-    async def memory_extract_hook(ctx: HookContext):
+    async def extract_memory_hook(ctx: HookContext):
+        nonlocal _last_search_hash
+        _last_search_hash = ""
+
         agent = ctx.agent
         if not agent or not agent.session:
             return
@@ -255,4 +286,50 @@ def create_memory_hook(
             clean_user_prompt=clean_user_prompt,
         )
 
-    return memory_extract_hook, clean_memory_hook
+    _last_search_hash: str = ""
+
+    async def search_memory_hook(ctx: HookContext):
+        nonlocal _last_search_hash
+
+        if not ctx.get('auto_search', True):
+            return
+
+        agent = ctx.agent
+        session = agent.session
+        if not session or not session.messages:
+            return
+
+        last_msg = session.messages[-1]
+        if last_msg.role != "user":
+            return
+
+        query = _format_message_content(last_msg)
+
+        query_hash = hashlib.md5(query.encode()).hexdigest()
+        if query_hash == _last_search_hash:
+            return
+        _last_search_hash = query_hash
+
+        context = await search_memory_context(
+            query=query,
+            memory_manager=memory_manager,
+            submodel=submodel,
+            agent_dir=str(agent.base_dir),
+            n_results=search_n_results,
+            rrf_k=search_rrf_k,
+            bm25_weight=search_bm25_weight,
+            vector_weight=search_vector_weight,
+            subagent_prompt=search_prompt,
+        )
+
+        if not context or "no relevant" in context.lower():
+            return
+
+        prefix = search_user_prompt.format(search_context=context) + "\n\n"
+        content = last_msg.content
+        if isinstance(content, str):
+            last_msg.content = prefix + f"[Current message]\n{content}"
+        elif isinstance(content, list):
+            last_msg.content = [TextBlock(text=prefix)] + content
+
+    return extract_memory_hook, clean_memory_hook, search_memory_hook
