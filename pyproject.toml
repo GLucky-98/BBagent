@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bbagent"
+version = "0.1.0"
+description = "A lightweight agent framework"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "httpx",
+    "pyyaml",
+    "aiosqlite",
+    "aiohttp",
+    "jieba",
+    "chromadb",
+    "rank_bm25",
+]
+
+[tool.setuptools.packages.find]
+include = ["BBagent*"]
+
+[tool.uv.workspace]
+members = [
+    "example",
+    "BBagent",
+]
