@@ -25,7 +25,6 @@ from .skill import Skill
 from .agenthook import AgentHook, HookType, Hook
 from .events import AgentEvent, EventType
 from .source import EventSource
-from .errors import ErrorCategory, ToolErrorType
 from .logger import AgentLogger
 
 @dataclass
@@ -200,7 +199,7 @@ class Agent:
             tool_result = ToolResult(
                 content=f"Unknown tool: {tool_use.name}",
                 success=False,
-                error_type=ToolErrorType.TOOL_NOT_FOUND.value,
+                error_type="tool_not_found",
                 suggestion="The tool name is not recognized. Check the available tools and use the correct name."
             )
             self.logger.warning(
@@ -230,7 +229,7 @@ class Agent:
                     tool_result = ToolResult(
                         content=f"Tool invocation error: {str(e)}",
                         success=False,
-                        error_type=ToolErrorType.EXECUTION_ERROR.value,
+                        error_type="execution_error",
                         suggestion="An unexpected error occurred. Check the error message and try again with corrected parameters."
                     )
                     self.logger.error(
@@ -346,7 +345,7 @@ Your available skills are:
                 f"Agent loop error: {error_msg}",
                 context={
                     "error_type": type(e).__name__,
-                    "error_category": ErrorCategory.FATAL_ERROR.value,
+                    "error_category": "fatal_error",
                 },
                 exc_info=sys.exc_info()
             )
@@ -514,7 +513,7 @@ Your available skills are:
             tool_result = ToolResult(
                 content=f"Unknown tool: {tool_use.name}",
                 success=False,
-                error_type=ToolErrorType.TOOL_NOT_FOUND.value,
+                error_type="tool_not_found",
                 suggestion="The tool name is not recognized. Check the available tools and use the correct name."
             )
         else:
@@ -539,7 +538,7 @@ Your available skills are:
                 tool_result = ToolResult(
                     content=f"Tool invocation error: {str(e)}",
                     success=False,
-                    error_type=ToolErrorType.EXECUTION_ERROR.value,
+                    error_type="execution_error",
                     suggestion="An unexpected error occurred. Check the error message and try again with corrected parameters."
                 )
 

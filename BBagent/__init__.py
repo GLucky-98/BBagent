@@ -34,9 +34,6 @@ from .core import (
     MCPServerConfig,
     Skill,
     SkillManager,
-    ErrorCategory,
-    ToolErrorType,
-    ModelErrorType,
 )
 
 from .built_in_tool import (
@@ -90,9 +87,6 @@ __all__ = [
     "MCPServerConfig",
     "Skill",
     "SkillManager",
-    "ErrorCategory",
-    "ToolErrorType",
-    "ModelErrorType",
     "create_all_tools",
     "create_coding_tools",
     "create_readonly_tools",

@@ -8,7 +8,7 @@ from pydantic import BaseModel, TypeAdapter
 from typing import Callable, Dict, List
 import copy
 
-from .errors import ERROR_INFERENCE_RULES, ToolErrorType
+from .errors import ERROR_INFERENCE_RULES
 
 
 @dataclass
@@ -25,7 +25,7 @@ def format_for_model(tool_result: ToolResult) -> str:
 
     parts = [
         "Tool execution failed.",
-        f"Error type: {tool_result.error_type or ToolErrorType.UNKNOWN.value}",
+        f"Error type: {tool_result.error_type or 'unknown'}",
         f"Message: {tool_result.content}",
         f"Suggestion: {tool_result.suggestion or 'Check the error message and try again.'}",
     ]
@@ -38,13 +38,13 @@ def infer_tool_error(error_str: str) -> ToolResult:
             return ToolResult(
                 content=error_str,
                 success=False,
-                error_type=rule.error_type.value,
+                error_type=rule.error_type,
                 suggestion=rule.suggestion,
             )
     return ToolResult(
         content=error_str,
         success=False,
-        error_type=ToolErrorType.UNKNOWN.value,
+        error_type="unknown",
         suggestion="Check the error details and try again with corrected parameters.",
     )
 

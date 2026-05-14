@@ -1,12 +1,6 @@
 from .agent import Agent, AgentConfig, AgentState, SubAgent
 from .agenthook import AgentHook, Hook, HookType, HookControl, HookContext
-from .errors import (
-    ErrorCategory,
-    ToolErrorType,
-    ModelErrorType,
-    ErrorInferenceRule,
-    ERROR_INFERENCE_RULES,
-)
+from .errors import ErrorInferenceRule, ERROR_INFERENCE_RULES
 from .events import AgentEvent, EventType
 from .logger import AgentLogger, StructuredFormatter, ContextFilter
 from .mcp import (
@@ -57,9 +51,6 @@ __all__ = [
     "HookType",
     "HookControl",
     "HookContext",
-    "ErrorCategory",
-    "ToolErrorType",
-    "ModelErrorType",
     "ErrorInferenceRule",
     "ERROR_INFERENCE_RULES",
     "AgentEvent",
