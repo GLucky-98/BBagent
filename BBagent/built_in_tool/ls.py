@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.tool import Tool
+from .policy import Policy, resolve_and_check_path
 
 
 class LsOperations:
@@ -27,7 +28,13 @@ class LsOperations:
         return os.path.exists(absolute_path)
 
 
-def create_ls_func(cwd: str = "."):
+def create_ls_func(policy: Optional[Policy] = None):
+
+    if policy is not None:
+        cwd = policy.cwd
+    else:
+        cwd = "."
+
     operations = LsOperations()
 
     def format_size(size: int) -> str:
@@ -44,12 +51,21 @@ def create_ls_func(cwd: str = "."):
         path: Optional[str] = None,
         show_hidden: bool = True,
     ) -> str:
-        if path is None:
-            resolved_path = cwd
-        elif os.path.isabs(path):
-            resolved_path = path
+        if policy is not None:
+            if path is None:
+                resolved_path = cwd
+            else:
+                resolved, err = resolve_and_check_path(path, policy)
+                if err:
+                    return f"Error: {err}"
+                resolved_path = resolved
         else:
-            resolved_path = os.path.join(cwd, path)
+            if path is None:
+                resolved_path = cwd
+            elif os.path.isabs(path):
+                resolved_path = path
+            else:
+                resolved_path = os.path.join(cwd, path)
 
         if not operations.exists(resolved_path):
             return f"Error: Path not found: {path or cwd}"
@@ -94,8 +110,8 @@ def create_ls_func(cwd: str = "."):
     return ls_func
 
 
-def create_ls_tool(cwd: str = ".") -> Tool:
-    ls_func = create_ls_func(cwd)
+def create_ls_tool(policy: Optional[Policy] = None) -> Tool:
+    ls_func = create_ls_func(policy)
 
     input_schema = {
         "type": "object",
@@ -118,4 +134,3 @@ def create_ls_tool(cwd: str = ".") -> Tool:
         description="Lists the contents of a directory.",
         input_schema=input_schema,
     )
-

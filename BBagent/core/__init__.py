@@ -1,7 +1,7 @@
 from .agent import Agent, AgentConfig, AgentState, SubAgent
 from .agenthook import AgentHook, Hook, HookType, HookControl, HookContext
 from .errors import ErrorInferenceRule, ERROR_INFERENCE_RULES
-from .events import AgentEvent, EventType
+from .input import AgentEvent, EventType, InputChannel
 from .logger import AgentLogger, StructuredFormatter, ContextFilter
 from .mcp import (
     MCPClient,
@@ -22,15 +22,9 @@ from .message import (
     ImageBlock,
     ToolUseBlock,
 )
-from .messagebus import MessageBus, DIRECT, BROADCAST
 from .model import Model, Model_Input, AnthropicModel, OpenAIModel
 from .skill import Skill, SkillMetadata, SkillManager
-from .source import (
-    EventSource,
-    UserInputSource,
-    TimerSource,
-    MessageBusSource,
-)
+from .team import AgentTeam
 from .tool import (
     Tool,
     ToolManager,
@@ -58,6 +52,7 @@ __all__ = [
     "AgentLogger",
     "StructuredFormatter",
     "ContextFilter",
+    "InputChannel",
     "MCPClient",
     "MCPManager",
     "MCPServerConfig",
@@ -73,9 +68,6 @@ __all__ = [
     "TextBlock",
     "ImageBlock",
     "ToolUseBlock",
-    "MessageBus",
-    "DIRECT",
-    "BROADCAST",
     "Model",
     "Model_Input",
     "AnthropicModel",
@@ -83,10 +75,7 @@ __all__ = [
     "Skill",
     "SkillMetadata",
     "SkillManager",
-    "EventSource",
-    "UserInputSource",
-    "TimerSource",
-    "MessageBusSource",
+    "AgentTeam",
     "Tool",
     "ToolManager",
     "ToolResult",

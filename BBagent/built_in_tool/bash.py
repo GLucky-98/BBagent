@@ -7,6 +7,7 @@ import subprocess
 from typing import Optional
 
 from ..core.tool import Tool
+from .policy import Policy, check_bash_command
 
 
 DEFAULT_TIMEOUT = 60
@@ -48,9 +49,23 @@ async def _exec_bash_command(
         return -1, "", str(e)
 
 
-async def create_bash_func(cwd: str = ".", max_output_lines: int = DEFAULT_MAX_OUTPUT_LINES, default_timeout: int = DEFAULT_TIMEOUT):
+async def create_bash_func(policy: Optional[Policy] = None):
+
+    if policy is not None:
+        cwd = policy.cwd
+        max_output_lines = policy.bash_max_output_lines
+        default_timeout = policy.bash_default_timeout
+    else:
+        cwd = "."
+        max_output_lines = DEFAULT_MAX_OUTPUT_LINES
+        default_timeout = DEFAULT_TIMEOUT
 
     async def bash_func(command: str, timeout: Optional[int] = None) -> str:
+        if policy is not None:
+            allowed, err = check_bash_command(command, policy)
+            if not allowed:
+                return f"Error: {err}"
+
         if not os.path.exists(cwd):
             return f"Error: Working directory does not exist: {cwd}"
 
@@ -96,12 +111,8 @@ async def create_bash_func(cwd: str = ".", max_output_lines: int = DEFAULT_MAX_O
     return bash_func
 
 
-async def create_bash_tool(
-    cwd: str = ".",
-    max_output_lines: int = DEFAULT_MAX_OUTPUT_LINES,
-    default_timeout: int = DEFAULT_TIMEOUT,
-) -> Tool:
-    bash_func = await create_bash_func(cwd, max_output_lines, default_timeout)
+async def create_bash_tool(policy: Optional[Policy] = None) -> Tool:
+    bash_func = await create_bash_func(policy)
 
     input_schema = {
         "type": "object",
@@ -124,4 +135,3 @@ async def create_bash_tool(
         description="Execute a bash command. Returns the stdout and stderr output.",
         input_schema=input_schema,
     )
-

@@ -2,6 +2,7 @@
 Tools package - File system and shell operation tools.
 """
 from ..core.tool import Tool
+from .policy import Policy
 
 from .bash import create_bash_tool
 from .edit import create_edit_tool
@@ -16,38 +17,39 @@ def create_tool(func, name=None, description=None, input_schema=None):
     return Tool(func, name, description, input_schema)
 
 
-async def create_all_tools(cwd: str = ".") -> dict[str, Tool]:
+async def create_all_tools(policy: Policy = None) -> dict[str, Tool]:
     return {
-        "read": create_read_tool(cwd),
-        "write": create_write_tool(cwd),
-        "edit": create_edit_tool(cwd),
-        "bash": await create_bash_tool(cwd),
-        "grep": create_grep_tool(cwd),
-        "find": create_find_tool(cwd),
-        "ls": create_ls_tool(cwd),
+        "read": create_read_tool(policy),
+        "write": create_write_tool(policy),
+        "edit": create_edit_tool(policy),
+        "bash": await create_bash_tool(policy),
+        "grep": create_grep_tool(policy),
+        "find": create_find_tool(policy),
+        "ls": create_ls_tool(policy),
     }
 
 
-async def create_coding_tools(cwd: str = ".") -> dict[str, Tool]:
+async def create_coding_tools(policy: Policy = None) -> dict[str, Tool]:
     return {
-        "read": create_read_tool(cwd),
-        "write": create_write_tool(cwd),
-        "edit": create_edit_tool(cwd),
-        "bash": await create_bash_tool(cwd),
+        "read": create_read_tool(policy),
+        "write": create_write_tool(policy),
+        "edit": create_edit_tool(policy),
+        "bash": await create_bash_tool(policy),
     }
 
 
-def create_readonly_tools(cwd: str = ".") -> dict[str, Tool]:
+def create_readonly_tools(policy: Policy = None) -> dict[str, Tool]:
     return {
-        "read": create_read_tool(cwd),
-        "grep": create_grep_tool(cwd),
-        "find": create_find_tool(cwd),
-        "ls": create_ls_tool(cwd),
+        "read": create_read_tool(policy),
+        "grep": create_grep_tool(policy),
+        "find": create_find_tool(policy),
+        "ls": create_ls_tool(policy),
     }
 
 
 __all__ = [
     "Tool",
+    "Policy",
     "create_tool",
     "create_read_tool",
     "create_write_tool",

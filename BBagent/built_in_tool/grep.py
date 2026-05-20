@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.tool import Tool
+from .policy import Policy, resolve_and_check_path
 
 
 class GrepOperations:
@@ -16,7 +17,13 @@ class GrepOperations:
             return f.read()
 
 
-def create_grep_func(cwd: str = "."):
+def create_grep_func(policy: Optional[Policy] = None):
+
+    if policy is not None:
+        cwd = policy.cwd
+    else:
+        cwd = "."
+
     operations = GrepOperations()
 
     def grep_func(
@@ -33,10 +40,16 @@ def create_grep_func(cwd: str = "."):
         if not path:
             return "Error: path is required"
 
-        if os.path.isabs(path):
-            resolved_path = path
+        if policy is not None:
+            resolved, err = resolve_and_check_path(path, policy)
+            if err:
+                return f"Error: {err}"
+            resolved_path = resolved
         else:
-            resolved_path = os.path.join(cwd, path)
+            if os.path.isabs(path):
+                resolved_path = path
+            else:
+                resolved_path = os.path.join(cwd, path)
 
         if not os.path.exists(resolved_path):
             return f"Error: Path not found: {path}"
@@ -120,8 +133,8 @@ def create_grep_func(cwd: str = "."):
     return grep_func
 
 
-def create_grep_tool(cwd: str = ".") -> Tool:
-    grep_func = create_grep_func(cwd)
+def create_grep_tool(policy: Optional[Policy] = None) -> Tool:
+    grep_func = create_grep_func(policy)
 
     input_schema = {
         "type": "object",
@@ -164,4 +177,3 @@ def create_grep_tool(cwd: str = ".") -> Tool:
         description="Searches for a pattern in files using regular expressions.",
         input_schema=input_schema,
     )
-

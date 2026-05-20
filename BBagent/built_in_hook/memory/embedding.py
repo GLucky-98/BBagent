@@ -1,7 +1,9 @@
 import asyncio
 import logging
-import aiohttp
 from abc import ABC, abstractmethod
+
+import ollama
+from ollama import AsyncClient
 
 logger = logging.getLogger(__name__)
 
@@ -13,85 +15,70 @@ class Embedding(ABC):
 
 
 class OllamaEmbedding(Embedding):
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "nomic-embed-text",
-                 max_retries: int = 3, retry_delay: float = 1.0, request_timeout: float = 60.0):
-        self.base_url = base_url
+    def __init__(self, model: str = "nomic-embed-text"):
         self.model = model
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
-        self.request_timeout = request_timeout
+        self._client = AsyncClient()
 
     async def get_embedding(self, text: str, truncate: bool = True, **kwargs) -> list[float]:
-        embeddings, _ = await self._embed_with_retry([text], truncate, **kwargs)
+        embeddings = await self.get_embeddings([text], truncate)
         return embeddings[0]
 
     async def get_embeddings(self, texts: list[str], truncate: bool = True) -> list[list[float]]:
-        embeddings, _ = await self._embed_with_retry(texts, truncate)
-        return embeddings
-
-    async def _embed_with_retry(self, texts: list[str], truncate: bool = True, **kwargs) -> tuple[list[list[float]], dict]:
-        last_error = None
-        for attempt in range(self.max_retries):
-            try:
-                return await self._do_embed_request(texts, truncate, **kwargs)
-            except ValueError as e:
-                last_error = e
-                if "NaN" in str(e):
-                    break
-            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, KeyError) as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2 ** attempt)
-                    await asyncio.sleep(delay)
-            except Exception as e:
-                last_error = e
-                break
-
-        if isinstance(last_error, ValueError) and "NaN" in str(last_error) and len(texts) > 1:
+        try:
+            return await self._batch_embed(texts, truncate)
+        except Exception:
             logger.warning(
-                "Batch embedding failed with NaN (%d texts, model=%s). "
+                "Batch embedding failed (%d texts, model=%s). "
                 "Falling back to individual requests.",
                 len(texts), self.model,
             )
-            return await self._embed_individually(texts, truncate, **kwargs)
+            return await self._embed_individually(texts, truncate)
 
-        error_type = type(last_error).__name__ if last_error else "Unknown"
+    async def _batch_embed(self, texts: list[str], truncate: bool = True) -> list[list[float]]:
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = await self._client.embed(
+                    model=self.model,
+                    input=texts,
+                    truncate=truncate,
+                )
+                return response.embeddings
+            except ollama.ResponseError:
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+
         raise RuntimeError(
-            f"Embedding request failed ({self.model}@{self.base_url}), "
-            f"retried {self.max_retries} times. "
-            f"last error [{error_type}]: {last_error}"
-        )
+            f"Batch embedding failed after 3 retries (model={self.model}): {last_error}"
+        ) from last_error
 
-    async def _embed_individually(self, texts: list[str], truncate: bool = True, **kwargs) -> tuple[list[list[float]], dict]:
+    async def _embed_individually(self, texts: list[str], truncate: bool = True) -> list[list[float]]:
         embeddings = [None] * len(texts)
         failed_indices = []
+
         for i, text in enumerate(texts):
-            for attempt in range(self.max_retries):
+            for attempt in range(3):
                 try:
-                    result, meta = await self._do_embed_request([text], truncate, **kwargs)
-                    embeddings[i] = result[0]
+                    response = await self._client.embed(
+                        model=self.model,
+                        input=[text],
+                        truncate=truncate,
+                    )
+                    embeddings[i] = response.embeddings[0]
                     break
-                except ValueError as e:
-                    if "NaN" in str(e):
+                except Exception:
+                    if attempt < 2:
+                        await asyncio.sleep(1.0 * (2 ** attempt))
+                    else:
                         failed_indices.append(i)
                         logger.warning(
-                            "Text [%d] embedding produced NaN (model=%s), skipping. "
+                            "Text [%d] embedding failed after 3 retries (model=%s), skipping. "
                             "Text preview: %.100s...",
                             i, self.model, text,
                         )
-                        break
-                    raise
-                except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
-                    if attempt < self.max_retries - 1:
-                        delay = self.retry_delay * (2 ** attempt)
-                        await asyncio.sleep(delay)
-                    else:
-                        failed_indices.append(i)
-                        logger.error(
-                            "Text [%d] embedding failed after %d retries: %s. Skipping.",
-                            i, self.max_retries, e,
-                        )
-                        break
 
         success_count = sum(1 for e in embeddings if e is not None)
         if failed_indices:
@@ -104,39 +91,7 @@ class OllamaEmbedding(Embedding):
                 f"All {len(texts)} texts failed to embed (model={self.model}). "
                 f"Failed indices: {failed_indices}"
             )
-        return embeddings, {}
-
-    async def _do_embed_request(self, texts: list[str], truncate: bool = True, **kwargs) -> tuple[list[list[float]], dict]:
-        url = f"{self.base_url}/api/embed"
-        payload = {
-            "model": self.model,
-            "input": texts,
-            "truncate": truncate
-        }
-        payload.update(kwargs)
-
-        timeout = aiohttp.ClientTimeout(total=self.request_timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            try:
-                async with session.post(url, json=payload) as response:
-                    if response.status >= 500:
-                        body = await response.text()
-                        if "NaN" in body:
-                            raise ValueError(
-                                f"Ollama embedding produced NaN for model={self.model}"
-                            )
-                    response.raise_for_status()
-                    data = await response.json()
-                    if "embeddings" not in data:
-                        raise ValueError(
-                            f"Ollama response missing 'embeddings' field, "
-                            f"available fields: {list(data.keys())}"
-                        )
-                    return data["embeddings"], data
-            except aiohttp.ClientError as e:
-                raise ConnectionError(f"Failed to connect to Ollama at {self.base_url}: {e}") from e
-            except asyncio.TimeoutError:
-                raise TimeoutError(f"Request to Ollama timed out after {self.request_timeout}s")
+        return [e for e in embeddings if e is not None]
 
 
 if __name__ == "__main__":

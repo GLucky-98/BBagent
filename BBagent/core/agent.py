@@ -23,9 +23,8 @@ from .message import (
 )
 from .skill import Skill
 from .agenthook import AgentHook, HookType, Hook
-from .events import AgentEvent, EventType
-from .source import EventSource
-from .logger import AgentLogger
+from .input import AgentEvent, EventType, InputChannel
+from .logger import AgentLogger, _NullLogger
 
 @dataclass
 class AgentConfig:
@@ -80,15 +79,14 @@ class Agent:
             for skill in agent_config.skills:
                 self.skills[skill.name] = skill
         self.skill_prompt = self._load_skill_prompt()
-        
+
         self.hook = agent_config.hook if agent_config.hook else AgentHook()
         if self.hook:
             self.hook.set_context(self)
 
         self._event_queue: asyncio.Queue = asyncio.Queue()
-        self._sources: List[EventSource] = []
+        self.input = InputChannel()
         self._output_callback: Optional[Callable] = None
-        self._source_tasks: List[asyncio.Task] = []
         self._running = False
 
         self.logger = AgentLogger(
@@ -367,12 +365,6 @@ Your available skills are:
             self.state = AgentState.Ready
             await self.hook.trigger(HookType.AFTER_RUN)
 
-    def add_source(self, source: EventSource):
-        self._sources.append(source)
-        if self._running:
-            task = asyncio.create_task(source.start(self._event_queue))
-            self._source_tasks.append(task)
-
     def on_output(self, callback: Callable):
         self._output_callback = callback
 
@@ -390,9 +382,7 @@ Your available skills are:
         self._running = True
         self.state = AgentState.Waiting
 
-        for source in self._sources:
-            task = asyncio.create_task(source.start(self._event_queue))
-            self._source_tasks.append(task)
+        await self.input.start(self._event_queue)
 
         try:
             while self._running:
@@ -407,12 +397,7 @@ Your available skills are:
                 if self._running:
                     self.state = AgentState.Waiting
         finally:
-            for task in self._source_tasks:
-                if not task.done():
-                    task.cancel()
-            self._source_tasks.clear()
-            for source in self._sources:
-                await source.stop()
+            await self.input.stop()
             self._event_queue = asyncio.Queue()
             self._running = False
             self.state = AgentState.Ready
@@ -456,10 +441,13 @@ _SENTINEL = object()
 
 class SubAgent:
     def __init__(self, model: Model, tools: List[Tool] = None, system_prompt: str = "",
-                skills: List[Skill] = None, agent_id: str = None):
+                skills: List[Skill] = None, agent_id: str = None,
+                logger: AgentLogger = None):
         self._agent_id = agent_id or f'sub_{id(self)}'
         self.model = model
         self.system_prompt = system_prompt
+
+        self.logger = logger or _NullLogger()
 
         self.skills: dict[str, Skill] = {}
         if skills:
@@ -516,33 +504,63 @@ Your available skills are:
                 error_type="tool_not_found",
                 suggestion="The tool name is not recognized. Check the available tools and use the correct name."
             )
+            self.logger.warning(
+                f"Tool not found: {tool_use.name}",
+                context={"tool_name": tool_use.name, "tool_input": tool_use.input}
+            )
         else:
-            try:
-                if tool.is_async:
-                    raw_result = await tool.async_invoke(tool_use.input)
-                else:
-                    raw_result = tool.invoke(tool_use.input)
+            with self.logger.span(f"tool_{tool.name}"):
+                try:
+                    if tool.is_async:
+                        raw_result = await tool.async_invoke(tool_use.input)
+                    else:
+                        raw_result = tool.invoke(tool_use.input)
 
-                if isinstance(raw_result, ToolResult):
-                    tool_result = raw_result
-                elif isinstance(raw_result, str) and raw_result.startswith("Error:"):
-                    tool_result = infer_tool_error(raw_result)
-                elif isinstance(raw_result, str):
-                    tool_result = ToolResult(content=raw_result, success=True)
-                else:
+                    if isinstance(raw_result, ToolResult):
+                        tool_result = raw_result
+                    elif isinstance(raw_result, str) and raw_result.startswith("Error:"):
+                        tool_result = infer_tool_error(raw_result)
+                    elif isinstance(raw_result, str):
+                        tool_result = ToolResult(content=raw_result, success=True)
+                    else:
+                        tool_result = ToolResult(
+                            content=json.dumps(raw_result, ensure_ascii=False),
+                            success=True
+                        )
+                except Exception as e:
                     tool_result = ToolResult(
-                        content=json.dumps(raw_result, ensure_ascii=False),
-                        success=True
+                        content=f"Tool invocation error: {str(e)}",
+                        success=False,
+                        error_type="execution_error",
+                        suggestion="An unexpected error occurred. Check the error message and try again with corrected parameters."
                     )
-            except Exception as e:
-                tool_result = ToolResult(
-                    content=f"Tool invocation error: {str(e)}",
-                    success=False,
-                    error_type="execution_error",
-                    suggestion="An unexpected error occurred. Check the error message and try again with corrected parameters."
-                )
+                    self.logger.error(
+                        f"Tool '{tool_use.name}' execution failed",
+                        context={
+                            "tool_name": tool_use.name,
+                            "tool_input": tool_use.input,
+                            "error_type": type(e).__name__,
+                        },
+                        exc_info=sys.exc_info()
+                    )
 
         content = format_for_model(tool_result)
+
+        if not tool_result.success:
+            self.logger.warning(
+                f"Tool '{tool_use.name}' returned error: {tool_result.error_type}",
+                context={
+                    "tool_name": tool_use.name,
+                    "tool_input": tool_use.input,
+                    "error_type": tool_result.error_type,
+                }
+            )
+        else:
+            self.logger.debug(
+                f"Tool '{tool_use.name}' completed successfully",
+                context={"tool_name": tool_use.name}
+            )
+
         return ToolMessage(tool_use.id, tool_use.name, content)
 
     def _normalize_input(self, messages: List[Message] | Message | str) -> List[Message]:
@@ -556,28 +574,62 @@ Your available skills are:
         messages = self._normalize_input(messages)
         tools = list(self.tools.values())
 
-        while True:
-            model_input = Model_Input(
-                prompt=self.system_prompt + self.skill_prompt,
-                tools=tools,
-                messages=messages,
-            )
-            result = await self.model.async_invoke(model_input)
-            messages.append(result)
+        self.logger.info(
+            "SubAgent run started",
+            context={"agent_id": self._agent_id, "messages_count": len(messages)}
+        )
+        with self.logger.span("subagent_run"):
+            while True:
+                model_input = Model_Input(
+                    prompt=self.system_prompt + self.skill_prompt,
+                    tools=tools,
+                    messages=messages,
+                )
+                try:
+                    result = await self.model.async_invoke(model_input)
+                except Exception as e:
+                    self.logger.error(
+                        "SubAgent model invocation failed",
+                        context={"agent_id": self._agent_id, "error_type": type(e).__name__},
+                        exc_info=sys.exc_info()
+                    )
+                    raise
 
-            if result.stop_reason in ['tool_use', 'tool_calls']:
-                for tool_use in result.tool_calls:
-                    tool_msg = await self.tool_execute(tool_use)
-                    messages.append(tool_msg)
-            elif result.stop_reason in ['end_turn', 'stop']:
-                break
-            else:
-                raise ValueError(f"SubAgent stop reason: {result.stop_reason}")
+                messages.append(result)
+                self.logger.debug(
+                    "Model response received",
+                    context={"stop_reason": result.stop_reason, "agent_id": self._agent_id}
+                )
+
+                if result.stop_reason in ['tool_use', 'tool_calls']:
+                    self.logger.debug(
+                        "Executing tool calls",
+                        context={"tool_count": len(result.tool_calls), "agent_id": self._agent_id}
+                    )
+                    for tool_use in result.tool_calls:
+                        tool_msg = await self.tool_execute(tool_use)
+                        messages.append(tool_msg)
+                elif result.stop_reason in ['end_turn', 'stop']:
+                    break
+                else:
+                    error_msg = f"SubAgent stop reason: {result.stop_reason}"
+                    self.logger.error(
+                        error_msg,
+                        context={"agent_id": self._agent_id, "stop_reason": result.stop_reason}
+                    )
+                    raise ValueError(error_msg)
 
         if isinstance(result.content, list):
             parts = [b.text for b in result.content if isinstance(b, TextBlock)]
-            return '\n'.join(parts)
-        return str(result.content)
+            text = '\n'.join(parts)
+        else:
+            text = str(result.content)
+
+        self.logger.info(
+            "SubAgent run completed",
+            context={"agent_id": self._agent_id}
+        )
+        return text
 
 
 

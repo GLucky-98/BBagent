@@ -79,7 +79,7 @@ class AgentLogger:
         if log_dir is not None:
             log_dir = Path(log_dir)
             log_dir.mkdir(parents=True, exist_ok=True)
-            log_path = log_dir / "agent.log"
+            log_path = log_dir / f"{name}.log"
             self._file_handler = logging.FileHandler(str(log_path), encoding='utf-8')
             self._file_handler.setLevel(file_level)
             self._file_handler.setFormatter(StructuredFormatter())
@@ -145,3 +145,30 @@ class AgentLogger:
     @property
     def logger(self) -> logging.Logger:
         return self._logger
+
+
+class _NullLogger:
+    """No-op logger that implements the same logging interface as AgentLogger.
+
+    Used by SubAgent when no logger is provided, so that logging calls
+    can be made unconditionally without None-checking.
+    """
+
+    def debug(self, msg: str, context: dict = None):
+        pass
+
+    def info(self, msg: str, context: dict = None):
+        pass
+
+    def warning(self, msg: str, context: dict = None):
+        pass
+
+    def error(self, msg: str, context: dict = None, exc_info=None):
+        pass
+
+    def fatal(self, msg: str, context: dict = None, exc_info=None):
+        pass
+
+    @contextmanager
+    def span(self, span_name: str):
+        yield

@@ -5,6 +5,7 @@ from ...core.agenthook import AgentHook, HookType, HookContext
 from ...core.message import HumanMessage, TextBlock
 from ...core.message import Message, ModelMessage, Session
 from ...core.agent import SubAgent
+from ...core.logger import AgentLogger
 from ...core.model import Model
 
 from .memory import MemoryManager
@@ -209,6 +210,7 @@ async def extract_memories(
     extract_prompt: str = EXTRACT_SYSTEM_PROMPT,
     subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
     extract_user_prompt: str = DEFAULT_EXTRACT_USER_PROMPT,
+    logger: AgentLogger = None,
 ):
     from ...built_in_tool import create_write_tool, create_ls_tool, create_read_tool, create_grep_tool, create_find_tool
 
@@ -229,6 +231,7 @@ async def extract_memories(
         model=submodel,
         system_prompt=extract_prompt,
         tools=[add_memory_tool, write_tool, ls_tool, read_tool, grep_tool, find_tool],
+        logger=logger,
     )
 
     messages_text = _format_messages_for_extraction(session.messages)
@@ -306,6 +309,7 @@ async def clean_memory(
     memory_manager: MemoryManager,
     clean_prompt: str = CLEAN_SYSTEM_PROMPT,
     clean_user_prompt: str = DEFAULT_CLEAN_USER_PROMPT,
+    logger: AgentLogger = None,
 ):
     from ...built_in_tool import create_read_tool, create_find_tool, create_grep_tool
 
@@ -318,6 +322,7 @@ async def clean_memory(
         model=submodel,
         system_prompt=clean_prompt,
         tools=[read_tool, glob_tool, grep_tool, delete_tool],
+        logger=logger,
     )
 
     prompt = clean_user_prompt.format(memory_dir=memory_manager.memory_dir)
@@ -364,6 +369,7 @@ def create_memory_hook(
             extract_prompt=extract_prompt,
             subagent_add_memory_tool_prompt=subagent_add_memory_tool_prompt,
             extract_user_prompt=extract_user_prompt,
+            logger=agent.logger,
         )
 
     async def clean_memory_hook(ctx: HookContext):
@@ -371,6 +377,7 @@ def create_memory_hook(
             submodel, memory_manager,
             clean_prompt=clean_prompt,
             clean_user_prompt=clean_user_prompt,
+            logger=ctx.agent.logger,
         )
 
     _last_search_hash: str = ""
@@ -407,6 +414,7 @@ def create_memory_hook(
             bm25_weight=search_bm25_weight,
             vector_weight=search_vector_weight,
             subagent_prompt=search_prompt,
+            logger=agent.logger,
         )
 
         if not context or "no relevant" in context.lower():

@@ -125,7 +125,7 @@ def create_ctx_compress_hook(
         agent = ctx.agent
         session = agent.session
         
-        subagent = SubAgent(model=submodel, system_prompt=compress_prompt)
+        subagent = SubAgent(model=submodel, system_prompt=compress_prompt, logger=agent.logger)
 
         await compress_session(
             session=session,

@@ -88,6 +88,7 @@ def setup_agent_hook(agent: Agent,
         N_RESULTS, RRF_K, BM25_WEIGHT, VECTOR_WEIGHT,
         subagent_prompt=search_memory_subagent_prompt,
         tool_prompt=search_memory_tool_prompt,
+        logger=agent.logger,
     )
 
     check_compress, do_compress = create_ctx_compress_hook(

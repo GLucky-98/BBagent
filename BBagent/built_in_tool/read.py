@@ -6,13 +6,23 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.tool import Tool
+from .policy import Policy, resolve_and_check_path
 
 
 DEFAULT_MAX_BYTES = 500_000
 DEFAULT_MAX_LINES = 10_000
 
 
-def create_read_func(cwd: str = ".", max_bytes: int = DEFAULT_MAX_BYTES, max_lines: int = DEFAULT_MAX_LINES):
+def create_read_func(policy: Optional[Policy] = None):
+
+    if policy is not None:
+        cwd = policy.cwd
+        max_bytes = policy.max_read_size
+        max_lines = policy.max_read_lines
+    else:
+        cwd = "."
+        max_bytes = DEFAULT_MAX_BYTES
+        max_lines = DEFAULT_MAX_LINES
 
     def read_func(
         path: str,
@@ -22,10 +32,16 @@ def create_read_func(cwd: str = ".", max_bytes: int = DEFAULT_MAX_BYTES, max_lin
         if not path:
             return "Error: path is required"
 
-        if os.path.isabs(path):
-            resolved_path = path
+        if policy is not None:
+            resolved, err = resolve_and_check_path(path, policy)
+            if err:
+                return f"Error: {err}"
+            resolved_path = resolved
         else:
-            resolved_path = os.path.join(cwd, path)
+            if os.path.isabs(path):
+                resolved_path = path
+            else:
+                resolved_path = os.path.join(cwd, path)
 
         if not os.access(resolved_path, os.R_OK):
             return f"Error: Cannot read file: {resolved_path}"
@@ -88,12 +104,8 @@ def create_read_func(cwd: str = ".", max_bytes: int = DEFAULT_MAX_BYTES, max_lin
     return read_func
 
 
-def create_read_tool(
-    cwd: str = ".",
-    max_bytes: int = DEFAULT_MAX_BYTES,
-    max_lines: int = DEFAULT_MAX_LINES,
-) -> Tool:
-    read_func = create_read_func(cwd, max_bytes, max_lines)
+def create_read_tool(policy: Optional[Policy] = None) -> Tool:
+    read_func = create_read_func(policy)
 
     input_schema = {
         "type": "object",
@@ -120,4 +132,3 @@ def create_read_tool(
         description="Read the complete contents of a file.",
         input_schema=input_schema,
     )
-

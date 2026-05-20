@@ -3,8 +3,10 @@ Write tool - Write content to a file, creating directories as needed.
 """
 import os
 from pathlib import Path
+from typing import Optional
 
 from ..core.tool import Tool
+from .policy import Policy, resolve_and_check_path
 
 
 class WriteOperations:
@@ -25,7 +27,15 @@ class WriteOperations:
         return os.path.exists(absolute_path)
 
 
-def create_write_func(cwd: str = ".", create_directories: bool = True):
+def create_write_func(policy: Optional[Policy] = None, create_directories: bool = True):
+
+    if policy is not None:
+        cwd = policy.cwd
+        max_write_size = policy.max_write_size
+    else:
+        cwd = "."
+        max_write_size = 5 * 1024 * 1024
+
     operations = WriteOperations()
 
     def write_func(
@@ -35,10 +45,20 @@ def create_write_func(cwd: str = ".", create_directories: bool = True):
         if not path:
             return "Error: path is required"
 
-        if os.path.isabs(path):
-            resolved_path = path
+        if policy is not None:
+            resolved, err = resolve_and_check_path(path, policy)
+            if err:
+                return f"Error: {err}"
+            resolved_path = resolved
+
+            size = len(content.encode("utf-8"))
+            if size > max_write_size:
+                return f"Error: write content exceeds maximum size ({size} > {max_write_size} bytes)"
         else:
-            resolved_path = os.path.join(cwd, path)
+            if os.path.isabs(path):
+                resolved_path = path
+            else:
+                resolved_path = os.path.join(cwd, path)
 
         if create_directories:
             dir_path = os.path.dirname(resolved_path)
@@ -66,10 +86,10 @@ def create_write_func(cwd: str = ".", create_directories: bool = True):
 
 
 def create_write_tool(
-    cwd: str = ".",
+    policy: Optional[Policy] = None,
     create_directories: bool = True,
 ) -> Tool:
-    write_func = create_write_func(cwd, create_directories)
+    write_func = create_write_func(policy, create_directories)
 
     input_schema = {
         "type": "object",
@@ -92,4 +112,3 @@ def create_write_tool(
         description="Writes content to a file. Creates the file if it doesn't exist.",
         input_schema=input_schema,
     )
-

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.tool import Tool
+from .policy import Policy, resolve_and_check_path
 
 
 class FindOperations:
@@ -16,7 +17,13 @@ class FindOperations:
         return os.path.isdir(path)
 
 
-def create_find_func(cwd: str = "."):
+def create_find_func(policy: Optional[Policy] = None):
+
+    if policy is not None:
+        cwd = policy.cwd
+    else:
+        cwd = "."
+
     operations = FindOperations()
 
     def match_glob(base_path: str, pattern: str) -> list[str]:
@@ -43,12 +50,21 @@ def create_find_func(cwd: str = "."):
         if not pattern:
             return "Error: pattern is required"
 
-        if path is None:
-            search_path = cwd
-        elif os.path.isabs(path):
-            search_path = path
+        if policy is not None:
+            if path is None:
+                search_path = cwd
+            else:
+                resolved, err = resolve_and_check_path(path, policy)
+                if err:
+                    return f"Error: {err}"
+                search_path = resolved
         else:
-            search_path = os.path.join(cwd, path)
+            if path is None:
+                search_path = cwd
+            elif os.path.isabs(path):
+                search_path = path
+            else:
+                search_path = os.path.join(cwd, path)
 
         if not operations.exists(search_path):
             return f"Error: Path not found: {path or cwd}"
@@ -88,8 +104,8 @@ def create_find_func(cwd: str = "."):
     return find_func
 
 
-def create_find_tool(cwd: str = ".") -> Tool:
-    find_func = create_find_func(cwd)
+def create_find_tool(policy: Optional[Policy] = None) -> Tool:
+    find_func = create_find_func(policy)
 
     input_schema = {
         "type": "object",
@@ -124,4 +140,3 @@ def create_find_tool(cwd: str = ".") -> Tool:
         description="Finds files by name pattern using glob matching.",
         input_schema=input_schema,
     )
-

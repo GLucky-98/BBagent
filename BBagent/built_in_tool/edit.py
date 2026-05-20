@@ -3,8 +3,10 @@ Edit tool - Edit file contents by replacing specific text.
 """
 import os
 from pathlib import Path
+from typing import Optional
 
 from ..core.tool import Tool
+from .policy import Policy, resolve_and_check_path
 
 
 class EditOperations:
@@ -20,7 +22,13 @@ class EditOperations:
         return os.access(absolute_path, os.W_OK)
 
 
-def create_edit_func(cwd: str = "."):
+def create_edit_func(policy: Optional[Policy] = None):
+
+    if policy is not None:
+        cwd = policy.cwd
+    else:
+        cwd = "."
+
     operations = EditOperations()
 
     def edit_func(
@@ -34,10 +42,16 @@ def create_edit_func(cwd: str = "."):
         if old_string == "":
             return "Error: old_string is required"
 
-        if os.path.isabs(path):
-            resolved_path = path
+        if policy is not None:
+            resolved, err = resolve_and_check_path(path, policy)
+            if err:
+                return f"Error: {err}"
+            resolved_path = resolved
         else:
-            resolved_path = os.path.join(cwd, path)
+            if os.path.isabs(path):
+                resolved_path = path
+            else:
+                resolved_path = os.path.join(cwd, path)
 
         if not os.path.exists(resolved_path):
             return f"Error: File not found: {path}"
@@ -77,8 +91,8 @@ def create_edit_func(cwd: str = "."):
     return edit_func
 
 
-def create_edit_tool(cwd: str = ".") -> Tool:
-    edit_func = create_edit_func(cwd)
+def create_edit_tool(policy: Optional[Policy] = None) -> Tool:
+    edit_func = create_edit_func(policy)
 
     input_schema = {
         "type": "object",
@@ -109,4 +123,3 @@ def create_edit_tool(cwd: str = ".") -> Tool:
         description="Makes a precise edit to a file. old_string must match the existing content exactly.",
         input_schema=input_schema,
     )
-

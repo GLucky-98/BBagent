@@ -205,6 +205,14 @@ class Session:
         self.summary = ''
         self.compact_summary = []
         self.ever_used_tools = []
+        self.turn_index = []
+        self._calculate_turn_index()
+
+    def _calculate_turn_index(self):
+        self.turn_index = [
+            i for i, msg in enumerate(self.messages)
+            if isinstance(msg, HumanMessage)
+        ]
 
     @classmethod
     def create(cls, session_path: str | Path) -> 'Session':
@@ -225,10 +233,13 @@ class Session:
 
     def add_message(self, message: Message | List[Message]):
         messages = message if isinstance(message, list) else [message]
-        for msg in messages:
+        start_idx = len(self.messages)
+        for i, msg in enumerate(messages):
             if isinstance(msg, ModelMessage) and msg.input_tokens > 0:
                 self._update_token_stats(msg)
             self.messages.append(msg)
+            if isinstance(msg, HumanMessage):
+                self.turn_index.append(start_idx + i)
         if self.path:
             with open(self._messages_path(), 'a', encoding='utf-8') as f:
                 for msg in messages:
@@ -259,6 +270,20 @@ class Session:
             return sum(self._estimate_token_count(m) for m in messages)
         return self.context_length + sum(self._estimate_token_count(m) for m in messages[last_model_idx + 1:])
 
+    def get_turn_messages(self, turn_num: int) -> List[Message]:
+        if not self.turn_index:
+            raise IndexError("No turns available in this session")
+        if turn_num < 0:
+            turn_num = len(self.turn_index) + turn_num
+        if turn_num < 0 or turn_num >= len(self.turn_index):
+            raise IndexError(f"Turn index {turn_num} out of range, session has {len(self.turn_index)} turns")
+        start = self.turn_index[turn_num]
+        if turn_num + 1 < len(self.turn_index):
+            end = self.turn_index[turn_num + 1]
+        else:
+            end = len(self.messages)
+        return self.messages[start:end]
+
     def replace_messages(self, new_messages: List[Message], summary: str = ''):
         if self.path:
             marker = {
@@ -277,6 +302,7 @@ class Session:
         if summary:
             self.compact_summary.append(summary)
         self.messages = new_messages
+        self._calculate_turn_index()
         if self.messages and isinstance(self.messages[-1], ModelMessage):
             self.context_length = self.messages[-1].input_tokens + self.messages[-1].output_tokens
         else:
@@ -303,6 +329,7 @@ total_input_cost_tokens: {self.total_input_cost_tokens}
 total_output_cost_tokens: {self.total_output_cost_tokens}
 compress_num: {self.compress_num}
 messages_count: {len(self.messages)}
+turn_count: {len(self.turn_index)}
 ever_used_tools: {tools_str}
 
 ---
@@ -398,7 +425,7 @@ ever_used_tools: {tools_str}
             if section == 'header' and ':' in stripped and not stripped.startswith('#'):
                 key, _, value = stripped.partition(':')
                 key, value = key.strip(), value.strip()
-                if key in ('context_length', 'total_input_cost_tokens', 'total_output_cost_tokens', 'compress_num', 'messages_count'):
+                if key in ('context_length', 'total_input_cost_tokens', 'total_output_cost_tokens', 'compress_num', 'messages_count', 'turn_count'):
                     result[key] = int(value) if value.isdigit() else 0
                 elif key == 'ever_used_tools':
                     result[key] = [t.strip() for t in value.split(',') if t.strip()] if value != 'None' else []

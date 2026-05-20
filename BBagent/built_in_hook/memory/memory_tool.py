@@ -3,6 +3,7 @@ from typing import List
 from ...core.tool import Tool
 from ...core.message import HumanMessage
 from ...core.agent import SubAgent
+from ...core.logger import AgentLogger
 from ...core.model import Model
 from .memory import Memory, MemoryManager
 
@@ -119,6 +120,7 @@ async def search_memory_context(
     bm25_weight: float,
     vector_weight: float,
     subagent_prompt: str = None,
+    logger: AgentLogger = None,
 ) -> str:
     from ...built_in_tool import create_read_tool, create_find_tool, create_grep_tool, create_ls_tool
 
@@ -172,6 +174,7 @@ async def search_memory_context(
                create_find_tool(cwd=agent_dir),
                create_grep_tool(cwd=agent_dir),
                create_ls_tool(cwd=agent_dir)],
+        logger=logger,
     )
 
     prompt = f"User query: {query}"
@@ -182,7 +185,7 @@ async def search_memory_context(
     return result if isinstance(result, str) else str(result)
 
 
-def create_search_memory_tool(memory_manager: MemoryManager, submodel: Model, agent_dir_getter, n_results: int , rrf_k: int, bm25_weight: float, vector_weight: float, subagent_prompt: str = None, tool_prompt: str = SEARCH_MEMORY_TOOL_DESCRIPTION) -> Tool:
+def create_search_memory_tool(memory_manager: MemoryManager, submodel: Model, agent_dir_getter, n_results: int , rrf_k: int, bm25_weight: float, vector_weight: float, subagent_prompt: str = None, tool_prompt: str = SEARCH_MEMORY_TOOL_DESCRIPTION, logger: AgentLogger = None) -> Tool:
     
     async def search_memory(query: str) -> str:
         return await search_memory_context(
@@ -195,6 +198,7 @@ def create_search_memory_tool(memory_manager: MemoryManager, submodel: Model, ag
             bm25_weight=bm25_weight,
             vector_weight=vector_weight,
             subagent_prompt=subagent_prompt,
+            logger=logger,
         )
 
     return Tool(search_memory,
