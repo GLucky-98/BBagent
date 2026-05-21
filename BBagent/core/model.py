@@ -26,10 +26,11 @@ class Model_Input:
     messages: List[Message] = field(default_factory=list)
 
 class Model(ABC):
-    def __init__(self, model: str, api_key: str, base_url: str):
+    def __init__(self, model: str, api_key: str, base_url: str, max_context_tokens: int = 200000):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
+        self.max_context_tokens = max_context_tokens
 
     @abstractmethod
     def invoke(self, model_input: Model_Input) -> ModelMessage | str:
@@ -80,12 +81,13 @@ class AnthropicModel(Model):
                  api_key: str,
                  base_url: str = "https://api.anthropic.com",
                  max_tokens: int = 100000,
+                 max_context_tokens: int = 200000,
                  temperature: float = 1,
                  top_p: float = 0.95,
                  thinking: dict = None,
                  **kwargs):
         
-        super().__init__(model, api_key, base_url+'/v1/messages')
+        super().__init__(model, api_key, base_url+'/v1/messages', max_context_tokens=max_context_tokens)
         
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -348,12 +350,13 @@ class OpenAIModel(Model):
                  api_key: str,
                  base_url: str = "https://api.openai.com/v1",
                  max_completion_tokens: int = 100000,
+                 max_context_tokens: int = 128000,
                  temperature: float = 1.0,
                  top_p: float = 1.0,
                  thinking: dict = None,
                  **kwargs):
 
-        super().__init__(model, api_key, base_url)
+        super().__init__(model, api_key, base_url, max_context_tokens=max_context_tokens)
         self.base_url = base_url.rstrip('/') + '/chat/completions'
         self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
@@ -498,13 +501,19 @@ class OpenAIModel(Model):
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
 
+        stop_reason_normalized = finish_reason
+        if finish_reason == 'stop':
+            stop_reason_normalized = 'end_turn'
+        elif finish_reason == 'tool_calls':
+            stop_reason_normalized = 'tool_use'
+
         return ModelMessage(
             id=msg_id,
             raw_json=raw_json,
             content=content,
             thinking=thinking,
             tool_calls=tool_calls,
-            stop_reason=finish_reason,
+            stop_reason=stop_reason_normalized,
             usage_data=usage,
             input_tokens=input_tokens,
             output_tokens=output_tokens

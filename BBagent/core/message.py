@@ -253,9 +253,10 @@ class Session:
     @staticmethod
     def _estimate_token_count(msg: Message) -> int:
         serialized = json.dumps(msg.to_dict(), ensure_ascii=False)
-        return max(1, len(serialized.encode('utf-8')) // 4)
+        return max(1, len(serialized.encode('utf-8')) // 3)
 
     def get_session_token_count(self) -> int:
+        # 如果刚压缩完，还没有得到一条最新的模型消息，那么这个算法是不对的
         messages = self.messages
         if not messages:
             return 0

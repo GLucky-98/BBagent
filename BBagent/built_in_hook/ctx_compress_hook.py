@@ -3,7 +3,6 @@ from typing import List
 
 from ..core.agenthook import HookContext
 from ..core.agent import SubAgent
-from ..core.model import Model
 from ..core.tool import Tool
 from ..core.message import Message, HumanMessage, ModelMessage
 
@@ -63,10 +62,10 @@ async def compress_session(
 
     last_compress = compress_zone[-1]
     if not (isinstance(last_compress, ModelMessage) and
-            last_compress.stop_reason in ('end_turn', 'stop')):
+            last_compress.stop_reason == 'end_turn'):
         split_idx = None
         for i, msg in enumerate(keep_zone):
-            if isinstance(msg, ModelMessage) and msg.stop_reason in ('end_turn', 'stop'):
+            if isinstance(msg, ModelMessage) and msg.stop_reason == 'end_turn':
                 split_idx = i
                 break
         if split_idx is not None:
@@ -94,8 +93,6 @@ async def compress_session(
 
 
 def create_ctx_compress_hook(
-    submodel: Model,
-    max_context_tokens: int,
     keep_recent_msg: int,
     keep_recent_time: int,
     compression_threshold: float,
@@ -105,11 +102,11 @@ def create_ctx_compress_hook(
     compress_prompt = compress_prompt or DEFAULT_SUMMARY_PROMPT
     compress_user_prefix = compress_user_prefix or DEFAULT_SUMMARY_USER_PREFIX
 
-    threshold = int(max_context_tokens * compression_threshold)
-
     async def check_compression_needed(ctx: HookContext):
         agent = ctx.agent
         session = agent.session
+        max_context_tokens = agent.model.max_context_tokens
+        threshold = int(max_context_tokens * compression_threshold)
 
         total_tokens = session.get_session_token_count()
         needed = total_tokens >= threshold
@@ -124,8 +121,10 @@ def create_ctx_compress_hook(
 
         agent = ctx.agent
         session = agent.session
-        
-        subagent = SubAgent(model=submodel, system_prompt=compress_prompt, logger=agent.logger)
+        max_context_tokens = agent.model.max_context_tokens
+        threshold = int(max_context_tokens * compression_threshold)
+
+        subagent = SubAgent(model=agent.model, system_prompt=compress_prompt, logger=agent.logger)
 
         await compress_session(
             session=session,

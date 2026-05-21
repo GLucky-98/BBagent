@@ -46,7 +46,6 @@ Before you receive each user message, the system automatically searches the memo
 
 
 def setup_agent_hook(agent: Agent,
-                     max_context_tokens: int,
                      memory_system_prompt: str = None,
                      add_memory_tool_prompt: str = None,
                      search_memory_tool_prompt: str = None,
@@ -92,8 +91,6 @@ def setup_agent_hook(agent: Agent,
     )
 
     check_compress, do_compress = create_ctx_compress_hook(
-        submodel,
-        max_context_tokens,
         KEEP_RECENT_MSG, KEEP_RECENT_TIME, COMPRESSION_THRESHOLD,
         compress_prompt=compress_prompt,
         compress_user_prefix=compress_prefix,

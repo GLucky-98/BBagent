@@ -329,11 +329,11 @@ Your available skills are:
                 if interrupted:
                     break
                 
-                if stop_reason in ['tool_use', 'tool_calls']:
+                if stop_reason == 'tool_use':
                     tool_results = await asyncio.gather(*tool_tasks)
                     yield {'type': 'tool_results', 'content': tool_results}
                     self.session.add_message(tool_results)
-                elif stop_reason in ['end_turn', 'stop']:
+                elif stop_reason == 'end_turn':
                     break
                 else:
                     raise ValueError(f"Stop reason: {stop_reason}")
@@ -601,7 +601,7 @@ Your available skills are:
                     context={"stop_reason": result.stop_reason, "agent_id": self._agent_id}
                 )
 
-                if result.stop_reason in ['tool_use', 'tool_calls']:
+                if result.stop_reason == 'tool_use':
                     self.logger.debug(
                         "Executing tool calls",
                         context={"tool_count": len(result.tool_calls), "agent_id": self._agent_id}
@@ -609,7 +609,7 @@ Your available skills are:
                     for tool_use in result.tool_calls:
                         tool_msg = await self.tool_execute(tool_use)
                         messages.append(tool_msg)
-                elif result.stop_reason in ['end_turn', 'stop']:
+                elif result.stop_reason == 'end_turn':
                     break
                 else:
                     error_msg = f"SubAgent stop reason: {result.stop_reason}"
