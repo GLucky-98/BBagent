@@ -13,10 +13,6 @@ from .read import create_read_tool
 from .write import create_write_tool
 
 
-def create_tool(func, name=None, description=None, input_schema=None):
-    return Tool(func, name, description, input_schema)
-
-
 async def create_all_tools(policy: Policy = None) -> dict[str, Tool]:
     return {
         "read": create_read_tool(policy),
@@ -50,7 +46,6 @@ def create_readonly_tools(policy: Policy = None) -> dict[str, Tool]:
 __all__ = [
     "Tool",
     "Policy",
-    "create_tool",
     "create_read_tool",
     "create_write_tool",
     "create_edit_tool",

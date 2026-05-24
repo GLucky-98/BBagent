@@ -1,15 +1,15 @@
 from typing import List
 import hashlib
 
-from ...core.agenthook import AgentHook, HookType, HookContext
-from ...core.message import HumanMessage, TextBlock
-from ...core.message import Message, ModelMessage, Session
+from ...core.agenthook import HookContext
+from ...core.message import HumanMessage, TextBlock, Turn
+from ...core.message import Message
 from ...core.agent import SubAgent
 from ...core.logger import AgentLogger
 from ...core.model import Model
 
 from .memory import MemoryManager
-from .memory_tool import create_add_memory_tool, create_delete_memory_tool, search_memory_context
+from .memory_tool import create_add_memory_tool, create_delete_memory_tool, inject_memory_context
 
 EXTRACT_SYSTEM_PROMPT = """You are a memory extraction assistant. Your task is to analyze conversations and identify information worth preserving as long-term memories about the user.
 
@@ -121,7 +121,7 @@ Extract ONLY information that meets ALL of the following:
 
 **User says:** "I'm a backend engineer at CloudScale. I prefer minimalist code. My biggest debugging win was finding that a connection pool leak caused intermittent timeouts."
 
-**GOOD (single memory merging identity, preference, and experience when appropriate?):**
+**GOOD:**
 - Separate memories are fine here because they cover different categories, but each is still aggregated:
   - "User is a backend engineer at CloudScale Inc."
   - "User prefers minimalist code with clear naming over verbose comments."
@@ -195,7 +195,7 @@ def _format_messages_for_extraction(messages: List[Message]) -> str:
     return "\n\n".join(lines)
 
 
-DEFAULT_EXTRACT_USER_PROMPT = """Please analyze the following conversation and extract any valuable long-term memories.
+EXTRACT_USER_PROMPT = """Please analyze the following conversation and extract any valuable long-term memories.
 
 ## Conversation
 {messages_text}
@@ -205,40 +205,77 @@ Review the conversation above carefully. Identify information about the user tha
 
 async def extract_memories(
     submodel: Model,
-    session: Session,
+    turns: List[Turn],
     memory_manager: MemoryManager,
+    session_id: str,
     extract_prompt: str = EXTRACT_SYSTEM_PROMPT,
     subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
-    extract_user_prompt: str = DEFAULT_EXTRACT_USER_PROMPT,
+    extract_user_prompt: str = EXTRACT_USER_PROMPT,
     logger: AgentLogger = None,
 ):
-    from ...built_in_tool import create_write_tool, create_ls_tool, create_read_tool, create_grep_tool, create_find_tool
+    from ...built_in_tool import create_write_tool, create_ls_tool, create_grep_tool, Policy
 
     extracted_data_dir = memory_manager.memory_dir / "extracted_data"
     extracted_data_dir.mkdir(parents=True, exist_ok=True)
 
     add_memory_tool = create_add_memory_tool(
-        memory_manager, lambda: session.id,
+        memory_manager, lambda: session_id,
         prompt=subagent_add_memory_tool_prompt,
     )
-    write_tool = create_write_tool(cwd=str(memory_manager.memory_dir))
-    ls_tool = create_ls_tool(cwd=str(memory_manager.memory_dir))
-    read_tool = create_read_tool(cwd=str(memory_manager.memory_dir))
-    grep_tool = create_grep_tool(cwd=str(memory_manager.memory_dir))
-    find_tool = create_find_tool(cwd=str(memory_manager.memory_dir))
+    policy = Policy(cwd=str(memory_manager.memory_dir))
+    write_tool = create_write_tool(policy)
+    ls_tool = create_ls_tool(policy)
+    grep_tool = create_grep_tool(policy)
 
     subagent = SubAgent(
         model=submodel,
         system_prompt=extract_prompt,
-        tools=[add_memory_tool, write_tool, ls_tool, read_tool, grep_tool, find_tool],
+        tools=[add_memory_tool, write_tool, ls_tool, grep_tool],
         logger=logger,
     )
 
-    messages_text = _format_messages_for_extraction(session.messages)
+    all_messages = []
+    for turn in turns:
+        all_messages.extend(turn.messages)
+
+    messages_text = _format_messages_for_extraction(all_messages)
     prompt = extract_user_prompt.format(messages_text=messages_text)
 
     await subagent.run(HumanMessage(content=prompt))
     return
+
+
+def _group_turns_for_extraction(
+    turns: List[Turn],
+    small_turn_threshold: int,
+    merge_threshold: int,
+) -> List[List[Turn]]:
+    groups = []
+    current_group = []
+    current_group_tokens = 0
+
+    for turn in turns:
+        t = turn.token_count
+        if t < small_turn_threshold:
+            if current_group_tokens + t <= merge_threshold:
+                current_group.append(turn)
+                current_group_tokens += t
+            else:
+                if current_group:
+                    groups.append(current_group)
+                current_group = [turn]
+                current_group_tokens = t
+        else:
+            if current_group:
+                groups.append(current_group)
+            groups.append([turn])
+            current_group = []
+            current_group_tokens = 0
+
+    if current_group:
+        groups.append(current_group)
+
+    return groups
 
 
 CLEAN_SYSTEM_PROMPT = """You are a memory maintenance assistant. Your task is to analyze the agent's long-term memory store and clean up obsolete, conflicting, or low-quality memories to keep the memory system healthy and efficient.
@@ -296,7 +333,7 @@ Use the `delete_memory` tool with the list of memory IDs to delete. Batch all de
 - Count and report: how many total memories were examined, how many were deleted, and the reason categories."""
 
 
-DEFAULT_CLEAN_USER_PROMPT = """Please perform a thorough cleanup of the agent's long-term memory.
+CLEAN_USER_PROMPT = """Please perform a thorough cleanup of the agent's long-term memory.
 
 Memory directory: {memory_dir}
 Memory file: memories.json
@@ -308,20 +345,19 @@ async def clean_memory(
     submodel: Model,
     memory_manager: MemoryManager,
     clean_prompt: str = CLEAN_SYSTEM_PROMPT,
-    clean_user_prompt: str = DEFAULT_CLEAN_USER_PROMPT,
+    clean_user_prompt: str = CLEAN_USER_PROMPT,
     logger: AgentLogger = None,
 ):
-    from ...built_in_tool import create_read_tool, create_find_tool, create_grep_tool
+    from ...built_in_tool import create_read_tool, Policy
 
     delete_tool = create_delete_memory_tool(memory_manager)
-    read_tool = create_read_tool(cwd=str(memory_manager.memory_dir))
-    glob_tool = create_find_tool(cwd=str(memory_manager.memory_dir))
-    grep_tool = create_grep_tool(cwd=str(memory_manager.memory_dir))
+    policy = Policy(cwd=str(memory_manager.memory_dir))
+    read_tool = create_read_tool(policy)
 
     subagent = SubAgent(
         model=submodel,
         system_prompt=clean_prompt,
-        tools=[read_tool, glob_tool, grep_tool, delete_tool],
+        tools=[read_tool, delete_tool],
         logger=logger,
     )
 
@@ -331,45 +367,93 @@ async def clean_memory(
     return
 
 
-DEFAULT_SEARCH_USER_PREFIX = "[Relevant memories from past conversations]\n{search_context}"
+INJECT_USER_PREFIX = "[Relevant memories from past messages]\n{search_context}"
+
+
+async def do_extract_turns(
+    turns: List[Turn],
+    session_id: str,
+    max_context_tokens: int,
+    merge_ratio: float,
+    small_turn_cap: int,
+    submodel: Model,
+    memory_manager: MemoryManager,
+    extract_prompt: str,
+    subagent_add_memory_tool_prompt: str,
+    extract_user_prompt: str,
+    logger: AgentLogger = None,
+):
+    merge_threshold = int(max_context_tokens * merge_ratio)
+    small_threshold = min(int(merge_threshold / 3), small_turn_cap)
+    groups = _group_turns_for_extraction(turns, small_threshold, merge_threshold)
+
+    for group in groups:
+        await extract_memories(
+            submodel, group, memory_manager, session_id,
+            extract_prompt=extract_prompt,
+            subagent_add_memory_tool_prompt=subagent_add_memory_tool_prompt,
+            extract_user_prompt=extract_user_prompt,
+            logger=logger,
+        )
+        for turn in group:
+            turn.memory_extracted = True
 
 
 def create_memory_hook(
     memory_manager: MemoryManager,
     submodel: Model,
-    extract_prompt: str = None,
-    clean_prompt: str = None,
-    subagent_add_memory_tool_prompt: str = None,
-    extract_user_prompt: str = None,
-    clean_user_prompt: str = None,
-    search_prompt: str = None,
-    search_user_prompt: str = None,
-    search_n_results: int = 5,
-    search_rrf_k: int = 60,
-    search_bm25_weight: float = 0.5,
-    search_vector_weight: float = 0.5,
+    extract_prompt: str = EXTRACT_SYSTEM_PROMPT,
+    clean_prompt: str = CLEAN_SYSTEM_PROMPT,
+    subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
+    extract_user_prompt: str = EXTRACT_USER_PROMPT,
+    clean_user_prompt: str = CLEAN_USER_PROMPT,
+    merge_ratio: float = 0.2,
+    small_turn_cap: int = 5000,
+    max_inject: int = 5,
+    max_candidates: int = 50,
+    inject_rrf_k: int = 60,
+    inject_bm25_weight: float = 0.5,
+    inject_vector_weight: float = 0.5,
+    inject_user_prompt: str = INJECT_USER_PREFIX,
 ):
-    extract_prompt = extract_prompt or EXTRACT_SYSTEM_PROMPT
-    clean_prompt = clean_prompt or CLEAN_SYSTEM_PROMPT
-    subagent_add_memory_tool_prompt = subagent_add_memory_tool_prompt or ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT
-    extract_user_prompt = extract_user_prompt or DEFAULT_EXTRACT_USER_PROMPT
-    clean_user_prompt = clean_user_prompt or DEFAULT_CLEAN_USER_PROMPT
-    search_user_prompt = search_user_prompt or DEFAULT_SEARCH_USER_PREFIX
 
-    async def extract_memory_hook(ctx: HookContext):
-        nonlocal _last_search_hash
-        _last_search_hash = ""
-
-        agent = ctx.agent
-        if not agent or not agent.session:
+    async def extract_memory_before_compress(ctx: HookContext):
+        if not ctx.get('compression_needed', False):
             return
 
-        await extract_memories(
-            submodel, agent.session, memory_manager,
-            extract_prompt=extract_prompt,
-            subagent_add_memory_tool_prompt=subagent_add_memory_tool_prompt,
-            extract_user_prompt=extract_user_prompt,
-            logger=agent.logger,
+        agent = ctx.agent
+        session = agent.session
+        if not session:
+            return
+
+        completed_turns = [t for t in session.turns if t.is_complete and not t.memory_extracted]
+        if not completed_turns:
+            return
+
+        await do_extract_turns(
+            completed_turns, session.id,
+            agent.model.max_context_tokens, merge_ratio, small_turn_cap,
+            submodel, memory_manager,
+            extract_prompt, subagent_add_memory_tool_prompt, extract_user_prompt,
+            agent.logger,
+        )
+
+    async def extract_memory_before_new_session(ctx: HookContext):
+        agent = ctx.agent
+        session = agent.session
+        if not session:
+            return
+
+        unextracted = [t for t in session.turns if not t.memory_extracted]
+        if not unextracted:
+            return
+
+        await do_extract_turns(
+            unextracted, session.id,
+            agent.model.max_context_tokens, merge_ratio, small_turn_cap,
+            submodel, memory_manager,
+            extract_prompt, subagent_add_memory_tool_prompt, extract_user_prompt,
+            agent.logger,
         )
 
     async def clean_memory_hook(ctx: HookContext):
@@ -380,51 +464,47 @@ def create_memory_hook(
             logger=ctx.agent.logger,
         )
 
-    _last_search_hash: str = ""
+    _last_inject_hash: str = ""
 
-    async def search_memory_hook(ctx: HookContext):
-        nonlocal _last_search_hash
+    async def inject_memory_hook(ctx: HookContext):
+        nonlocal _last_inject_hash
 
-        if not ctx.get('auto_search', True):
+        if not ctx.get('auto_inject', True):
             return
 
         agent = ctx.agent
         session = agent.session
-        if not session or not session.messages:
+        if not session or not session.turns:
             return
 
-        last_msg = session.messages[-1]
-        if last_msg.role != "user":
-            return
-
+        last_msg = session.turns[-1].messages[0]
         query = _format_message_content(last_msg)
 
         query_hash = hashlib.md5(query.encode()).hexdigest()
-        if query_hash == _last_search_hash:
+        if query_hash == _last_inject_hash:
             return
-        _last_search_hash = query_hash
+        _last_inject_hash = query_hash
 
-        context = await search_memory_context(
+        context = await inject_memory_context(
             query=query,
             memory_manager=memory_manager,
             submodel=submodel,
-            agent_dir=str(agent.base_dir),
-            n_results=search_n_results,
-            rrf_k=search_rrf_k,
-            bm25_weight=search_bm25_weight,
-            vector_weight=search_vector_weight,
-            subagent_prompt=search_prompt,
-            logger=agent.logger,
+            max_inject=max_inject,
+            rrf_k=inject_rrf_k,
+            bm25_weight=inject_bm25_weight,
+            vector_weight=inject_vector_weight,
+            max_candidates=max_candidates,
+            logger=ctx.agent.logger,
         )
 
-        if not context or "no relevant" in context.lower():
+        if not context:
             return
 
-        prefix = search_user_prompt.format(search_context=context) + "\n\n"
+        prefix = inject_user_prompt.format(search_context=context) + "\n\n"
         content = last_msg.content
         if isinstance(content, str):
-            last_msg.content = prefix + f"[Current message]\n{content}"
+            last_msg.content = prefix + content
         elif isinstance(content, list):
             last_msg.content = [TextBlock(text=prefix)] + content
 
-    return extract_memory_hook, clean_memory_hook, search_memory_hook
+    return extract_memory_before_compress, extract_memory_before_new_session, clean_memory_hook, inject_memory_hook

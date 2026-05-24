@@ -1,6 +1,5 @@
 from .agent import Agent, AgentConfig, AgentState, SubAgent
 from .agenthook import AgentHook, Hook, HookType, HookControl, HookContext
-from .errors import ErrorInferenceRule, ERROR_INFERENCE_RULES
 from .input import AgentEvent, EventType, InputChannel
 from .logger import AgentLogger, StructuredFormatter, ContextFilter
 from .mcp import (
@@ -28,9 +27,6 @@ from .team import AgentTeam
 from .tool import (
     Tool,
     ToolManager,
-    ToolResult,
-    format_for_model,
-    infer_tool_error,
     inline_refs,
     tool,
 )
@@ -45,8 +41,6 @@ __all__ = [
     "HookType",
     "HookControl",
     "HookContext",
-    "ErrorInferenceRule",
-    "ERROR_INFERENCE_RULES",
     "AgentEvent",
     "EventType",
     "AgentLogger",
@@ -78,9 +72,6 @@ __all__ = [
     "AgentTeam",
     "Tool",
     "ToolManager",
-    "ToolResult",
-    "format_for_model",
-    "infer_tool_error",
     "inline_refs",
     "tool",
 ]

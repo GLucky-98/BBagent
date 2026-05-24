@@ -1,52 +1,10 @@
 import inspect
 import json
 import logging
-import re
-from dataclasses import dataclass
-from typing import Any, get_type_hints, Union
+from typing import Any, get_type_hints
 from pydantic import BaseModel, TypeAdapter
 from typing import Callable, Dict, List
 import copy
-
-from .errors import ERROR_INFERENCE_RULES
-
-
-@dataclass
-class ToolResult:
-    content: Union[List['ContentBlock'], str] # type: ignore
-    success: bool = True
-    error_type: str = ""
-    suggestion: str = ""
-
-
-def format_for_model(tool_result: ToolResult) -> str:
-    if tool_result.success:
-        return tool_result.content
-
-    parts = [
-        "Tool execution failed.",
-        f"Error type: {tool_result.error_type or 'unknown'}",
-        f"Message: {tool_result.content}",
-        f"Suggestion: {tool_result.suggestion or 'Check the error message and try again.'}",
-    ]
-    return "\n".join(parts)
-
-
-def infer_tool_error(error_str: str) -> ToolResult:
-    for rule in ERROR_INFERENCE_RULES:
-        if re.search(rule.pattern, error_str):
-            return ToolResult(
-                content=error_str,
-                success=False,
-                error_type=rule.error_type,
-                suggestion=rule.suggestion,
-            )
-    return ToolResult(
-        content=error_str,
-        success=False,
-        error_type="unknown",
-        suggestion="Check the error details and try again with corrected parameters.",
-    )
 
 # ------------------------------------------------------------
 # pydantic 输入参数类型解析辅助函数

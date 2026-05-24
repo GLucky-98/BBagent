@@ -12,16 +12,32 @@ from .embedding import Embedding, OllamaEmbedding
 from .memory_tool import (
     create_add_memory_tool,
     create_delete_memory_tool,
-    create_search_memory_tool,
-    search_memory_context,
+    create_inject_memories_tool,
+    inject_memory_context,
+    ADD_MEMORY_TOOL_DESCRIPTION,
 )
-from .memory_hook import create_memory_hook, extract_memories
+from .memory_hook import (
+    create_memory_hook,
+    extract_memories,
+    EXTRACT_SYSTEM_PROMPT,
+    EXTRACT_USER_PROMPT,
+    CLEAN_SYSTEM_PROMPT,
+    CLEAN_USER_PROMPT,
+    ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
+)
+
 
 __all__ = [
     "Memory", "MemoryManager",
     "Embedding", "OllamaEmbedding",
-    "create_add_memory_tool", "create_delete_memory_tool", "create_search_memory_tool",
-    "search_memory_context",
+    "create_add_memory_tool", "create_delete_memory_tool", "create_inject_memories_tool",
+    "inject_memory_context",
     "create_memory_hook",
     "extract_memories",
+    "ADD_MEMORY_TOOL_DESCRIPTION",
+    "ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT",
+    "EXTRACT_SYSTEM_PROMPT",
+    "EXTRACT_USER_PROMPT",
+    "CLEAN_SYSTEM_PROMPT",
+    "CLEAN_USER_PROMPT",
 ]

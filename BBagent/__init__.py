@@ -14,9 +14,7 @@ from .core import (
     OpenAIModel,
     Tool,
     ToolManager,
-    ToolResult,
     tool,
-    format_for_model,
     Session,
     Message,
     HumanMessage,
@@ -50,7 +48,7 @@ from .built_in_tool import (
     create_ls_tool,
 )
 
-from .built_in_hook import setup_agent_hook, compress_session
+from .built_in_hook import setup_agent_hook, compress_session, MemoryCompressConfig
 
 __all__ = [
     "Agent",
@@ -68,9 +66,7 @@ __all__ = [
     "OpenAIModel",
     "Tool",
     "ToolManager",
-    "ToolResult",
     "tool",
-    "format_for_model",
     "Session",
     "Message",
     "HumanMessage",
@@ -99,6 +95,12 @@ __all__ = [
     "create_grep_tool",
     "create_find_tool",
     "create_ls_tool",
+]
+
+from .built_in_hook import setup_agent_hook, compress_session, MemoryCompressConfig
+
+__all__ += [
     "setup_agent_hook",
     "compress_session",
+    "MemoryCompressConfig",
 ]

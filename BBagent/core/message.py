@@ -1,3 +1,4 @@
+import copy
 import json
 from typing import List
 from dataclasses import dataclass, field
@@ -14,7 +15,8 @@ __all__ = [
     'ContentBlock',
     'TextBlock',
     'ImageBlock',
-    'ToolUseBlock'
+    'ToolUseBlock',
+    'estimate_message_tokens'
 ]
 
 
@@ -191,212 +193,378 @@ class ModelMessage(Message):
         )
 
 
+def estimate_message_tokens(msg: Message) -> int:
+    serialized = json.dumps(msg.to_dict(), ensure_ascii=False)
+    return max(1, len(serialized.encode('utf-8')) // 3)
+
+
+@dataclass
+class Turn:
+    messages: List[Message] = field(default_factory=list)
+    key_content: List[str] = field(default_factory=list)
+    is_summarized: bool = False
+    summary: str = ''
+    summary_group_id: str = ''
+    skip_summary: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
+    ever_used_tools: List[str] = field(default_factory=list)
+    start_timestamp: int = 0
+    end_timestamp: int = 0
+    memory_extracted: bool = False
+
+    @property
+    def is_complete(self) -> bool:
+        return bool(self.messages and
+                    isinstance(self.messages[-1], ModelMessage) and
+                    self.messages[-1].stop_reason == 'end_turn')
+
+    @property
+    def token_count(self) -> int:
+        if self.input_tokens + self.output_tokens > 0:
+            return self.input_tokens + self.output_tokens
+        if not self.messages:
+            return 0
+        total = 0
+        for msg in self.messages:
+            total += estimate_message_tokens(msg)
+        return total
+
+    def add_message(self, msg: Message):
+        self.messages.append(msg)
+        if isinstance(msg, ModelMessage):
+            self.input_tokens = msg.input_tokens
+            self.output_tokens = msg.output_tokens
+
+
 class Session:
-    def __init__(self, path: str | Path = None, id: str = None, messages: List[Message] = None):
+    def __init__(self, dir: str | Path = None, id: str = None, turns: List[Turn] = None):
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.id = id if id else self.timestamp + '_' + uuid.uuid4().hex[:8]
-        self.path = Path(path) if path else None
-        self.messages = messages if messages else []
-        
-        self.context_length = 0
+        self.dir = Path(dir) if dir else None
+        self.turns = turns if turns else []
+
+        self.window_start = 0
+        self.compress_turn_count = 0
         self.total_input_cost_tokens = 0
         self.total_output_cost_tokens = 0
-        self.compress_num = 0
-        self.summary = ''
-        self.compact_summary = []
-        self.ever_used_tools = []
-        self.turn_index = []
-        self._calculate_turn_index()
 
-    def _calculate_turn_index(self):
-        self.turn_index = [
-            i for i, msg in enumerate(self.messages)
-            if isinstance(msg, HumanMessage)
-        ]
+    @property
+    def messages(self) -> List[Message]:
+        result = []
+        for turn in self.turns[self.window_start:]:
+            result.extend(turn.messages)
+        return result
+
+    @property
+    def ever_used_tools(self) -> List[str]:
+        seen = set()
+        result = []
+        for turn in self.turns:
+            for tool in turn.ever_used_tools:
+                if tool not in seen:
+                    seen.add(tool)
+                    result.append(tool)
+        return result
+
+    @property
+    def turn_count(self) -> int:
+        return len(self.turns)
+
+    def _messages_path(self) -> Path:
+        return self.dir / f'{self.id}.jsonl'
+
+    def _metadata_path(self) -> Path:
+        return self.dir / f'{self.id}.md'
 
     @classmethod
-    def create(cls, session_path: str | Path) -> 'Session':
-        id =datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '_' + uuid.uuid4().hex[:8]
-        session_dir = Path(session_path) / id
-        session_dir.mkdir(parents=True, exist_ok=True)
+    def create(cls, session_dir: str | Path) -> 'Session':
+        id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '_' + uuid.uuid4().hex[:8]
+        session_path = Path(session_dir) / id
+        session_path.mkdir(parents=True, exist_ok=True)
 
-        session = cls(path=session_dir, id=id)
+        session = cls(dir=session_path, id=id)
         session._messages_path().touch()
         session._write_metadata()
         return session
 
-    def _messages_path(self) -> Path:
-        return self.path / f'{self.id}.jsonl'
+    def fork(self, session_root: str | Path = None) -> 'Session':
+        fork_dir = Path(session_root) if session_root else (self.dir / 'fork') if self.dir else None
+        if not fork_dir:
+            raise ValueError("Cannot fork an in-memory session, provide session_root or persist the session first")
 
-    def _metadata_path(self) -> Path:
-        return self.path / f'{self.id}.md'
+        new_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        new_id = f'{self.id}_fork_{new_timestamp}_{uuid.uuid4().hex[:8]}'
+        fork_path = fork_dir / new_id
+        fork_path.mkdir(parents=True, exist_ok=True)
+
+        new_turns = [copy.deepcopy(turn) for turn in self.turns]
+
+        new_session = Session(dir=fork_path, id=new_id, turns=new_turns)
+        new_session.window_start = self.window_start
+        new_session.compress_turn_count = self.compress_turn_count
+        new_session.total_input_cost_tokens = self.total_input_cost_tokens
+        new_session.total_output_cost_tokens = self.total_output_cost_tokens
+
+        for turn in new_session.turns:
+            if turn.is_complete:
+                new_session._flush_turn(turn)
+
+        new_session._write_metadata()
+
+        return new_session
+
+    def _flush_turn(self, turn: Turn):
+        if not self.dir:
+            return
+        with open(self._messages_path(), 'a', encoding='utf-8') as f:
+            for msg in turn.messages:
+                f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
 
     def add_message(self, message: Message | List[Message]):
         messages = message if isinstance(message, list) else [message]
-        start_idx = len(self.messages)
-        for i, msg in enumerate(messages):
-            if isinstance(msg, ModelMessage) and msg.input_tokens > 0:
-                self._update_token_stats(msg)
-            self.messages.append(msg)
+        for msg in messages:
             if isinstance(msg, HumanMessage):
-                self.turn_index.append(start_idx + i)
-        if self.path:
-            with open(self._messages_path(), 'a', encoding='utf-8') as f:
-                for msg in messages:
-                    f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
-
-    def _update_token_stats(self, model_msg: ModelMessage):
-        self.context_length = model_msg.input_tokens + model_msg.output_tokens
-        self.total_input_cost_tokens += model_msg.input_tokens
-        self.total_output_cost_tokens += model_msg.output_tokens
+                if self.turns and not self.turns[-1].is_complete:
+                    self.turns.pop()
+                turn = Turn()
+                turn.start_timestamp = msg.timestamp
+                turn.messages.append(msg)
+                self.turns.append(turn)
+            elif not self.turns or self.turns[-1].is_complete:
+                continue
+            else:
+                last_turn = self.turns[-1]
+                last_turn.add_message(msg)
+                if isinstance(msg, ModelMessage):
+                    if msg.stop_reason == 'end_turn':
+                        last_turn.end_timestamp = msg.timestamp
+                        self._flush_turn(last_turn)
+                    self.total_input_cost_tokens += msg.input_tokens
+                    self.total_output_cost_tokens += msg.output_tokens
+                elif isinstance(msg, ToolMessage):
+                    if msg.name and msg.name not in last_turn.ever_used_tools:
+                        last_turn.ever_used_tools.append(msg.name)
 
     @staticmethod
-    def _estimate_token_count(msg: Message) -> int:
-        serialized = json.dumps(msg.to_dict(), ensure_ascii=False)
-        return max(1, len(serialized.encode('utf-8')) // 3)
+    def _build_inject_text(summaries: List[str], keys: List[str]) -> str:
+        parts = []
+        if summaries:
+            parts.append("[Historical Conversation Summary]")
+            parts.append("\n---\n".join(summaries))
+        if keys:
+            parts.append("[Key Information Preserved]")
+            for k in keys:
+                parts.append(f"- {k}")
+        return "\n\n".join(parts)
 
-    def get_session_token_count(self) -> int:
-        # 如果刚压缩完，还没有得到一条最新的模型消息，那么这个算法是不对的
-        messages = self.messages
-        if not messages:
-            return 0
-        if isinstance(messages[-1], ModelMessage):
-            return self.context_length
-        last_model_idx = -1
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], ModelMessage):
-                last_model_idx = i
+    def get_visible_context(self) -> List[Message]:
+        turns = self.turns[self.window_start:]
+        collected_summaries = []
+        collected_keys = []
+        seen_groups = set()
+        seen_keys = set()
+        inject_idx = None
+
+        for i, turn in enumerate(turns):
+            if turn.is_summarized:
+                if turn.skip_summary:
+                    for key in turn.key_content:
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            collected_keys.append(key)
+                else:
+                    if turn.summary and turn.summary_group_id not in seen_groups:
+                        seen_groups.add(turn.summary_group_id)
+                        collected_summaries.append(turn.summary)
+                    for key in turn.key_content:
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            collected_keys.append(key)
+            else:
+                inject_idx = i
                 break
-        if last_model_idx < 0:
-            return sum(self._estimate_token_count(m) for m in messages)
-        return self.context_length + sum(self._estimate_token_count(m) for m in messages[last_model_idx + 1:])
 
-    def get_turn_messages(self, turn_num: int) -> List[Message]:
-        if not self.turn_index:
+        if inject_idx is None:
+            if not collected_summaries and not collected_keys:
+                return []
+            inject_text = self._build_inject_text(collected_summaries, collected_keys)
+            return [HumanMessage(content=inject_text)]
+
+        if not collected_summaries and not collected_keys:
+            result = []
+            for turn in turns:
+                result.extend(turn.messages)
+            return result
+
+        inject_text = self._build_inject_text(collected_summaries, collected_keys)
+        result = []
+        target_turn = turns[inject_idx]
+        target_msgs = list(target_turn.messages)
+        if target_msgs:
+            first_msg = target_msgs[0]
+            if isinstance(first_msg, HumanMessage):
+                if isinstance(first_msg.content, str):
+                    new_first = HumanMessage(
+                        content=inject_text + first_msg.content,
+                        timestamp=first_msg.timestamp
+                    )
+                else:
+                    new_first = HumanMessage(
+                        content=[TextBlock(text=inject_text)] + list(first_msg.content),
+                        timestamp=first_msg.timestamp
+                    )
+                target_msgs[0] = new_first
+        result.extend(target_msgs)
+        for turn in turns[inject_idx + 1:]:
+            result.extend(turn.messages)
+        return result
+
+    def get_visible_token_count(self) -> int:
+        turns = self.turns[self.window_start:]
+        if not turns:
+            return 0
+
+        total = 0
+        seen_groups = set()
+        seen_keys = set()
+        has_injection = False
+
+        for turn in turns:
+            if turn.is_summarized:
+                if not turn.skip_summary:
+                    if turn.summary and turn.summary_group_id not in seen_groups:
+                        seen_groups.add(turn.summary_group_id)
+                        total += estimate_message_tokens(
+                            HumanMessage(content=turn.summary)
+                        )
+                        has_injection = True
+                for key in turn.key_content:
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        total += estimate_message_tokens(
+                            HumanMessage(content=key)
+                        )
+                        has_injection = True
+            else:
+                if turn.is_complete:
+                    total += turn.token_count
+                else:
+                    for msg in turn.messages:
+                        total += estimate_message_tokens(msg)
+
+        return total
+
+    def get_turn(self, n: int) -> Turn:
+        if not self.turns:
             raise IndexError("No turns available in this session")
-        if turn_num < 0:
-            turn_num = len(self.turn_index) + turn_num
-        if turn_num < 0 or turn_num >= len(self.turn_index):
-            raise IndexError(f"Turn index {turn_num} out of range, session has {len(self.turn_index)} turns")
-        start = self.turn_index[turn_num]
-        if turn_num + 1 < len(self.turn_index):
-            end = self.turn_index[turn_num + 1]
-        else:
-            end = len(self.messages)
-        return self.messages[start:end]
-
-    def replace_messages(self, new_messages: List[Message], summary: str = ''):
-        if self.path:
-            marker = {
-                "type": "compress_boundary",
-                "compress_num": self.compress_num + 1,
-                "timestamp": int(datetime.now().timestamp()),
-                "old_messages_count": len(self.messages),
-                "summary": summary,
-            }
-            with open(self._messages_path(), 'a', encoding='utf-8') as f:
-                f.write(json.dumps(marker, ensure_ascii=False) + '\n')
-                for msg in new_messages:
-                    f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
-
-        self.compress_num += 1
-        if summary:
-            self.compact_summary.append(summary)
-        self.messages = new_messages
-        self._calculate_turn_index()
-        if self.messages and isinstance(self.messages[-1], ModelMessage):
-            self.context_length = self.messages[-1].input_tokens + self.messages[-1].output_tokens
-        else:
-            self.context_length = sum(self._estimate_token_count(m) for m in self.messages)
+        if n < 0:
+            n = len(self.turns) + n
+        if n < 0 or n >= len(self.turns):
+            raise IndexError(f"Turn index {n} out of range, session has {len(self.turns)} turns")
+        return self.turns[n]
 
     def save(self):
-        if not self.path:
-            raise ValueError("Session path not set, use Session.create() for persistent sessions")
-        if not self.path:
-            raise ValueError("Session path not set, use Session.create() for persistent sessions")
+        if not self.dir:
+            raise ValueError("Session dir not set, use Session.create() for persistent sessions")
         self._write_metadata()
 
     def _write_metadata(self):
-        tools_str = ', '.join(self.ever_used_tools) if self.ever_used_tools else 'None'
-        compact_str = '\n'.join(self.compact_summary) if self.compact_summary else '(empty)'
-        summary_str = self.summary if self.summary else '(empty)'
+        content_lines = [f'# Session: {self.id}', '']
+        content_lines.append(f'id: {self.id}')
+        content_lines.append(f'timestamp: {self.timestamp}')
+        content_lines.append(f'window_start: {self.window_start}')
+        content_lines.append(f'compress_turn_count: {self.compress_turn_count}')
+        content_lines.append(f'total_input_cost_tokens: {self.total_input_cost_tokens}')
+        content_lines.append(f'total_output_cost_tokens: {self.total_output_cost_tokens}')
+        content_lines.append(f'turn_count: {len(self.turns)}')
+        content_lines.append('')
+        content_lines.append('---')
+        content_lines.append('')
 
-        content = f"""# Session: {self.id}
+        for i, turn in enumerate(self.turns):
+            label = f'## Turn {i}'
+            if not turn.is_complete:
+                label += ' (incomplete)'
+            content_lines.append(label)
+            content_lines.append('')
+            content_lines.append(f'is_summarized: {str(turn.is_summarized).lower()}')
+            content_lines.append(f'summary: {turn.summary if turn.summary else "(empty)"}')
+            content_lines.append(f'key_content: {json.dumps(turn.key_content, ensure_ascii=False) if turn.key_content else "(empty)"}')
+            content_lines.append(f'summary_group_id: {turn.summary_group_id}')
+            content_lines.append(f'skip_summary: {str(turn.skip_summary).lower()}')
+            tools_str = ', '.join(turn.ever_used_tools) if turn.ever_used_tools else '(none)'
+            content_lines.append(f'ever_used_tools: {tools_str}')
+            content_lines.append(f'start_timestamp: {turn.start_timestamp}')
+            content_lines.append(f'end_timestamp: {turn.end_timestamp if turn.end_timestamp else "(none)"}')
+            content_lines.append(f'input_tokens: {turn.input_tokens}')
+            content_lines.append(f'output_tokens: {turn.output_tokens}')
+            content_lines.append(f'memory_extracted: {str(turn.memory_extracted).lower()}')
+            content_lines.append('')
 
-id: {self.id}
-timestamp: {self.timestamp}
-context_length: {self.context_length}
-total_input_cost_tokens: {self.total_input_cost_tokens}
-total_output_cost_tokens: {self.total_output_cost_tokens}
-compress_num: {self.compress_num}
-messages_count: {len(self.messages)}
-turn_count: {len(self.turn_index)}
-ever_used_tools: {tools_str}
-
----
-
-## Summary
-
-{summary_str}
-
----
-
-## Compact Summary
-
-{compact_str}
-"""
-        self._metadata_path().write_text(content, encoding='utf-8')
+        self._metadata_path().write_text('\n'.join(content_lines), encoding='utf-8')
 
     @classmethod
-    def load(cls, session_id: str, session_path: str | Path) -> 'Session':
-        session_dir = Path(session_path)
-        messages_file = session_dir / f'{session_id}.jsonl'
-        metadata_file = session_dir / f'{session_id}.md'
+    def load(cls, session_id: str, session_dir: str | Path) -> 'Session':
+        session_path = Path(session_dir)
+        messages_file = session_path / f'{session_id}.jsonl'
+        metadata_file = session_path / f'{session_id}.md'
 
         if not messages_file.exists():
             raise FileNotFoundError(f"Messages file not found: {messages_file}")
         if not metadata_file.exists():
             raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
 
-        lines = []
+        turns = []
+        current_turn = None
         with open(messages_file, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    lines.append(json.loads(line))
+                if not line:
+                    continue
+                data = json.loads(line)
+                msg = Message.from_dict(data)
 
-        last_boundary_idx = -1
-        for i in range(len(lines) - 1, -1, -1):
-            if lines[i].get('type') == 'compress_boundary':
-                last_boundary_idx = i
-                break
+                if isinstance(msg, HumanMessage):
+                    current_turn = Turn()
+                    current_turn.start_timestamp = msg.timestamp
+                    current_turn.add_message(msg)
+                    turns.append(current_turn)
+                else:
+                    if current_turn is None:
+                        current_turn = Turn()
+                        turns.append(current_turn)
+                    current_turn.add_message(msg)
+                    if isinstance(msg, ModelMessage) and msg.stop_reason == 'end_turn':
+                        current_turn.end_timestamp = msg.timestamp
+                    elif isinstance(msg, ToolMessage) and msg.name:
+                        if msg.name not in current_turn.ever_used_tools:
+                            current_turn.ever_used_tools.append(msg.name)
 
-        messages = []
-        for data in lines[last_boundary_idx + 1:]:
-            if data.get('type') != 'compress_boundary':
-                messages.append(Message.from_dict(data))
-
+        session = cls(dir=session_path, id=session_id, turns=turns)
         metadata = cls._parse_metadata(metadata_file)
+        session.window_start = int(metadata.get('window_start', 0))
+        session.compress_turn_count = int(metadata.get('compress_turn_count', 0))
+        session.total_input_cost_tokens = int(metadata.get('total_input_cost_tokens', 0))
+        session.total_output_cost_tokens = int(metadata.get('total_output_cost_tokens', 0))
 
-        session = cls(
-            path=session_dir,
-            id=session_id,
-            messages=messages,
-        )
-        session.timestamp = metadata.get('timestamp', session.timestamp)
-        session.context_length = metadata.get('context_length', 0)
-        session.total_input_cost_tokens = metadata.get('total_input_cost_tokens', 0)
-        session.total_output_cost_tokens = metadata.get('total_output_cost_tokens', 0)
-        session.compress_num = metadata.get('compress_num', 0)
-        session.summary = metadata.get('summary', '')
-        session.compact_summary = metadata.get('compact_summary', [])
-        session.ever_used_tools = metadata.get('ever_used_tools', [])
-
-        md_count = metadata.get('messages_count', len(messages))
-        if len(messages) != md_count:
-            session._load_warnings = getattr(session, '_load_warnings', []) + [
-                f"Message count mismatch. JSONL: {len(messages)}, metadata: {md_count}"
-            ]
+        for i, turn_meta in enumerate(metadata.get('turns_metadata', [])):
+            if i < len(turns):
+                turn = turns[i]
+                turn.is_summarized = turn_meta.get('is_summarized', 'false') == 'true'
+                turn.summary = '' if turn_meta.get('summary', '') == '(empty)' else turn_meta.get('summary', '')
+                key_raw = turn_meta.get('key_content', '(empty)')
+                turn.key_content = json.loads(key_raw) if key_raw != '(empty)' else []
+                turn.summary_group_id = turn_meta.get('summary_group_id', '')
+                turn.skip_summary = turn_meta.get('skip_summary', 'false') == 'true'
+                tools_raw = turn_meta.get('ever_used_tools', '(none)')
+                turn.ever_used_tools = [t.strip() for t in tools_raw.split(',') if t.strip()] if tools_raw != '(none)' else []
+                turn.start_timestamp = int(turn_meta.get('start_timestamp', 0))
+                end_ts = turn_meta.get('end_timestamp', '(none)')
+                turn.end_timestamp = 0 if end_ts == '(none)' else int(end_ts)
+                turn.input_tokens = int(turn_meta.get('input_tokens', 0))
+                turn.output_tokens = int(turn_meta.get('output_tokens', 0))
+                turn.memory_extracted = turn_meta.get('memory_extracted', 'false') == 'true'
 
         return session
 
@@ -404,42 +572,34 @@ ever_used_tools: {tools_str}
     def _parse_metadata(md_path: Path) -> dict:
         text = md_path.read_text(encoding='utf-8')
         result = {}
-        section = 'header'
-        summary_lines = []
-        compact_lines = []
+        turns_metadata = []
+        current_turn = None
 
         for line in text.split('\n'):
             stripped = line.strip()
-            if stripped == '---':
-                if section == 'header':
-                    section = 'after_header'
-                elif section == 'summary':
-                    section = 'after_summary'
-                continue
-            if stripped == '## Summary':
-                section = 'summary'
-                continue
-            if stripped == '## Compact Summary':
-                section = 'compact'
+            if not stripped or stripped.startswith('#') or stripped == '---':
                 continue
 
-            if section == 'header' and ':' in stripped and not stripped.startswith('#'):
+            if stripped.startswith('## Turn'):
+                if current_turn is not None:
+                    turns_metadata.append(current_turn)
+                current_turn = {}
+                continue
+
+            if ':' in stripped and current_turn is not None:
+                key, _, value = stripped.partition(':')
+                current_turn[key.strip()] = value.strip()
+            elif ':' in stripped:
                 key, _, value = stripped.partition(':')
                 key, value = key.strip(), value.strip()
-                if key in ('context_length', 'total_input_cost_tokens', 'total_output_cost_tokens', 'compress_num', 'messages_count', 'turn_count'):
-                    result[key] = int(value) if value.isdigit() else 0
-                elif key == 'ever_used_tools':
-                    result[key] = [t.strip() for t in value.split(',') if t.strip()] if value != 'None' else []
+                if key in ('window_start', 'compress_turn_count',
+                           'total_input_cost_tokens', 'total_output_cost_tokens', 'turn_count'):
+                    result[key] = value
                 else:
                     result[key] = value
-            elif section == 'summary':
-                summary_lines.append(line)
-            elif section == 'compact' and stripped:
-                compact_lines.append(stripped)
 
-        result['summary'] = '\n'.join(summary_lines).strip()
-        if result['summary'] == '(empty)':
-            result['summary'] = ''
-        result['compact_summary'] = compact_lines if compact_lines and compact_lines != ['(empty)'] else []
+        if current_turn is not None:
+            turns_metadata.append(current_turn)
 
+        result['turns_metadata'] = turns_metadata
         return result

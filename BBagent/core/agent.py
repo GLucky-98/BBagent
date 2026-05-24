@@ -9,7 +9,7 @@ from typing import Callable, List, Optional
 from uuid import uuid4 as uuid
 
 from .model import Model, Model_Input
-from .tool import Tool, tool, ToolResult, format_for_model, infer_tool_error
+from .tool import Tool, tool
 from .message import (
     Session,
     Message,
@@ -156,14 +156,10 @@ class Agent:
 
         self.session = Session.load(session_id, dst_dir)
         
-        ever_used_tools = self.session.ever_used_tools()
+        ever_used_tools = self.session.ever_used_tools
         for tool_name in ever_used_tools:
             if tool_name not in self.tools:
                 self.logger.warning(f"Tool '{tool_name}' not found in agent tools")
-
-        warnings = getattr(self.session, '_load_warnings', [])
-        for w in warnings:
-            self.logger.warning(w)
 
     async def new_session(self):
         await self.hook.trigger(HookType.NEW_SESSION)
@@ -194,12 +190,7 @@ class Agent:
         tool = self.tools.get(tool_use.name)
 
         if tool is None:
-            tool_result = ToolResult(
-                content=f"Unknown tool: {tool_use.name}",
-                success=False,
-                error_type="tool_not_found",
-                suggestion="The tool name is not recognized. Check the available tools and use the correct name."
-            )
+            content = f"Unknown tool: {tool_use.name}"
             self.logger.warning(
                 f"Tool not found: {tool_use.name}",
                 context={"tool_name": tool_use.name, "tool_input": tool_use.input}
@@ -212,24 +203,19 @@ class Agent:
                     else:
                         raw_result = tool.invoke(tool_use.input)
 
-                    if isinstance(raw_result, ToolResult):
-                        tool_result = raw_result
-                    elif isinstance(raw_result, str) and raw_result.startswith("Error:"):
-                        tool_result = infer_tool_error(raw_result)
-                    elif isinstance(raw_result, str):
-                        tool_result = ToolResult(content=raw_result, success=True)
+                    if isinstance(raw_result, str):
+                        content = raw_result
+                    elif isinstance(raw_result, list):
+                        content = raw_result
                     else:
-                        tool_result = ToolResult(
-                            content=json.dumps(raw_result, ensure_ascii=False),
-                            success=True
-                        )
-                except Exception as e:
-                    tool_result = ToolResult(
-                        content=f"Tool invocation error: {str(e)}",
-                        success=False,
-                        error_type="execution_error",
-                        suggestion="An unexpected error occurred. Check the error message and try again with corrected parameters."
+                        content = json.dumps(raw_result, ensure_ascii=False)
+
+                    self.logger.debug(
+                        f"Tool '{tool_use.name}' completed successfully",
+                        context={"tool_name": tool_use.name}
                     )
+                except Exception as e:
+                    content = f"Tool invocation error: {str(e)}"
                     self.logger.error(
                         f"Tool '{tool_use.name}' execution failed",
                         context={
@@ -239,24 +225,6 @@ class Agent:
                         },
                         exc_info=sys.exc_info()
                     )
-
-        content = format_for_model(tool_result)
-
-        if not tool_result.success:
-            self.logger.warning(
-                f"Tool '{tool_use.name}' returned error: {tool_result.error_type}",
-                context={
-                    "tool_name": tool_use.name,
-                    "tool_input": tool_use.input,
-                    "error_type": tool_result.error_type,
-                    "error_content": tool_result.content if isinstance(tool_result.content, str) else str(tool_result.content),
-                }
-            )
-        else:
-            self.logger.debug(
-                f"Tool '{tool_use.name}' completed successfully",
-                context={"tool_name": tool_use.name}
-            )
 
         tool_msg = ToolMessage(tool_use.id, tool_use.name, content)
         await self.hook.trigger(HookType.ON_TOOL_RESULT, tool_msg)
@@ -279,7 +247,7 @@ Your available skills are:
     def construct_model_input(self) -> Model_Input:
         tools = list(self.tools.values())
         prompt = self.system_prompt + self.skill_prompt
-        messages = self.session.messages
+        messages = self.session.get_visible_context()
         return Model_Input(prompt=prompt, tools=tools, messages=messages)
       
     async def stream_tool_loop(self):
@@ -312,7 +280,6 @@ Your available skills are:
 
                     if chunk_type == 'completed_tool_use':
                         tool_use = content
-                        self.session.ever_used_tools.append(tool_use.name)
                         task = asyncio.create_task(
                             self.tool_execute(tool_use)
                         )
@@ -498,12 +465,7 @@ Your available skills are:
         tool = self.tools.get(tool_use.name)
 
         if tool is None:
-            tool_result = ToolResult(
-                content=f"Unknown tool: {tool_use.name}",
-                success=False,
-                error_type="tool_not_found",
-                suggestion="The tool name is not recognized. Check the available tools and use the correct name."
-            )
+            content = f"Unknown tool: {tool_use.name}"
             self.logger.warning(
                 f"Tool not found: {tool_use.name}",
                 context={"tool_name": tool_use.name, "tool_input": tool_use.input}
@@ -516,24 +478,19 @@ Your available skills are:
                     else:
                         raw_result = tool.invoke(tool_use.input)
 
-                    if isinstance(raw_result, ToolResult):
-                        tool_result = raw_result
-                    elif isinstance(raw_result, str) and raw_result.startswith("Error:"):
-                        tool_result = infer_tool_error(raw_result)
-                    elif isinstance(raw_result, str):
-                        tool_result = ToolResult(content=raw_result, success=True)
+                    if isinstance(raw_result, str):
+                        content = raw_result
+                    elif isinstance(raw_result, list):
+                        content = raw_result
                     else:
-                        tool_result = ToolResult(
-                            content=json.dumps(raw_result, ensure_ascii=False),
-                            success=True
-                        )
-                except Exception as e:
-                    tool_result = ToolResult(
-                        content=f"Tool invocation error: {str(e)}",
-                        success=False,
-                        error_type="execution_error",
-                        suggestion="An unexpected error occurred. Check the error message and try again with corrected parameters."
+                        content = json.dumps(raw_result, ensure_ascii=False)
+
+                    self.logger.debug(
+                        f"Tool '{tool_use.name}' completed successfully",
+                        context={"tool_name": tool_use.name}
                     )
+                except Exception as e:
+                    content = f"Tool invocation error: {str(e)}"
                     self.logger.error(
                         f"Tool '{tool_use.name}' execution failed",
                         context={
@@ -543,23 +500,6 @@ Your available skills are:
                         },
                         exc_info=sys.exc_info()
                     )
-
-        content = format_for_model(tool_result)
-
-        if not tool_result.success:
-            self.logger.warning(
-                f"Tool '{tool_use.name}' returned error: {tool_result.error_type}",
-                context={
-                    "tool_name": tool_use.name,
-                    "tool_input": tool_use.input,
-                    "error_type": tool_result.error_type,
-                }
-            )
-        else:
-            self.logger.debug(
-                f"Tool '{tool_use.name}' completed successfully",
-                context={"tool_name": tool_use.name}
-            )
 
         return ToolMessage(tool_use.id, tool_use.name, content)
 

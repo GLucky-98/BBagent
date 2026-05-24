@@ -284,3 +284,24 @@ class MemoryManager:
 
         self.logger.debug(f"Hybrid search returned {len(results['ids'])} results: query={query[:50]}")
         return results
+
+    @property
+    def count(self) -> int:
+        return self.collection.count()
+
+    def get_all(self) -> list[dict]:
+        all_data = self.collection.get(include=["documents"])
+        return [
+            {"id": all_data["ids"][i], "content": all_data["documents"][i]}
+            for i in range(len(all_data.get("ids", [])))
+        ]
+
+    def get_by_ids(self, memory_ids: list[str]) -> list[dict]:
+        data = self.collection.get(ids=memory_ids, include=["documents"])
+        id_to_doc = dict(zip(data.get("ids", []), data.get("documents", [])))
+        result = []
+        for mid in memory_ids:
+            if mid in id_to_doc:
+                result.append({"id": mid, "content": id_to_doc[mid]})
+                self.increment_access(mid)
+        return result

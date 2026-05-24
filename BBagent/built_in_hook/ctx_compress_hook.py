@@ -1,106 +1,169 @@
 import asyncio
-from typing import List
+import uuid
 
 from ..core.agenthook import HookContext
 from ..core.agent import SubAgent
-from ..core.tool import Tool
-from ..core.message import Message, HumanMessage, ModelMessage
+from ..core.message import HumanMessage
 
-DEFAULT_SUMMARY_PROMPT = """You are a conversation summarizer. Your task is to compress a conversation history into a concise summary.
+
+COMPRESS_PROMPT = """You are a conversation summarizer. Your task is to compress a conversation history into a concise summary.
 
 Rules:
 - Preserve key decisions, conclusions, and action items
 - Keep important tool call results (file paths, code snippets, error messages)
 - Preserve any unresolved questions or ongoing tasks
-- Remove redundant or verbose exchanges
+- Remove redundant or verbose exchanges or useless thinking 
 - Output in the same language as the conversation"""
 
-DEFAULT_SUMMARY_USER_PREFIX = """Summarize the following conversation history into a concise paragraph:\n\n"""
+
+COMPRESS_PREFIX = (
+    "Below is a conversation history that needs to be compressed into a concise summary. "
+    "This summary will be used as context for future conversations, so preserve key decisions, "
+    "conclusions, action items, important tool call results, and unresolved questions.\n\n"
+    "Conversation history:\n"
+)
 
 
 async def compress_session(
     session,
-    subagent: SubAgent,
-    threshold: float,
-    keep_recent_msg: int,
-    keep_recent_time: int,
-    compress_user_prefix: str = DEFAULT_SUMMARY_USER_PREFIX
-) -> str:
-    messages = session.messages
-    compress_zone = list(messages[:-keep_recent_msg])
-    keep_zone = list(messages[-keep_recent_msg:])
+    model,
+    compression_threshold: float = 0.8,
+    merge_ratio: float = 0.2,
+    small_turn_cap: int = 5000,
+    keep_recent_turns: int = 3,
+    compress_prompt: str = COMPRESS_PROMPT,
+    compress_prefix: str = COMPRESS_PREFIX,
+    logger=None,
+):
+    max_context_tokens = model.max_context_tokens
+    context_threshold = int(max_context_tokens * compression_threshold)
+    merge_threshold = int(max_context_tokens * merge_ratio)
+    small_turn_threshold = min(int(merge_threshold / 3), small_turn_cap)
 
-    keep_tokens = sum(session.get_message_tokens(m) for m in keep_zone)
-    if keep_tokens > threshold:
-        latest_timestamp = max(msg.timestamp for msg in messages)
-        cutoff = latest_timestamp - keep_recent_time
-        remaining = []
-        for msg in keep_zone:
-            if msg.timestamp < cutoff:
-                compress_zone.append(msg)
-            else:
-                remaining.append(msg)
-        keep_zone = remaining
+    # Phase 0: need at least 2 visible turns to make compression meaningful
+    visible_turns = session.turns[session.window_start:]
+    if len(visible_turns) <= 1:
+        return
 
-        keep_tokens = sum(session.get_message_tokens(m) for m in keep_zone)
-        if keep_tokens > threshold:
-            last_human_idx = None
-            for i in range(len(keep_zone) - 1, -1, -1):
-                if isinstance(keep_zone[i], HumanMessage):
-                    last_human_idx = i
-                    break
-            if last_human_idx is not None:
-                compress_zone.extend(keep_zone[:last_human_idx])
-                compress_zone.extend(keep_zone[last_human_idx + 1:])
-                keep_zone = [keep_zone[last_human_idx]]
-            else:
-                compress_zone.extend(keep_zone)
-                keep_zone = []
+    # Phase 1: divide visible turns into pending_zone and keep_zone
+    keep_zone = list(visible_turns[-keep_recent_turns:])
+    pending_zone = list(visible_turns[:-keep_recent_turns])
 
-    if not compress_zone:
-        return 
-
-    last_compress = compress_zone[-1]
-    if not (isinstance(last_compress, ModelMessage) and
-            last_compress.stop_reason == 'end_turn'):
-        split_idx = None
-        for i, msg in enumerate(keep_zone):
-            if isinstance(msg, ModelMessage) and msg.stop_reason == 'end_turn':
-                split_idx = i
-                break
-        if split_idx is not None:
-            compress_zone.extend(keep_zone[:split_idx])
-            keep_zone = keep_zone[split_idx:]
-
-    summary_input = [HumanMessage(content=compress_user_prefix)] + compress_zone
-    last_exception = None
-    for attempt in range(3):
-        try:
-            summary = await subagent.run(summary_input)
+    # Phase 2: if keep_zone is overweight, spill oldest turns into pending_zone
+    while len(keep_zone) > 1:
+        if sum(t.token_count for t in keep_zone) <= context_threshold:
             break
-        except Exception as e:
-            last_exception = e
-            if attempt < 2:
-                await asyncio.sleep(1)
-    else:
-        raise RuntimeError(
-            f'Compression subagent failed after 3 retries: {last_exception}'
-        ) from last_exception
+        pending_zone.append(keep_zone.pop(0))
 
-    summary_msg = HumanMessage(content=summary)
-    session.replace_messages([summary_msg] + keep_zone, summary=summary)
-    return 
+    if not pending_zone:
+        return
+
+    subagent = SubAgent(model=model, system_prompt=compress_prompt, logger=logger)
+    # Phase 3: compress all uncompressed turns in pending_zone
+    uncompressed_turns = [t for t in pending_zone if not t.is_summarized]
+    if uncompressed_turns:
+        groups = []
+        current_group = []
+        current_group_tokens = 0
+
+        for turn in uncompressed_turns:
+            t = turn.token_count
+            if t < small_turn_threshold:
+                if current_group_tokens + t <= merge_threshold:
+                    current_group.append(turn)
+                    current_group_tokens += t
+                else:
+                    if current_group:
+                        groups.append(current_group)
+                    current_group = [turn]
+                    current_group_tokens = t
+            else:
+                if current_group:
+                    groups.append(current_group)
+                groups.append([turn])
+                current_group = []
+                current_group_tokens = 0
+
+        if current_group:
+            groups.append(current_group)
+
+        group_id_base = str(uuid.uuid4())
+
+        for idx, group in enumerate(groups):
+            input_messages = []
+
+            for turn in group:
+                input_messages.extend(turn.messages)
+
+            compress_input = [HumanMessage(content=compress_prefix)] + input_messages
+
+            last_exception = None
+            for attempt in range(3):
+                try:
+                    summary_raw = await subagent.run(compress_input)
+                    break
+                except Exception as e:
+                    last_exception = e
+                    if attempt < 2:
+                        await asyncio.sleep(1)
+            else:
+                raise RuntimeError(
+                    f'Compression subagent failed after 3 retries: {last_exception}'
+                ) from last_exception
+
+            full_summary = f"[Historical Conversation Summary]\n{summary_raw}"
+
+            group_id = f"{group_id_base}_{idx}"
+            for turn in group:
+                turn.is_summarized = True
+                turn.summary = full_summary
+                turn.summary_group_id = group_id
+
+    session.compress_turn_count += 1
+
+    # Phase 4: check threshold after compression
+    if session.get_visible_token_count() <= context_threshold:
+        return
+
+    # Phase 5: skip summaries by compression-group, from oldest to newest
+    pending_start = session.window_start
+    pending_end = session.window_start + len(pending_zone)
+    skipped_group_ids = set()
+
+    for i in range(pending_start, pending_end):
+        turn = session.turns[i]
+        if not turn.is_summarized:
+            continue
+
+        group_id = turn.summary_group_id
+        if group_id and group_id not in skipped_group_ids:
+            for t in session.turns[session.window_start:]:
+                if t.summary_group_id == group_id:
+                    t.skip_summary = True
+            skipped_group_ids.add(group_id)
+            if session.get_visible_token_count() <= context_threshold:
+                return
+        elif not group_id:
+            turn.skip_summary = True
+            if session.get_visible_token_count() <= context_threshold:
+                return
+
+    # Phase 6: advance window_start past summarized turns
+    max_start = len(session.turns) - 1
+    while session.window_start < max_start:
+        session.window_start += 1
+        if session.get_visible_token_count() <= context_threshold:
+            return
 
 
 def create_ctx_compress_hook(
-    keep_recent_msg: int,
-    keep_recent_time: int,
-    compression_threshold: float,
-    compress_prompt: str = None,
-    compress_user_prefix: str = None,
+    compression_threshold: float = 0.8,
+    merge_ratio: float = 0.2,
+    small_turn_cap: int = 5000,
+    keep_recent_turns: int = 3,
+    compress_prompt: str = COMPRESS_PROMPT,
+    compress_prefix: str = COMPRESS_PREFIX,
 ):
-    compress_prompt = compress_prompt or DEFAULT_SUMMARY_PROMPT
-    compress_user_prefix = compress_user_prefix or DEFAULT_SUMMARY_USER_PREFIX
 
     async def check_compression_needed(ctx: HookContext):
         agent = ctx.agent
@@ -108,7 +171,7 @@ def create_ctx_compress_hook(
         max_context_tokens = agent.model.max_context_tokens
         threshold = int(max_context_tokens * compression_threshold)
 
-        total_tokens = session.get_session_token_count()
+        total_tokens = session.get_visible_token_count()
         needed = total_tokens >= threshold
 
         ctx.set('compression_needed', needed)
@@ -121,18 +184,17 @@ def create_ctx_compress_hook(
 
         agent = ctx.agent
         session = agent.session
-        max_context_tokens = agent.model.max_context_tokens
-        threshold = int(max_context_tokens * compression_threshold)
-
-        subagent = SubAgent(model=agent.model, system_prompt=compress_prompt, logger=agent.logger)
 
         await compress_session(
             session=session,
-            subagent=subagent,
-            threshold=threshold,
-            keep_recent_msg=keep_recent_msg,
-            keep_recent_time=keep_recent_time,
-            compress_user_prefix=compress_user_prefix,
+            model=agent.model,
+            compress_prompt=compress_prompt,
+            logger=agent.logger,
+            compression_threshold=compression_threshold,
+            merge_ratio=merge_ratio,
+            small_turn_cap=small_turn_cap,
+            compress_prefix=compress_prefix,
+            keep_recent_turns=keep_recent_turns,
         )
 
     return check_compression_needed, execute_compression
