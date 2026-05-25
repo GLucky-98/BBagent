@@ -22,7 +22,7 @@ from .message import (
     ToolUseBlock,
 )
 from .skill import Skill
-from .agenthook import AgentHook, HookType, Hook
+from .hook import AgentHook, HookType, Hook
 from .input import AgentEvent, EventType, InputChannel
 from .logger import AgentLogger, _NullLogger
 
@@ -79,6 +79,9 @@ class Agent:
             for skill in agent_config.skills:
                 self.skills[skill.name] = skill
         self.skill_prompt = self._load_skill_prompt()
+
+        self.team_prompt = ""
+        self.teammate_prompt = ""
 
         self.hook = agent_config.hook if agent_config.hook else AgentHook()
         if self.hook:
@@ -196,6 +199,10 @@ class Agent:
                 context={"tool_name": tool_use.name, "tool_input": tool_use.input}
             )
         else:
+            self.logger.info(
+                f"Tool '{tool.name}' execution started",
+                context={"tool_name": tool.name, "tool_input": tool_use.input}
+            )
             with self.logger.span(f"tool_{tool.name}"):
                 try:
                     if tool.is_async:
@@ -246,7 +253,7 @@ Your available skills are:
     
     def construct_model_input(self) -> Model_Input:
         tools = list(self.tools.values())
-        prompt = self.system_prompt + self.skill_prompt
+        prompt = self.system_prompt + self.team_prompt + self.teammate_prompt + self.skill_prompt
         messages = self.session.get_visible_context()
         return Model_Input(prompt=prompt, tools=tools, messages=messages)
       
@@ -288,6 +295,10 @@ Your available skills are:
 
                     if chunk_type == 'completed_message':
                         stop_reason = content.stop_reason
+                        self.logger.debug(
+                            "Model response received",
+                            context={"stop_reason": stop_reason}
+                        )
                         await self.hook.trigger(HookType.ON_MESSAGE, content)
                         self.session.add_message(content)
                         yield chunk
@@ -303,25 +314,33 @@ Your available skills are:
                 elif stop_reason == 'end_turn':
                     break
                 else:
+                    self.logger.error(
+                        f"Unexpected stop reason: {stop_reason}",
+                        context={"stop_reason": stop_reason}
+                    )
                     raise ValueError(f"Stop reason: {stop_reason}")
         except Exception as e:
             error_msg = str(e)
             self.logger.error(
                 f"Agent loop error: {error_msg}",
                 context={
-                    "error_type": type(e).__name__,
-                    "error_category": "fatal_error",
+                    "error_type": type(e).__name__
                 },
                 exc_info=sys.exc_info()
             )
             self.state = AgentState.Error
-            await self.hook.trigger(HookType.ON_FATAL_ERROR, e)
+            await self.hook.trigger(HookType.ON_ERROR, e)
             raise
                  
     async def run(self, human_msg:HumanMessage):
         self.state = AgentState.Running
+        self.logger.set_trace_id()
+        self.logger.info(
+            "Agent run started",
+            context={"session_id": self.session.session_id}
+        )
         self.session.add_message(human_msg)
-        await self.hook.trigger(HookType.AFTER_INPUT, human_msg)
+        await self.hook.trigger(HookType.AFTER_INPUT)
         try:
             async for chunk in self.stream_tool_loop():
                         yield chunk
@@ -331,6 +350,8 @@ Your available skills are:
             self.session.save()
             self.state = AgentState.Ready
             await self.hook.trigger(HookType.AFTER_RUN)
+            self.logger.info("Agent run completed")
+            self.logger.clear_trace_id()
 
     def on_output(self, callback: Callable):
         self._output_callback = callback
@@ -344,8 +365,10 @@ Your available skills are:
 
     async def start(self):
         if self._running:
+            self.logger.warning("Agent already running, start ignored")
             return
 
+        self.logger.info("Agent event loop started")
         self._running = True
         self.state = AgentState.Waiting
 
@@ -368,17 +391,27 @@ Your available skills are:
             self._event_queue = asyncio.Queue()
             self._running = False
             self.state = AgentState.Ready
+            self.logger.info("Agent event loop stopped")
 
     async def interrupt(self):
         self.hook.context.break_loop()
 
     async def stop(self):
+        self.logger.info("Agent stopping")
         self._running = False
         self.hook.context.break_loop()
         self._event_queue.put_nowait(_SENTINEL)
 
     async def _handle_event(self, event: AgentEvent):
         self.logger.set_trace_id(event.correlation_id)
+        self.logger.info(
+            "Event handling started",
+            context={
+                "event_type": event.type.value,
+                "source_id": event.source_id,
+                "correlation_id": event.correlation_id,
+            }
+        )
         with self.logger.span("event_handle"):
             msg = event.to_human_message()
             self.session.add_message(msg)
@@ -400,6 +433,7 @@ Your available skills are:
             finally:
                 self.session.save()
                 await self.hook.trigger(HookType.AFTER_RUN)
+                self.logger.info("Event handling completed")
                 self.logger.clear_trace_id()
 
 
@@ -408,9 +442,9 @@ _SENTINEL = object()
 
 class SubAgent:
     def __init__(self, model: Model, tools: List[Tool] = None, system_prompt: str = "",
-                skills: List[Skill] = None, agent_id: str = None,
+                skills: List[Skill] = None, name: str = None,
                 logger: AgentLogger = None):
-        self._agent_id = agent_id or f'sub_{id(self)}'
+        self.name = name or f'sub_{id(self)}'
         self.model = model
         self.system_prompt = system_prompt
 
@@ -471,6 +505,10 @@ Your available skills are:
                 context={"tool_name": tool_use.name, "tool_input": tool_use.input}
             )
         else:
+            self.logger.info(
+                f"Tool '{tool.name}' execution started",
+                context={"tool_name": tool.name, "tool_input": tool_use.input}
+            )
             with self.logger.span(f"tool_{tool.name}"):
                 try:
                     if tool.is_async:
@@ -514,62 +552,62 @@ Your available skills are:
         messages = self._normalize_input(messages)
         tools = list(self.tools.values())
 
+        self.logger.set_trace_id()
         self.logger.info(
             "SubAgent run started",
-            context={"agent_id": self._agent_id, "messages_count": len(messages)}
+            context={"agent_name": self.name}
         )
-        with self.logger.span("subagent_run"):
-            while True:
-                model_input = Model_Input(
-                    prompt=self.system_prompt + self.skill_prompt,
-                    tools=tools,
-                    messages=messages,
-                )
-                try:
-                    result = await self.model.async_invoke(model_input)
-                except Exception as e:
-                    self.logger.error(
-                        "SubAgent model invocation failed",
-                        context={"agent_id": self._agent_id, "error_type": type(e).__name__},
-                        exc_info=sys.exc_info()
+        try:
+            with self.logger.span("subagent_run"):
+                while True:
+                    model_input = Model_Input(
+                        prompt=self.system_prompt + self.skill_prompt,
+                        tools=tools,
+                        messages=messages,
                     )
-                    raise
+                    try:
+                        result = await self.model.async_invoke(model_input)
+                    except Exception as e:
+                        self.logger.error(
+                            f"SubAgent model run failed: {str(e)}",
+                            context={"agent_name": self.name, "error_type": type(e).__name__},
+                            exc_info=sys.exc_info()
+                        )
+                        raise e
 
-                messages.append(result)
-                self.logger.debug(
-                    "Model response received",
-                    context={"stop_reason": result.stop_reason, "agent_id": self._agent_id}
-                )
-
-                if result.stop_reason == 'tool_use':
+                    messages.append(result)
                     self.logger.debug(
-                        "Executing tool calls",
-                        context={"tool_count": len(result.tool_calls), "agent_id": self._agent_id}
+                        "Model response received",
+                        context={"agent_name": self.name, "stop_reason": result.stop_reason}
                     )
-                    for tool_use in result.tool_calls:
-                        tool_msg = await self.tool_execute(tool_use)
-                        messages.append(tool_msg)
-                elif result.stop_reason == 'end_turn':
-                    break
-                else:
-                    error_msg = f"SubAgent stop reason: {result.stop_reason}"
-                    self.logger.error(
-                        error_msg,
-                        context={"agent_id": self._agent_id, "stop_reason": result.stop_reason}
-                    )
-                    raise ValueError(error_msg)
 
-        if isinstance(result.content, list):
-            parts = [b.text for b in result.content if isinstance(b, TextBlock)]
-            text = '\n'.join(parts)
-        else:
-            text = str(result.content)
+                    if result.stop_reason == 'tool_use':
+                        for tool_use in result.tool_calls:
+                            tool_msg = await self.tool_execute(tool_use)
+                            messages.append(tool_msg)
+                    elif result.stop_reason == 'end_turn':
+                        break
+                    else:
+                        error_msg = f"SubAgent stop reason: {result.stop_reason}"
+                        self.logger.error(
+                            error_msg,
+                            context={"agent_name": self.name, "stop_reason": result.stop_reason}
+                        )
+                        raise ValueError(error_msg)
 
-        self.logger.info(
-            "SubAgent run completed",
-            context={"agent_id": self._agent_id}
-        )
-        return text
+            if isinstance(result.content, list):
+                parts = [b.text for b in result.content if isinstance(b, TextBlock)]
+                text = '\n'.join(parts)
+            else:
+                text = str(result.content)
+
+            self.logger.info(
+                "SubAgent run completed",
+                context={"agent_name": self.name}
+            )
+            return text
+        finally:
+            self.logger.clear_trace_id()
 
 
 

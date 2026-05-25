@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 
-from ..core.agenthook import HookContext
+from ..core.hook import HookContext
 from ..core.agent import SubAgent
 from ..core.message import HumanMessage
 
@@ -43,6 +43,12 @@ async def compress_session(
     # Phase 0: need at least 2 visible turns to make compression meaningful
     visible_turns = session.turns[session.window_start:]
     if len(visible_turns) <= 1:
+        if logger:
+            logger.debug(
+                "Compression skipped: %d visible turns (need at least 2)",
+                len(visible_turns),
+                context={"visible_turns": len(visible_turns)},
+            )
         return
 
     # Phase 1: divide visible turns into pending_zone and keep_zone
@@ -50,18 +56,46 @@ async def compress_session(
     pending_zone = list(visible_turns[:-keep_recent_turns])
 
     # Phase 2: if keep_zone is overweight, spill oldest turns into pending_zone
+    spill_count = 0
     while len(keep_zone) > 1:
         if sum(t.token_count for t in keep_zone) <= context_threshold:
             break
         pending_zone.append(keep_zone.pop(0))
+        spill_count += 1
+
+    if logger:
+        logger.info(
+            "Compression zones: %d pending + %d keep = %d turns (%d tokens)",
+            len(pending_zone), len(keep_zone), len(visible_turns),
+            sum(t.token_count for t in visible_turns),
+            context={
+                "pending_count": len(pending_zone),
+                "keep_count": len(keep_zone),
+                "total_tokens": sum(t.token_count for t in visible_turns),
+                "keep_tokens": sum(t.token_count for t in keep_zone),
+            },
+        )
+        if spill_count > 0:
+            logger.debug(
+                "Keep zone overweight, spilled %d turns to pending",
+                spill_count,
+                context={"spilled_count": spill_count},
+            )
 
     if not pending_zone:
         return
 
-    subagent = SubAgent(model=model, system_prompt=compress_prompt, logger=logger)
+    subagent = SubAgent(model=model, system_prompt=compress_prompt, logger=logger, name="ContextCompressor")
     # Phase 3: compress all uncompressed turns in pending_zone
     uncompressed_turns = [t for t in pending_zone if not t.is_summarized]
     if uncompressed_turns:
+        if logger:
+            logger.info(
+                "Starting compression: %d turns in pending zone",
+                len(uncompressed_turns),
+                context={"pending_turn_count": len(uncompressed_turns)},
+            )
+
         groups = []
         current_group = []
         current_group_tokens = 0
@@ -87,9 +121,29 @@ async def compress_session(
         if current_group:
             groups.append(current_group)
 
+        if logger:
+            logger.debug(
+                "Grouped %d uncompressed turns into %d groups",
+                len(uncompressed_turns), len(groups),
+                context={"total_turns": len(uncompressed_turns), "group_count": len(groups)},
+            )
+
         group_id_base = str(uuid.uuid4())
 
         for idx, group in enumerate(groups):
+            group_tokens = sum(t.token_count for t in group)
+            if logger:
+                logger.debug(
+                    "Compressing group %d/%d: %d turns, %d tokens",
+                    idx + 1, len(groups), len(group), group_tokens,
+                    context={
+                        "group_index": idx + 1,
+                        "total_groups": len(groups),
+                        "turns_in_group": len(group),
+                        "total_tokens": group_tokens,
+                    },
+                )
+
             input_messages = []
 
             for turn in group:
@@ -105,13 +159,37 @@ async def compress_session(
                 except Exception as e:
                     last_exception = e
                     if attempt < 2:
+                        if logger:
+                            logger.warning(
+                                "Compression group %d failed (attempt %d/3): %s",
+                                idx + 1, attempt + 1, e,
+                                context={"group_index": idx + 1, "attempt": attempt + 1},
+                            )
                         await asyncio.sleep(1)
             else:
+                if logger:
+                    logger.error(
+                        "Compression subagent permanently failed after 3 retries for group %d",
+                        idx + 1,
+                        context={"group_index": idx + 1, "last_error": str(last_exception)},
+                    )
                 raise RuntimeError(
                     f'Compression subagent failed after 3 retries: {last_exception}'
                 ) from last_exception
 
             full_summary = f"[Historical Conversation Summary]\n{summary_raw}"
+
+            if logger:
+                logger.info(
+                    "Group %d/%d compressed: %d turns -> summary (%d chars)",
+                    idx + 1, len(groups), len(group), len(full_summary),
+                    context={
+                        "group_index": idx + 1,
+                        "total_groups": len(groups),
+                        "turn_count": len(group),
+                        "summary_length": len(full_summary),
+                    },
+                )
 
             group_id = f"{group_id_base}_{idx}"
             for turn in group:
@@ -122,13 +200,21 @@ async def compress_session(
     session.compress_turn_count += 1
 
     # Phase 4: check threshold after compression
-    if session.get_visible_token_count() <= context_threshold:
+    tokens_after = session.get_visible_token_count()
+    if tokens_after <= context_threshold:
+        if logger:
+            logger.debug(
+                "After compression, token count (%d) within threshold, no skip needed",
+                tokens_after,
+                context={"tokens": tokens_after, "threshold": context_threshold},
+            )
         return
 
     # Phase 5: skip summaries by compression-group, from oldest to newest
     pending_start = session.window_start
     pending_end = session.window_start + len(pending_zone)
     skipped_group_ids = set()
+    skipped_turn_count_phase5 = 0
 
     for i in range(pending_start, pending_end):
         turn = session.turns[i]
@@ -140,19 +226,55 @@ async def compress_session(
             for t in session.turns[session.window_start:]:
                 if t.summary_group_id == group_id:
                     t.skip_summary = True
+                    skipped_turn_count_phase5 += 1
             skipped_group_ids.add(group_id)
             if session.get_visible_token_count() <= context_threshold:
+                if logger:
+                    logger.info(
+                        "Skipped %d summary groups (%d turns) to meet threshold",
+                        len(skipped_group_ids), skipped_turn_count_phase5,
+                        context={
+                            "skipped_groups": len(skipped_group_ids),
+                            "skipped_turns": skipped_turn_count_phase5,
+                            "tokens_after": session.get_visible_token_count(),
+                            "threshold": context_threshold,
+                        },
+                    )
                 return
         elif not group_id:
             turn.skip_summary = True
+            skipped_turn_count_phase5 += 1
             if session.get_visible_token_count() <= context_threshold:
+                if logger:
+                    logger.info(
+                        "Skipped %d summary groups (%d turns) to meet threshold",
+                        len(skipped_group_ids), skipped_turn_count_phase5,
+                        context={
+                            "skipped_groups": len(skipped_group_ids),
+                            "skipped_turns": skipped_turn_count_phase5,
+                            "tokens_after": session.get_visible_token_count(),
+                            "threshold": context_threshold,
+                        },
+                    )
                 return
 
     # Phase 6: advance window_start past summarized turns
+    old_window_start = session.window_start
     max_start = len(session.turns) - 1
     while session.window_start < max_start:
         session.window_start += 1
         if session.get_visible_token_count() <= context_threshold:
+            hidden_turns = session.window_start - old_window_start
+            if logger:
+                logger.info(
+                    "Window advanced: %d -> %d (hidden %d turns)",
+                    old_window_start, session.window_start, hidden_turns,
+                    context={
+                        "old_window_start": old_window_start,
+                        "new_window_start": session.window_start,
+                        "hidden_turns": hidden_turns,
+                    },
+                )
             return
 
 
@@ -174,12 +296,26 @@ def create_ctx_compress_hook(
         total_tokens = session.get_visible_token_count()
         needed = total_tokens >= threshold
 
+        if needed:
+            agent.logger.info(
+                "Compression needed: %d/%d",
+                total_tokens, threshold,
+                context={"visible_tokens": total_tokens, "threshold": threshold, "compression_ratio": round(total_tokens / max_context_tokens, 3)},
+            )
+        else:
+            agent.logger.debug(
+                "Compression not needed: %d/%d",
+                total_tokens, threshold,
+                context={"visible_tokens": total_tokens, "threshold": threshold, "compression_ratio": round(total_tokens / max_context_tokens, 3)},
+            )
+
         ctx.set('compression_needed', needed)
 
     async def execute_compression(ctx: HookContext):
         needed = ctx.get('compression_needed', False)
         if not needed:
             ctx.set('compression_result', 'skipped')
+            ctx.agent.logger.debug("Compression execution skipped (not needed)")
             return
 
         agent = ctx.agent

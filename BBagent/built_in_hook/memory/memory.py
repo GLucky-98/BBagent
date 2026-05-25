@@ -116,6 +116,52 @@ class MemoryManager:
         self.logger.info(f"Restored {len(all_data['ids'])} memories from ChromaDB")
         self._bm25_dirty = True
 
+    @property
+    def _cleanup_state_path(self) -> Path:
+        return self.memory_dir / "cleanup_state.json"
+
+    def _load_cleanup_state(self) -> dict:
+        path = self._cleanup_state_path
+        if not path.exists():
+            return {"mutation_count": 0, "last_cleanup": None, "last_mutation": None}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            self.logger.warning(f"Failed to read cleanup state file, resetting: {path}")
+            return {"mutation_count": 0, "last_cleanup": None, "last_mutation": None}
+
+    def _save_cleanup_state(self, state: dict):
+        path = self._cleanup_state_path
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            self.logger.warning(f"Failed to write cleanup state file: {e}")
+
+    def increment_mutation_count(self, count: int = 1):
+        state = self._load_cleanup_state()
+        state["mutation_count"] = state.get("mutation_count", 0) + count
+        state["last_mutation"] = datetime.now().isoformat()
+        self._save_cleanup_state(state)
+
+    def decrement_mutation_count(self, count: int = 1):
+        state = self._load_cleanup_state()
+        state["mutation_count"] = max(0, state.get("mutation_count", 0) - count)
+        self._save_cleanup_state(state)
+
+    def check_and_reset_mutation(self, threshold: int) -> bool:
+        if threshold < 0:
+            return False
+        state = self._load_cleanup_state()
+        count = state.get("mutation_count", 0)
+        if count >= threshold:
+            state["mutation_count"] = 0
+            state["last_cleanup"] = datetime.now().isoformat()
+            self._save_cleanup_state(state)
+            return True
+        return False
+
     async def _add_to_chroma(self, memory: Memory, embedding: list[float] = None):
         if embedding is None:
             embedding = await self.embedding.get_embedding(memory.content)
@@ -147,7 +193,11 @@ class MemoryManager:
 
         pending = [m for m in memories if m.id not in existing_ids]
         if not pending:
-            self.logger.debug(f"All {len(memories)} memories already exist, skipping")
+            self.logger.debug(
+                "All %d memories already exist, skipping",
+                len(memories),
+                context={"duplicate_count": len(memories)},
+            )
             return
 
         skipped = len(memories) - len(pending)
@@ -170,8 +220,14 @@ class MemoryManager:
 
         await self._add_batch_to_chroma(pending, embeddings)
 
-        self.logger.info(f"Added {len(pending)} memories" + (f", skipped {skipped} duplicates" if skipped else ""))
+        self.logger.info(
+            "Added %d memories%s",
+            len(pending),
+            f", skipped {skipped} duplicates" if skipped else "",
+            context={"added_count": len(pending), "skipped_duplicates": skipped},
+        )
         self._dump_memories_json()
+        self.increment_mutation_count(len(pending))
         self._bm25_dirty = True
 
     def delete_memory(self, memory_id: str):
@@ -193,6 +249,11 @@ class MemoryManager:
         metadata["access_count"] = metadata.get("access_count", 0) + 1
         metadata["last_accessed"] = datetime.now().isoformat()
         self.collection.update(ids=[memory_id], metadatas=[metadata])
+        self.logger.debug(
+            "Incremented access count for memory %s",
+            memory_id[:12],
+            context={"memory_id_prefix": memory_id[:12]},
+        )
 
     def _ensure_bm25(self):
         if self._bm25_dirty:
@@ -282,7 +343,16 @@ class MemoryManager:
                 results["ids"].append(doc_id)
                 results["documents"].append(id_to_doc[doc_id])
 
-        self.logger.debug(f"Hybrid search returned {len(results['ids'])} results: query={query[:50]}")
+        self.logger.debug(
+            "Hybrid search returned %d results: query=%.50s",
+            len(results["ids"]), query,
+            context={
+                "result_count": len(results["ids"]),
+                "bm25_count": len(bm25_ids),
+                "vector_count": len(vector_ids),
+                "query_preview": query[:50],
+            },
+        )
         return results
 
     @property

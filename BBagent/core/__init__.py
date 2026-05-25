@@ -1,5 +1,5 @@
 from .agent import Agent, AgentConfig, AgentState, SubAgent
-from .agenthook import AgentHook, Hook, HookType, HookControl, HookContext
+from .hook import AgentHook, Hook, HookType, HookControl, HookContext
 from .input import AgentEvent, EventType, InputChannel
 from .logger import AgentLogger, StructuredFormatter, ContextFilter
 from .mcp import (
@@ -23,7 +23,7 @@ from .message import (
 )
 from .model import Model, Model_Input, AnthropicModel, OpenAIModel
 from .skill import Skill, SkillMetadata, SkillManager
-from .team import AgentTeam
+from .team import AgentTeam, TeamConfig
 from .tool import (
     Tool,
     ToolManager,
@@ -70,6 +70,7 @@ __all__ = [
     "SkillMetadata",
     "SkillManager",
     "AgentTeam",
+    "TeamConfig",
     "Tool",
     "ToolManager",
     "inline_refs",

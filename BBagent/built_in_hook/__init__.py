@@ -77,6 +77,7 @@ class MemoryCompressConfig:
     extract_user_prompt: str = EXTRACT_USER_PROMPT
     clean_prompt: str = CLEAN_SYSTEM_PROMPT
     clean_user_prompt: str = CLEAN_USER_PROMPT
+    clean_mutation_threshold: int = 50
     submodel: Model = None
     embedding_model: Embedding = None
 
@@ -128,6 +129,7 @@ def setup_agent_hook(agent: Agent, config: MemoryCompressConfig = None):
         inject_bm25_weight=config.bm25_weight,
         inject_vector_weight=config.vector_weight,
         max_candidates=config.max_candidates,
+        clean_mutation_threshold=config.clean_mutation_threshold,
     )
 
     hook = agent.hook

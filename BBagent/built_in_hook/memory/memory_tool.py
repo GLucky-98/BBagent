@@ -139,10 +139,18 @@ async def inject_memory_context(
     logger: AgentLogger = None,
 ) -> str:
     if memory_manager.count == 0:
+        if logger:
+            logger.debug("Memory store is empty, skipping injection")
         return None
 
     if memory_manager.count <= max_candidates:
         candidates = memory_manager.get_all()
+        if logger:
+            logger.debug(
+                "Using all %d memories as candidates (small store)",
+                memory_manager.count,
+                context={"total_count": memory_manager.count},
+            )
     else:
         hybrid_result = await memory_manager.hybrid_search(
             query=query,
@@ -152,11 +160,23 @@ async def inject_memory_context(
             vector_weight=vector_weight,
         )
         if not hybrid_result.get("ids"):
+            if logger:
+                logger.debug(
+                    "Hybrid search returned no candidates for query: %.50s",
+                    query,
+                    context={"query_preview": query[:50]},
+                )
             return None
         candidates = [
             {"id": hybrid_result["ids"][i], "content": hybrid_result["documents"][i]}
             for i in range(len(hybrid_result["ids"]))
         ]
+        if logger:
+            logger.info(
+                "Hybrid search returned %d candidates for query: %.50s",
+                len(candidates), query,
+                context={"candidate_count": len(candidates), "query_preview": query[:50]},
+            )
 
     if not candidates:
         return None
@@ -172,6 +192,7 @@ async def inject_memory_context(
         system_prompt=INJECT_MEMORIES_SUBAGENT_PROMPT.format(max_inject=max_inject),
         tools=[select_tool],
         logger=logger,
+        name="MemoryInjector",
     )
 
     prompt = f"User query: {query}\n\nCandidate memories:\n{candidates_text}"
@@ -186,7 +207,20 @@ async def inject_memory_context(
     captured_ids.clear()
 
     if not valid_ids:
+        if logger:
+            logger.debug(
+                "Memory selector chose 0/%d memories",
+                len(candidates),
+                context={"candidate_count": len(candidates), "selected_count": 0},
+            )
         return None
+
+    if logger:
+        logger.info(
+            "Memory selector chose %d/%d memories",
+            len(valid_ids), len(candidates),
+            context={"selected_count": len(valid_ids), "candidate_count": len(candidates)},
+        )
 
     candidate_map = {c["id"]: c["content"] for c in candidates}
     valid_contents = []

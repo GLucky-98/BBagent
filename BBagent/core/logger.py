@@ -117,8 +117,8 @@ class AgentLogger:
     def info(self, msg: str, context: dict = None):
         self._log(logging.INFO, msg, context)
 
-    def warning(self, msg: str, context: dict = None):
-        self._log(logging.WARNING, msg, context)
+    def warning(self, msg: str, context: dict = None, exc_info=None):
+        self._log(logging.WARNING, msg, context, exc_info=exc_info)
 
     def error(self, msg: str, context: dict = None, exc_info=None):
         self._log(logging.ERROR, msg, context, exc_info=exc_info)
@@ -167,6 +167,12 @@ class _NullLogger:
         pass
 
     def fatal(self, msg: str, context: dict = None, exc_info=None):
+        pass
+
+    def set_trace_id(self, trace_id: str = ""):
+        pass
+
+    def clear_trace_id(self):
         pass
 
     @contextmanager

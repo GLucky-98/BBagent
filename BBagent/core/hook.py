@@ -23,7 +23,6 @@ class HookType(Enum):
     ON_MESSAGE = "on_message"
 
     ON_ERROR = "on_error"
-    ON_FATAL_ERROR = "on_fatal_error"
 
     AFTER_RUN = "after_run"
 
@@ -75,8 +74,7 @@ class Hook:
             agent = context.agent
             agent.logger.warning(
                 f"Hook '{self.name}' execution failed: {e}",
-                context={"hook_type": self.hook_type.value, "hook_name": self.name},
-                exc_info=True
+                context={"hook_type": self.hook_type.value, "hook_name": self.name}
             )
             if self.hook_type != HookType.ON_ERROR:
                 await agent.hook.trigger(HookType.ON_ERROR, e)
