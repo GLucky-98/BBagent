@@ -28,9 +28,7 @@ class OllamaEmbedding(Embedding):
             return await self._batch_embed(texts, truncate)
         except Exception:
             logger.warning(
-                "Batch embedding failed (%d texts, model=%s). "
-                "Falling back to individual requests.",
-                len(texts), self.model,
+                f"Batch embedding failed ({len(texts)} texts, model={self.model}). Falling back to individual requests.",
             )
             return await self._embed_individually(texts, truncate)
 
@@ -75,16 +73,15 @@ class OllamaEmbedding(Embedding):
                     else:
                         failed_indices.append(i)
                         logger.warning(
-                            "Text [%d] embedding failed after 3 retries (model=%s), skipping. "
-                            "Text preview: %.100s...",
-                            i, self.model, text,
+                            f"Text [{i}] embedding failed after 3 retries (model={self.model}), skipping. "
+                            f"Text preview: {text[:100]}...",
                         )
 
         success_count = sum(1 for e in embeddings if e is not None)
         if failed_indices:
             logger.warning(
-                "Individual embedding completed: %d/%d succeeded, %d failed (indices: %s)",
-                success_count, len(texts), len(failed_indices), failed_indices,
+                f"Individual embedding completed: {success_count}/{len(texts)} succeeded, "
+                f"{len(failed_indices)} failed (indices: {failed_indices})",
             )
         if success_count == 0:
             raise RuntimeError(

@@ -65,22 +65,24 @@ class Hook:
             self.name = getattr(self.handler, '__name__', str(self.handler))
 
     async def execute(self, context: HookContext, *args, **kwargs) -> Any:
-        try:
-            if asyncio.iscoroutinefunction(self.handler):
-                return await self.handler(context, *args, **kwargs)
-            else:
-                return self.handler(context, *args, **kwargs)
-        except Exception as e:
-            agent = context.agent
-            agent.logger.warning(
-                f"Hook '{self.name}' execution failed: {e}",
-                context={"hook_type": self.hook_type.value, "hook_name": self.name}
-            )
-            if self.hook_type != HookType.ON_ERROR:
-                await agent.hook.trigger(HookType.ON_ERROR, e)
-            if self.critical:
-                raise
-            return None
+        agent = context.agent
+        span_name = f"hook_{self.name}"
+        with agent.logger.span(span_name):
+            try:
+                if asyncio.iscoroutinefunction(self.handler):
+                    return await self.handler(context, *args, **kwargs)
+                else:
+                    return self.handler(context, *args, **kwargs)
+            except Exception as e:
+                agent.logger.warning(
+                    f"Hook '{self.name}' execution failed: {e}",
+                    context={"hook_type": self.hook_type.value, "hook_name": self.name}
+                )
+                if self.hook_type != HookType.ON_ERROR:
+                    await agent.hook.trigger(HookType.ON_ERROR, e)
+                if self.critical:
+                    raise
+                return None
 
 
 class AgentHook:

@@ -108,22 +108,76 @@ class AgentLogger:
         finally:
             self._span_stack.pop()
 
+    @staticmethod
+    def _infer_tag(span_name: str) -> Optional[str]:
+        if span_name.startswith("tool_"):
+            return "TOOL"
+        if span_name.startswith("hook_"):
+            return "HOOK"
+        if span_name.startswith("agent_") or span_name.startswith("event_handle"):
+            return "AGENT"
+        if span_name.startswith("subagent_"):
+            return "SUBAGENT"
+        return None
+
+    def _format_msg(self, msg: str, tag: Optional[str], args: tuple) -> str:
+        if args:
+            msg = msg % args
+        if tag:
+            msg = f"[{tag}] {msg}"
+        return msg
+
     def _log(self, level: int, msg: str, context: dict = None, exc_info=None):
         self._logger.log(level, msg, extra={"context": context or {}}, exc_info=exc_info)
 
-    def debug(self, msg: str, context: dict = None):
-        self._log(logging.DEBUG, msg, context)
+    def debug(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+        if tag is None:
+            for span_id in reversed(self._span_stack):
+                inferred = self._infer_tag(span_id)
+                if inferred:
+                    tag = inferred
+                    break
+        msg = self._format_msg(msg, tag, args)
+        self._log(logging.DEBUG, msg, context, exc_info=exc_info)
 
-    def info(self, msg: str, context: dict = None):
-        self._log(logging.INFO, msg, context)
+    def info(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+        if tag is None:
+            for span_id in reversed(self._span_stack):
+                inferred = self._infer_tag(span_id)
+                if inferred:
+                    tag = inferred
+                    break
+        msg = self._format_msg(msg, tag, args)
+        self._log(logging.INFO, msg, context, exc_info=exc_info)
 
-    def warning(self, msg: str, context: dict = None, exc_info=None):
+    def warning(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+        if tag is None:
+            for span_id in reversed(self._span_stack):
+                inferred = self._infer_tag(span_id)
+                if inferred:
+                    tag = inferred
+                    break
+        msg = self._format_msg(msg, tag, args)
         self._log(logging.WARNING, msg, context, exc_info=exc_info)
 
-    def error(self, msg: str, context: dict = None, exc_info=None):
+    def error(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+        if tag is None:
+            for span_id in reversed(self._span_stack):
+                inferred = self._infer_tag(span_id)
+                if inferred:
+                    tag = inferred
+                    break
+        msg = self._format_msg(msg, tag, args)
         self._log(logging.ERROR, msg, context, exc_info=exc_info)
 
-    def fatal(self, msg: str, context: dict = None, exc_info=None):
+    def fatal(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+        if tag is None:
+            for span_id in reversed(self._span_stack):
+                inferred = self._infer_tag(span_id)
+                if inferred:
+                    tag = inferred
+                    break
+        msg = self._format_msg(msg, tag, args)
         self._log(logging.CRITICAL, msg, context, exc_info=exc_info)
 
     def add_handler(self, handler: logging.Handler):
@@ -154,19 +208,19 @@ class _NullLogger:
     can be made unconditionally without None-checking.
     """
 
-    def debug(self, msg: str, context: dict = None):
+    def debug(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
         pass
 
-    def info(self, msg: str, context: dict = None):
+    def info(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
         pass
 
-    def warning(self, msg: str, context: dict = None):
+    def warning(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
         pass
 
-    def error(self, msg: str, context: dict = None, exc_info=None):
+    def error(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
         pass
 
-    def fatal(self, msg: str, context: dict = None, exc_info=None):
+    def fatal(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
         pass
 
     def set_trace_id(self, trace_id: str = ""):

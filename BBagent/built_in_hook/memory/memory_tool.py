@@ -147,8 +147,7 @@ async def inject_memory_context(
         candidates = memory_manager.get_all()
         if logger:
             logger.debug(
-                "Using all %d memories as candidates (small store)",
-                memory_manager.count,
+                f"Using all {memory_manager.count} memories as candidates (small store)",
                 context={"total_count": memory_manager.count},
             )
     else:
@@ -162,8 +161,7 @@ async def inject_memory_context(
         if not hybrid_result.get("ids"):
             if logger:
                 logger.debug(
-                    "Hybrid search returned no candidates for query: %.50s",
-                    query,
+                    f"Hybrid search returned no candidates for query: {query[:50]}",
                     context={"query_preview": query[:50]},
                 )
             return None
@@ -173,8 +171,7 @@ async def inject_memory_context(
         ]
         if logger:
             logger.info(
-                "Hybrid search returned %d candidates for query: %.50s",
-                len(candidates), query,
+                f"Hybrid search returned {len(candidates)} candidates for query: {query[:50]}",
                 context={"candidate_count": len(candidates), "query_preview": query[:50]},
             )
 
@@ -209,16 +206,14 @@ async def inject_memory_context(
     if not valid_ids:
         if logger:
             logger.debug(
-                "Memory selector chose 0/%d memories",
-                len(candidates),
+                f"Memory selector chose 0/{len(candidates)} memories",
                 context={"candidate_count": len(candidates), "selected_count": 0},
             )
         return None
 
     if logger:
         logger.info(
-            "Memory selector chose %d/%d memories",
-            len(valid_ids), len(candidates),
+            f"Memory selector chose {len(valid_ids)}/{len(candidates)} memories",
             context={"selected_count": len(valid_ids), "candidate_count": len(candidates)},
         )
 

@@ -177,8 +177,7 @@ async def extract_memories(
 
     if logger:
         logger.info(
-            "Memory extraction SubAgent started (%d turns)",
-            len(turns),
+            f"Memory extraction SubAgent started ({len(turns)} turns)",
             context={"turn_count": len(turns)},
         )
 
@@ -212,8 +211,7 @@ async def extract_memories(
     except Exception as e:
         if logger:
             logger.warning(
-                "Memory extraction SubAgent failed: %s",
-                e,
+                f"Memory extraction SubAgent failed: {e}",
                 context={"error": str(e)},
             )
         return
@@ -322,8 +320,7 @@ async def clean_memory(
     except Exception as e:
         if logger:
             logger.warning(
-                "Memory clean SubAgent failed: %s",
-                e,
+                f"Memory clean SubAgent failed: {e}",
                 context={"error": str(e)},
             )
         return
@@ -385,14 +382,12 @@ def _hard_clean_memories(memory_manager: MemoryManager, logger: logging.Logger =
     if logger:
         if to_delete:
             logger.info(
-                "Hard clean: examined %d memories, deleted %d (stale/empty/corrupted)",
-                len(ids), len(to_delete),
+                f"Hard clean: examined {len(ids)} memories, deleted {len(to_delete)} (stale/empty/corrupted)",
                 context={"total_checked": len(ids), "deleted_count": len(to_delete)},
             )
         else:
             logger.debug(
-                "Hard clean: examined %d memories, no stale memories found",
-                len(ids),
+                f"Hard clean: examined {len(ids)} memories, no stale memories found",
                 context={"total_checked": len(ids), "deleted_count": 0},
             )
 
@@ -421,8 +416,7 @@ async def do_extract_turns(
 
     if logger:
         logger.debug(
-            "Extraction: %d turns grouped into %d groups",
-            len(turns), len(groups),
+            f"Extraction: {len(turns)} turns grouped into {len(groups)} groups",
             context={"total_turns": len(turns), "group_count": len(groups)},
         )
 
@@ -436,8 +430,7 @@ async def do_extract_turns(
         )
         if logger:
             logger.info(
-                "Extraction group %d/%d completed",
-                idx + 1, len(groups),
+                f"Extraction group {idx + 1}/{len(groups)} completed",
                 context={"group_index": idx + 1, "total_groups": len(groups), "turn_count": len(group)},
             )
         for turn in group:
@@ -479,8 +472,7 @@ def create_memory_hook(
             return
 
         agent.logger.info(
-            "Extracting memories from %d completed turns (before compress)",
-            len(completed_turns),
+            f"Extracting memories from {len(completed_turns)} completed turns (before compress)",
             context={"turn_count": len(completed_turns)},
         )
 
@@ -504,8 +496,7 @@ def create_memory_hook(
             return
 
         agent.logger.info(
-            "Extracting memories from %d turns (new session)",
-            len(unextracted),
+            f"Extracting memories from {len(unextracted)} turns (new session)",
             context={"turn_count": len(unextracted)},
         )
 
@@ -519,8 +510,7 @@ def create_memory_hook(
             )
         except Exception as e:
             agent.logger.warning(
-                "Memory extraction on new session failed: %s",
-                e,
+                f"Memory extraction on new session failed: {e}",
                 context={"error": str(e)},
             )
 
@@ -534,15 +524,13 @@ def create_memory_hook(
         mutation_count = mutation_state.get("mutation_count", 0)
         if not memory_manager.check_and_reset_mutation(clean_mutation_threshold):
             logger.debug(
-                "AI clean skipped: mutation count %d/%d",
-                mutation_count, clean_mutation_threshold,
+                f"AI clean skipped: mutation count {mutation_count}/{clean_mutation_threshold}",
                 context={"current_count": mutation_count, "threshold": clean_mutation_threshold},
             )
             return
 
         logger.info(
-            "AI clean triggered: mutation count %d/%d",
-            mutation_count, clean_mutation_threshold,
+            f"AI clean triggered: mutation count {mutation_count}/{clean_mutation_threshold}",
             context={"current_count": mutation_count, "threshold": clean_mutation_threshold},
         )
 
@@ -555,8 +543,7 @@ def create_memory_hook(
             )
         except Exception as e:
             logger.warning(
-                "AI memory clean SubAgent failed: %s",
-                e,
+                f"AI memory clean SubAgent failed: {e}",
                 context={"error": str(e)},
             )
 
@@ -605,8 +592,7 @@ def create_memory_hook(
 
         memory_count = len(context.split("\n- "))
         agent.logger.info(
-            "Injected %d memories into user message",
-            memory_count,
+            f"Injected {memory_count} memories into user message",
             context={"memory_count": memory_count},
         )
 

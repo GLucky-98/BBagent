@@ -335,23 +335,24 @@ Your available skills are:
     async def run(self, human_msg:HumanMessage):
         self.state = AgentState.Running
         self.logger.set_trace_id()
-        self.logger.info(
-            "Agent run started",
-            context={"session_id": self.session.session_id}
-        )
-        self.session.add_message(human_msg)
-        await self.hook.trigger(HookType.AFTER_INPUT)
-        try:
-            async for chunk in self.stream_tool_loop():
-                        yield chunk
-        except Exception as e:
-            raise e
-        finally:
-            self.session.save()
-            self.state = AgentState.Ready
-            await self.hook.trigger(HookType.AFTER_RUN)
-            self.logger.info("Agent run completed")
-            self.logger.clear_trace_id()
+        with self.logger.span("agent_run"):
+            self.logger.info(
+                "Agent run started",
+                context={"session_id": self.session.id}
+            )
+            self.session.add_message(human_msg)
+            await self.hook.trigger(HookType.AFTER_INPUT)
+            try:
+                async for chunk in self.stream_tool_loop():
+                            yield chunk
+            except Exception as e:
+                raise e
+            finally:
+                self.session.save()
+                self.state = AgentState.Ready
+                await self.hook.trigger(HookType.AFTER_RUN)
+                self.logger.info("Agent run completed")
+                self.logger.clear_trace_id()
 
     def on_output(self, callback: Callable):
         self._output_callback = callback
@@ -368,51 +369,53 @@ Your available skills are:
             self.logger.warning("Agent already running, start ignored")
             return
 
-        self.logger.info("Agent event loop started")
-        self._running = True
-        self.state = AgentState.Waiting
+        with self.logger.span("agent_start"):
+            self.logger.info("Agent event loop started")
+            self._running = True
+            self.state = AgentState.Waiting
 
-        await self.input.start(self._event_queue)
+            await self.input.start(self._event_queue)
 
-        try:
-            while self._running:
-                event = await self._event_queue.get()
-                if event is _SENTINEL:
-                    break
-                self.state = AgentState.Running
-                try:
-                    await self._handle_event(event)
-                except Exception:
-                    pass
-                if self._running:
-                    self.state = AgentState.Waiting
-        finally:
-            await self.input.stop()
-            self._event_queue = asyncio.Queue()
-            self._running = False
-            self.state = AgentState.Ready
-            self.logger.info("Agent event loop stopped")
+            try:
+                while self._running:
+                    event = await self._event_queue.get()
+                    if event is _SENTINEL:
+                        break
+                    self.state = AgentState.Running
+                    try:
+                        await self._handle_event(event)
+                    except Exception:
+                        pass
+                    if self._running:
+                        self.state = AgentState.Waiting
+            finally:
+                await self.input.stop()
+                self._event_queue = asyncio.Queue()
+                self._running = False
+                self.state = AgentState.Ready
+                self.logger.info("Agent event loop stopped")
 
     async def interrupt(self):
         self.hook.context.break_loop()
 
     async def stop(self):
-        self.logger.info("Agent stopping")
-        self._running = False
-        self.hook.context.break_loop()
-        self._event_queue.put_nowait(_SENTINEL)
+        with self.logger.span("agent_stop"):
+            self.logger.info("Agent stopping")
+            self._running = False
+            self.hook.context.break_loop()
+            self._event_queue.put_nowait(_SENTINEL)
 
     async def _handle_event(self, event: AgentEvent):
         self.logger.set_trace_id(event.correlation_id)
-        self.logger.info(
-            "Event handling started",
-            context={
-                "event_type": event.type.value,
-                "source_id": event.source_id,
-                "correlation_id": event.correlation_id,
-            }
-        )
         with self.logger.span("event_handle"):
+            self.logger.info(
+                "Event handling started",
+                context={
+                    "event_type": event.type.value,
+                    "source_id": event.source_id,
+                    "correlation_id": event.correlation_id,
+                }
+            )
             msg = event.to_human_message()
             self.session.add_message(msg)
             await self.hook.trigger(HookType.AFTER_INPUT, msg)
@@ -488,12 +491,13 @@ class SubAgent:
 
 Your available skills are:
 """]
-        skill_short_prompt = [f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in self.skills]
+        skill_short_prompt = [f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in self.skills.values()]
         return '\n'.join(skill_system_prompt + skill_short_prompt)
 
     def add_skills(self, skills: List[Skill]):
-        self.skills.extend(skills)
-        self.skill_prompt += '\n'.join([f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in skills])
+        self.skills.update({s.name: s for s in skills})
+        new_prompt = '\n'.join([f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in skills])
+        self.skill_prompt += new_prompt
 
     async def tool_execute(self, tool_use: ToolUseBlock) -> ToolMessage:
         tool = self.tools.get(tool_use.name)

@@ -45,8 +45,7 @@ async def compress_session(
     if len(visible_turns) <= 1:
         if logger:
             logger.debug(
-                "Compression skipped: %d visible turns (need at least 2)",
-                len(visible_turns),
+                f"Compression skipped: {len(visible_turns)} visible turns (need at least 2)",
                 context={"visible_turns": len(visible_turns)},
             )
         return
@@ -64,21 +63,23 @@ async def compress_session(
         spill_count += 1
 
     if logger:
+        pending_count = len(pending_zone)
+        keep_count = len(keep_zone)
+        visible_count = len(visible_turns)
+        total_tok = sum(t.token_count for t in visible_turns)
+        keep_tok = sum(t.token_count for t in keep_zone)
         logger.info(
-            "Compression zones: %d pending + %d keep = %d turns (%d tokens)",
-            len(pending_zone), len(keep_zone), len(visible_turns),
-            sum(t.token_count for t in visible_turns),
+            f"Compression zones: {pending_count} pending + {keep_count} keep = {visible_count} turns ({total_tok} tokens)",
             context={
-                "pending_count": len(pending_zone),
-                "keep_count": len(keep_zone),
-                "total_tokens": sum(t.token_count for t in visible_turns),
-                "keep_tokens": sum(t.token_count for t in keep_zone),
+                "pending_count": pending_count,
+                "keep_count": keep_count,
+                "total_tokens": total_tok,
+                "keep_tokens": keep_tok,
             },
         )
         if spill_count > 0:
             logger.debug(
-                "Keep zone overweight, spilled %d turns to pending",
-                spill_count,
+                f"Keep zone overweight, spilled {spill_count} turns to pending",
                 context={"spilled_count": spill_count},
             )
 
@@ -91,8 +92,7 @@ async def compress_session(
     if uncompressed_turns:
         if logger:
             logger.info(
-                "Starting compression: %d turns in pending zone",
-                len(uncompressed_turns),
+                f"Starting compression: {len(uncompressed_turns)} turns in pending zone",
                 context={"pending_turn_count": len(uncompressed_turns)},
             )
 
@@ -123,8 +123,7 @@ async def compress_session(
 
         if logger:
             logger.debug(
-                "Grouped %d uncompressed turns into %d groups",
-                len(uncompressed_turns), len(groups),
+                f"Grouped {len(uncompressed_turns)} uncompressed turns into {len(groups)} groups",
                 context={"total_turns": len(uncompressed_turns), "group_count": len(groups)},
             )
 
@@ -134,8 +133,7 @@ async def compress_session(
             group_tokens = sum(t.token_count for t in group)
             if logger:
                 logger.debug(
-                    "Compressing group %d/%d: %d turns, %d tokens",
-                    idx + 1, len(groups), len(group), group_tokens,
+                    f"Compressing group {idx + 1}/{len(groups)}: {len(group)} turns, {group_tokens} tokens",
                     context={
                         "group_index": idx + 1,
                         "total_groups": len(groups),
@@ -161,16 +159,14 @@ async def compress_session(
                     if attempt < 2:
                         if logger:
                             logger.warning(
-                                "Compression group %d failed (attempt %d/3): %s",
-                                idx + 1, attempt + 1, e,
+                                f"Compression group {idx + 1} failed (attempt {attempt + 1}/3): {e}",
                                 context={"group_index": idx + 1, "attempt": attempt + 1},
                             )
                         await asyncio.sleep(1)
             else:
                 if logger:
                     logger.error(
-                        "Compression subagent permanently failed after 3 retries for group %d",
-                        idx + 1,
+                        f"Compression subagent permanently failed after 3 retries for group {idx + 1}",
                         context={"group_index": idx + 1, "last_error": str(last_exception)},
                     )
                 raise RuntimeError(
@@ -181,8 +177,7 @@ async def compress_session(
 
             if logger:
                 logger.info(
-                    "Group %d/%d compressed: %d turns -> summary (%d chars)",
-                    idx + 1, len(groups), len(group), len(full_summary),
+                    f"Group {idx + 1}/{len(groups)} compressed: {len(group)} turns -> summary ({len(full_summary)} chars)",
                     context={
                         "group_index": idx + 1,
                         "total_groups": len(groups),
@@ -204,8 +199,7 @@ async def compress_session(
     if tokens_after <= context_threshold:
         if logger:
             logger.debug(
-                "After compression, token count (%d) within threshold, no skip needed",
-                tokens_after,
+                f"After compression, token count ({tokens_after}) within threshold, no skip needed",
                 context={"tokens": tokens_after, "threshold": context_threshold},
             )
         return
@@ -231,8 +225,7 @@ async def compress_session(
             if session.get_visible_token_count() <= context_threshold:
                 if logger:
                     logger.info(
-                        "Skipped %d summary groups (%d turns) to meet threshold",
-                        len(skipped_group_ids), skipped_turn_count_phase5,
+                        f"Skipped {len(skipped_group_ids)} summary groups ({skipped_turn_count_phase5} turns) to meet threshold",
                         context={
                             "skipped_groups": len(skipped_group_ids),
                             "skipped_turns": skipped_turn_count_phase5,
@@ -247,8 +240,7 @@ async def compress_session(
             if session.get_visible_token_count() <= context_threshold:
                 if logger:
                     logger.info(
-                        "Skipped %d summary groups (%d turns) to meet threshold",
-                        len(skipped_group_ids), skipped_turn_count_phase5,
+                        f"Skipped {len(skipped_group_ids)} summary groups ({skipped_turn_count_phase5} turns) to meet threshold",
                         context={
                             "skipped_groups": len(skipped_group_ids),
                             "skipped_turns": skipped_turn_count_phase5,
@@ -267,8 +259,7 @@ async def compress_session(
             hidden_turns = session.window_start - old_window_start
             if logger:
                 logger.info(
-                    "Window advanced: %d -> %d (hidden %d turns)",
-                    old_window_start, session.window_start, hidden_turns,
+                    f"Window advanced: {old_window_start} -> {session.window_start} (hidden {hidden_turns} turns)",
                     context={
                         "old_window_start": old_window_start,
                         "new_window_start": session.window_start,

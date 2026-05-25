@@ -194,8 +194,7 @@ class MemoryManager:
         pending = [m for m in memories if m.id not in existing_ids]
         if not pending:
             self.logger.debug(
-                "All %d memories already exist, skipping",
-                len(memories),
+                f"All {len(memories)} memories already exist, skipping",
                 context={"duplicate_count": len(memories)},
             )
             return
@@ -212,8 +211,7 @@ class MemoryManager:
         if len(valid_pairs) < len(pending):
             failed_count = len(pending) - len(valid_pairs)
             self.logger.warning(
-                "Partial embedding: %d/%d memories embedded, %d failed",
-                len(valid_pairs), len(pending), failed_count,
+                f"Partial embedding: {len(valid_pairs)}/{len(pending)} memories embedded, {failed_count} failed",
             )
         pending = [m for m, _ in valid_pairs]
         embeddings = [e for _, e in valid_pairs]
@@ -221,9 +219,7 @@ class MemoryManager:
         await self._add_batch_to_chroma(pending, embeddings)
 
         self.logger.info(
-            "Added %d memories%s",
-            len(pending),
-            f", skipped {skipped} duplicates" if skipped else "",
+            f"Added {len(pending)} memories{f', skipped {skipped} duplicates' if skipped else ''}",
             context={"added_count": len(pending), "skipped_duplicates": skipped},
         )
         self._dump_memories_json()
@@ -250,8 +246,7 @@ class MemoryManager:
         metadata["last_accessed"] = datetime.now().isoformat()
         self.collection.update(ids=[memory_id], metadatas=[metadata])
         self.logger.debug(
-            "Incremented access count for memory %s",
-            memory_id[:12],
+            f"Incremented access count for memory {memory_id[:12]}",
             context={"memory_id_prefix": memory_id[:12]},
         )
 
@@ -344,8 +339,7 @@ class MemoryManager:
                 results["documents"].append(id_to_doc[doc_id])
 
         self.logger.debug(
-            "Hybrid search returned %d results: query=%.50s",
-            len(results["ids"]), query,
+            f"Hybrid search returned {len(results['ids'])} results: query={query[:50]}",
             context={
                 "result_count": len(results["ids"]),
                 "bm25_count": len(bm25_ids),
