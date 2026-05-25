@@ -206,8 +206,7 @@ class Turn:
     summary: str = ''
     summary_group_id: str = ''
     skip_summary: bool = False
-    input_tokens: int = 0
-    output_tokens: int = 0
+    token_count: int = 0
     ever_used_tools: List[str] = field(default_factory=list)
     start_timestamp: int = 0
     end_timestamp: int = 0
@@ -219,22 +218,8 @@ class Turn:
                     isinstance(self.messages[-1], ModelMessage) and
                     self.messages[-1].stop_reason == 'end_turn')
 
-    @property
-    def token_count(self) -> int:
-        if self.input_tokens + self.output_tokens > 0:
-            return self.input_tokens + self.output_tokens
-        if not self.messages:
-            return 0
-        total = 0
-        for msg in self.messages:
-            total += estimate_message_tokens(msg)
-        return total
-
     def add_message(self, msg: Message):
         self.messages.append(msg)
-        if isinstance(msg, ModelMessage):
-            self.input_tokens = msg.input_tokens
-            self.output_tokens = msg.output_tokens
 
 
 class Session:
@@ -248,6 +233,7 @@ class Session:
         self.compress_turn_count = 0
         self.total_input_cost_tokens = 0
         self.total_output_cost_tokens = 0
+        self._prev_context_total: int = 0
 
     @property
     def messages(self) -> List[Message]:
@@ -306,6 +292,8 @@ class Session:
         new_session.total_input_cost_tokens = self.total_input_cost_tokens
         new_session.total_output_cost_tokens = self.total_output_cost_tokens
 
+        new_session._rebuild_token_counts()
+
         for turn in new_session.turns:
             if turn.is_complete:
                 new_session._flush_turn(turn)
@@ -320,6 +308,16 @@ class Session:
         with open(self._messages_path(), 'a', encoding='utf-8') as f:
             for msg in turn.messages:
                 f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
+
+    def _rebuild_token_counts(self):
+        self._prev_context_total = 0
+        for turn in self.turns:
+            for msg in turn.messages:
+                if isinstance(msg, ModelMessage):
+                    current_total = msg.input_tokens + msg.output_tokens
+                    turn.token_count = current_total - self._prev_context_total
+                    if msg.stop_reason == 'end_turn':
+                        self._prev_context_total = current_total
 
     def add_message(self, message: Message | List[Message]):
         messages = message if isinstance(message, list) else [message]
@@ -337,8 +335,11 @@ class Session:
                 last_turn = self.turns[-1]
                 last_turn.add_message(msg)
                 if isinstance(msg, ModelMessage):
+                    current_total = msg.input_tokens + msg.output_tokens
+                    last_turn.token_count = current_total - self._prev_context_total
                     if msg.stop_reason == 'end_turn':
                         last_turn.end_timestamp = msg.timestamp
+                        self._prev_context_total = current_total
                         self._flush_turn(last_turn)
                     self.total_input_cost_tokens += msg.input_tokens
                     self.total_output_cost_tokens += msg.output_tokens
@@ -497,8 +498,7 @@ class Session:
             content_lines.append(f'ever_used_tools: {tools_str}')
             content_lines.append(f'start_timestamp: {turn.start_timestamp}')
             content_lines.append(f'end_timestamp: {turn.end_timestamp if turn.end_timestamp else "(none)"}')
-            content_lines.append(f'input_tokens: {turn.input_tokens}')
-            content_lines.append(f'output_tokens: {turn.output_tokens}')
+            content_lines.append(f'token_count: {turn.token_count}')
             content_lines.append(f'memory_extracted: {str(turn.memory_extracted).lower()}')
             content_lines.append('')
 
@@ -562,9 +562,10 @@ class Session:
                 turn.start_timestamp = int(turn_meta.get('start_timestamp', 0))
                 end_ts = turn_meta.get('end_timestamp', '(none)')
                 turn.end_timestamp = 0 if end_ts == '(none)' else int(end_ts)
-                turn.input_tokens = int(turn_meta.get('input_tokens', 0))
-                turn.output_tokens = int(turn_meta.get('output_tokens', 0))
+                turn.token_count = int(turn_meta.get('token_count', 0))
                 turn.memory_extracted = turn_meta.get('memory_extracted', 'false') == 'true'
+
+        session._rebuild_token_counts()
 
         return session
 

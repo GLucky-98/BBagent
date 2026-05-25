@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -9,8 +10,15 @@ from uuid import uuid4 as uuid
 
 
 class StructuredFormatter(logging.Formatter):
+    _TAG_PATTERN = re.compile(r'^\[([A-Z]+)\]\s*')
+
     def format(self, record: logging.LogRecord) -> str:
         extra_context = getattr(record, 'context', None) or {}
+
+        msg = record.getMessage()
+        tag_match = self._TAG_PATTERN.match(msg)
+        tag_prefix = tag_match.group(0) if tag_match else ""
+        clean_msg = msg[len(tag_prefix):] if tag_prefix else msg
 
         log_entry = {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
@@ -18,7 +26,7 @@ class StructuredFormatter(logging.Formatter):
             "agent": getattr(record, 'agent_name', record.name),
             "trace_id": getattr(record, 'trace_id', ''),
             "span_id": getattr(record, 'span_id', ''),
-            "message": record.getMessage(),
+            "message": clean_msg,
         }
 
         if extra_context:
@@ -30,7 +38,8 @@ class StructuredFormatter(logging.Formatter):
                 "detail": str(record.exc_info[1]),
             }
 
-        return json.dumps(log_entry, ensure_ascii=False, default=str)
+        json_str = json.dumps(log_entry, ensure_ascii=False, default=str)
+        return tag_prefix + json_str
 
 
 class ContextFilter(logging.Filter):
