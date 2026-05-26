@@ -1,9 +1,8 @@
 import re
 import json
-import asyncio
 import hashlib
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Optional, List
 from datetime import datetime
 from pathlib import Path
@@ -47,9 +46,9 @@ class Memory:
         }
 
     @staticmethod
-    def create(content: str, session_id: str) -> 'Memory':
+    def create(content: str, session_id: str, memory_id: str = None) -> 'Memory':
         return Memory(
-            id=hashlib.sha256(content.encode('utf-8')).hexdigest(),
+            id=memory_id,
             content=content,
             session_id=session_id,
             date_created=datetime.now().isoformat(),
@@ -85,7 +84,27 @@ class MemoryManager:
         self.logger = logger or logging.getLogger(__name__)
         self.logger.info(f"MemoryManager initialized: collection={name}, dir={self.memory_dir}")
 
+        self._next_id = self._compute_next_id()
+
         self._load_from_files()
+
+    def _compute_next_id(self) -> int:
+        all_data = self.collection.get(include=[])
+        ids = all_data.get("ids", [])
+        if not ids:
+            return 1
+        numeric_ids = []
+        for i in ids:
+            try:
+                numeric_ids.append(int(i))
+            except ValueError:
+                continue
+        return max(numeric_ids, default=0) + 1
+
+    def _generate_id(self) -> str:
+        id_val = self._next_id
+        self._next_id += 1
+        return str(id_val)
 
     def _dump_memories_json(self):
         path = self.memory_dir / "memories.json"
@@ -187,19 +206,26 @@ class MemoryManager:
             self.logger.warning(f"Failed to delete memory from ChromaDB: id={memory_id}, error={e}")
 
     async def add_memories(self, memories: List[Memory]):
-        new_ids = [m.id for m in memories]
-        existing = self.collection.get(ids=new_ids)
-        existing_ids = set(existing.get("ids", []))
+        all_data = self.collection.get(include=["documents"])
+        existing_contents = set(all_data.get("documents", []))
 
-        pending = [m for m in memories if m.id not in existing_ids]
+        pending = []
+        skipped = 0
+        for m in memories:
+            if m.content in existing_contents:
+                skipped += 1
+                continue
+            if not m.id or not m.id.isdigit():
+                m.id = self._generate_id()
+            pending.append(m)
+            existing_contents.add(m.content)
+
         if not pending:
             self.logger.debug(
                 f"All {len(memories)} memories already exist, skipping",
                 context={"duplicate_count": len(memories)},
             )
             return
-
-        skipped = len(memories) - len(pending)
         contents = [m.content for m in pending]
         try:
             embeddings = await self.embedding.get_embeddings(contents)

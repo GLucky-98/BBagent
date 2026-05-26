@@ -95,7 +95,8 @@ INJECT_MEMORIES_TOOL_DESCRIPTION = (
     "to the user's question. If no candidate memory is relevant, call with an "
     "empty list (memory_ids=[]).\n\n"
     "Parameters:\n"
-    "- memory_ids (List[str]): A list of memory IDs to select. Maximum {max_inject} IDs. "
+    "- memory_ids (List[str]): A list of memory ID strings to select. Maximum {max_inject} IDs. "
+    "Each ID must be wrapped in quotes as a string (e.g., ['1', '5'] not [1, 5]). "
     "Use an empty list when nothing is relevant.\n\n"
     "Your mission is complete once you call this tool. Do not produce any further response."
 )
@@ -107,16 +108,20 @@ INJECT_MEMORIES_SUBAGENT_PROMPT = """You are a memory selector. Your ONLY job is
 - You MUST always call `inject_memories`, even if nothing is relevant — in that case call it with an empty list (memory_ids=[]).
 - Once you call `inject_memories`, your mission is complete. Do NOT produce any further response.
 - Select only memories that are genuinely helpful for answering the user's query.
-- At most {max_inject} IDs. Less is fine if fewer are relevant."""
+- At most {max_inject} IDs. Less is fine if fewer are relevant.
+- IDs are strings: pass them quoted like ['1', '5'], never as bare numbers like [1, 5]."""
 
 
-def create_inject_memories_tool(max_inject: int = 5):
+def create_inject_memories_tool(max_inject: int = 5, sub_agent=None):
     captured_ids: List[str] = []
 
-    async def inject_memories(memory_ids: List[str]) -> str:
+    async def inject_memories(memory_ids: list) -> str:
+        memory_ids = [str(mid) for mid in memory_ids]
         captured_ids.clear()
         if memory_ids:
             captured_ids.extend(memory_ids[:max_inject])
+        if sub_agent is not None:
+            sub_agent.stop()
         return "Mission complete."
 
     tool = Tool(
@@ -182,15 +187,18 @@ async def inject_memory_context(
         f"[ID: {c['id']}]\n{c['content']}" for c in candidates
     )
 
-    select_tool, captured_ids = create_inject_memories_tool(max_inject=max_inject)
-
     sub_agent = SubAgent(
         model=submodel,
         system_prompt=INJECT_MEMORIES_SUBAGENT_PROMPT.format(max_inject=max_inject),
-        tools=[select_tool],
+        tools=[],
         logger=logger,
         name="MemoryInjector",
     )
+
+    select_tool, captured_ids = create_inject_memories_tool(
+        max_inject=max_inject, sub_agent=sub_agent
+    )
+    sub_agent.add_tools([select_tool])
 
     prompt = f"User query: {query}\n\nCandidate memories:\n{candidates_text}"
     try:

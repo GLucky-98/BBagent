@@ -459,11 +459,16 @@ class SubAgent:
             for skill in skills:
                 self.skills[skill.name] = skill
         self.skill_prompt = self._load_skill_prompt()
-        
+
         self.tools: dict[str, Tool] = {}
         if tools:
             for t in tools:
                 self.tools[t.name] = t
+
+        self._force_stop = False
+
+    def stop(self):
+        self._force_stop = True
 
     def add_tools(self, tools: List[Tool]):
         for t in tools:
@@ -564,6 +569,13 @@ Your available skills are:
         try:
             with self.logger.span("subagent_run"):
                 while True:
+                    if self._force_stop:
+                        self.logger.debug(
+                            "SubAgent forced to stop",
+                            context={"agent_name": self.name}
+                        )
+                        break
+
                     model_input = Model_Input(
                         prompt=self.system_prompt + self.skill_prompt,
                         tools=tools,
@@ -589,6 +601,8 @@ Your available skills are:
                         for tool_use in result.tool_calls:
                             tool_msg = await self.tool_execute(tool_use)
                             messages.append(tool_msg)
+                            if self._force_stop:
+                                break
                     elif result.stop_reason == 'end_turn':
                         break
                     else:
