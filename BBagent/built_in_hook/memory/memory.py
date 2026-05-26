@@ -359,7 +359,6 @@ class MemoryManager:
 
         results: dict = {"ids": [], "documents": []}
         for doc_id in top_ids:
-            self.increment_access(doc_id)
             if doc_id in id_to_doc:
                 results["ids"].append(doc_id)
                 results["documents"].append(id_to_doc[doc_id])
@@ -393,5 +392,4 @@ class MemoryManager:
         for mid in memory_ids:
             if mid in id_to_doc:
                 result.append({"id": mid, "content": id_to_doc[mid]})
-                self.increment_access(mid)
         return result
