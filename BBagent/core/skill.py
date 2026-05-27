@@ -1,8 +1,7 @@
 from pathlib import Path
-from typing import Dict, Literal, Optional, List
+from typing import Dict, Optional, List
 import logging
 import yaml
-from pydantic import BaseModel,Field
 
 from dataclasses import dataclass
 
@@ -70,7 +69,6 @@ class SkillManager:
                     name=skill_name,
                     description=skill_data['description'],
                     body=skill_data['body'],
-                    state='Unknown',
                     path=skill_path,
                     metadata=skill_data['metadata']
                 )
@@ -129,7 +127,6 @@ class SkillManager:
         """show skill detail, the arg name is name of skill"""
         skill = self.skills.get(name)
         if skill:
-            skill.state = 'Loaded'
             return skill.body
         else:
             return f"Skill {name} not found"
