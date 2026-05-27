@@ -32,6 +32,13 @@ class Skill():
     path: Path = None
     metadata: SkillMetadata = None
 
+    def to_config_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "path": str(self.path) if self.path else None,
+        }
+
 
 class SkillManager:
     def __init__(self, skill_dir: Path | str = None):

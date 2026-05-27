@@ -2,11 +2,14 @@ import asyncio
 import json
 import shutil
 import sys
+import time
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 from uuid import uuid4 as uuid
+
+import yaml
 
 from .model import Model, Model_Input
 from .tool import Tool, tool
@@ -99,6 +102,9 @@ class Agent:
 
         self.state = AgentState.Ready
 
+        self._save_cooldown = 1.0
+        self._last_save_time = 0.0
+
     def change_name(self, name: str):
         self.name = name
     
@@ -131,6 +137,148 @@ class Agent:
     def change_system_prompt(self, prompt: str):
         self.system_prompt = prompt
         self.system_prompt_path.write_text(prompt, encoding='utf-8')
+
+    def save(self):
+        now = time.time()
+        if now - self._last_save_time < self._save_cooldown:
+            return
+        self._last_save_time = now
+        self.session.save()
+        self._save_config()
+
+    def _save_config(self):
+        config_path = self.base_dir / 'agent_config.yaml'
+        config_dict = self.to_config_dict()
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.dump(config_dict, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    def to_config_dict(self) -> dict:
+        return {
+            "version": 1,
+            "name": self.name,
+            "system_prompt": self.system_prompt,
+            "model": self.model.to_config_dict(),
+            "tools": [t.to_config_dict() for t in self.tools.values()],
+            "skills": [s.to_config_dict() for s in self.skills.values()],
+            "hooks": self.hook.to_config_dict() if self.hook else [],
+            "session": {
+                "latest_session_id": self.session.id,
+            },
+            "timers": [
+                {"seconds": seconds, "name": name, "hint": hint}
+                for seconds, name, hint in self.input._timer_configs
+            ],
+        }
+
+    @classmethod
+    def from_config_dict(cls, config_dict: dict, *,
+                         tool_registry: dict = None,
+                         hook_registry: dict = None,
+                         extra_tool_builders: dict = None,
+                         base_dir: str | Path = None) -> 'Agent':
+        tool_registry = tool_registry or {}
+        hook_registry = hook_registry or {}
+        extra_tool_builders = extra_tool_builders or {}
+
+        model_config = config_dict.get("model", {})
+        model = Model.from_config_dict(model_config)
+
+        agent_base_dir = Path(base_dir) if base_dir else Path.cwd()
+        name = config_dict.get("name", "Agent")
+        agent_dir = agent_base_dir / name
+        system_prompt = config_dict.get("system_prompt", "")
+
+        tools = []
+        from ..built_in_tool import TOOL_BUILDERS as BUILT_IN_TOOL_BUILDERS
+        all_builders = {**BUILT_IN_TOOL_BUILDERS, **extra_tool_builders}
+
+        for tool_cfg in config_dict.get("tools", []):
+            source = tool_cfg.get("source")
+            tool_cfg_data = tool_cfg.get("config", {})
+
+            if source and source in all_builders:
+                builder = all_builders[source]
+                loop = asyncio.get_event_loop()
+                tool = loop.run_until_complete(builder(tool_cfg_data))
+                tools.append(tool)
+            elif tool_cfg.get("name") in tool_registry:
+                tools.append(tool_registry[tool_cfg["name"]])
+            else:
+                pass
+
+        skills = []
+        for skill_cfg in config_dict.get("skills", []):
+            skill_path = skill_cfg.get("path")
+            if skill_path and Path(skill_path).exists():
+                from .skill import SkillManager
+                sm = SkillManager(Path(skill_path).parent)
+                skill = sm.skills.get(skill_cfg["name"])
+                if skill:
+                    skills.append(skill)
+
+        session = None
+        session_cfg = config_dict.get("session", {})
+        latest_id = session_cfg.get("latest_session_id")
+        if latest_id:
+            session_dir = agent_dir / 'session' / latest_id
+            jsonl_file = session_dir / f'{latest_id}.jsonl'
+            if jsonl_file.exists():
+                try:
+                    session = Session.load(latest_id, session_dir)
+                except Exception:
+                    pass
+
+        config = AgentConfig(
+            model=model,
+            base_dir=agent_base_dir,
+            system_prompt=system_prompt,
+            name=name,
+            session=session,
+            tools=tools,
+            skills=skills,
+        )
+        agent = cls(config)
+
+        hook_cfg = config_dict.get("hooks", [])
+        if hook_cfg:
+            for hc in hook_cfg:
+                hook_name = hc.get("name")
+                if hook_name in hook_registry:
+                    hook_registry[hook_name](agent.hook)
+
+        timer_cfgs = config_dict.get("timers", [])
+        for tc in timer_cfgs:
+            agent.input.every(
+                seconds=tc.get("seconds", 60),
+                name=tc.get("name", ""),
+                hint=tc.get("hint", ""),
+            )
+
+        return agent
+
+    @classmethod
+    def load(cls, base_dir: str | Path, agent_name: str = None, *,
+             tool_registry: dict = None,
+             hook_registry: dict = None,
+             extra_tool_builders: dict = None) -> 'Agent':
+        base_path = Path(base_dir)
+        if agent_name:
+            base_path = base_path / agent_name
+
+        config_path = base_path / 'agent_config.yaml'
+        if not config_path.exists():
+            raise FileNotFoundError(f"Agent config not found: {config_path}")
+
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config_dict = yaml.safe_load(f)
+
+        return cls.from_config_dict(
+            config_dict,
+            tool_registry=tool_registry,
+            hook_registry=hook_registry,
+            extra_tool_builders=extra_tool_builders,
+            base_dir=base_path.parent if agent_name else base_path,
+        )
     
     async def load_session(self, session_file_path: Path | str):
         await self.hook.trigger(HookType.NEW_SESSION)
@@ -208,7 +356,7 @@ class Agent:
                     if tool.is_async:
                         raw_result = await tool.async_invoke(tool_use.input)
                     else:
-                        raw_result = tool.invoke(tool_use.input)
+                        raw_result = await asyncio.to_thread(tool.invoke, tool_use.input)
 
                     if isinstance(raw_result, str):
                         content = raw_result
@@ -348,7 +496,7 @@ Your available skills are:
             except Exception as e:
                 raise e
             finally:
-                self.session.save()
+                self.save()
                 self.state = AgentState.Ready
                 await self.hook.trigger(HookType.AFTER_RUN)
                 self.logger.info("Agent run completed")
@@ -393,6 +541,7 @@ Your available skills are:
                 self._event_queue = asyncio.Queue()
                 self._running = False
                 self.state = AgentState.Ready
+                self.save()
                 self.logger.info("Agent event loop stopped")
 
     async def interrupt(self):
@@ -434,7 +583,7 @@ Your available skills are:
                 )
                 await self.hook.trigger(HookType.ON_ERROR, e)
             finally:
-                self.session.save()
+                self.save()
                 await self.hook.trigger(HookType.AFTER_RUN)
                 self.logger.info("Event handling completed")
                 self.logger.clear_trace_id()
@@ -523,7 +672,7 @@ Your available skills are:
                     if tool.is_async:
                         raw_result = await tool.async_invoke(tool_use.input)
                     else:
-                        raw_result = tool.invoke(tool_use.input)
+                        raw_result = await asyncio.to_thread(tool.invoke, tool_use.input)
 
                     if isinstance(raw_result, str):
                         content = raw_result

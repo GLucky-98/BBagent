@@ -31,6 +31,7 @@ class Policy:
     max_read_size: int = 500_000
     max_read_lines: int = 10_000
     max_write_size: int = 5 * 1024 * 1024
+    write_create_directories: bool = True
 
     # ── Bash 限制 ──
     bash_allowed_commands: Optional[list[str]] = None

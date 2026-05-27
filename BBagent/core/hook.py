@@ -189,3 +189,15 @@ class AgentHook:
                     while new_hook.priority in existing:
                         new_hook.priority += 1
                     self._register(new_hook)
+
+    def to_config_dict(self) -> list:
+        result = []
+        for hook_type, hooks in self._hooks.items():
+            for hook in hooks:
+                result.append({
+                    "name": hook.name,
+                    "type": hook_type.value,
+                    "priority": hook.priority,
+                    "critical": hook.critical,
+                })
+        return result

@@ -1,11 +1,18 @@
 export interface Model {
   id: string;
   name: string;
-  type: "chat" | "embedding";
   provider: "anthropic" | "openai";
-  baseUrl: string;
-  apiKey: string;
   modelName: string;
+  apiKey: string;
+  baseUrl: string;
+  maxContextTokens: number;
+  maxCompletionTokens: number;
+  temperature?: number;
+  topP?: number;
+  thinking?: {
+    type: "enabled" | "disabled" | "adaptive";
+    budgetTokens?: number;
+  };
 }
 
 export interface Tool {
@@ -14,21 +21,21 @@ export interface Tool {
   description: string;
   inputSchema: {
     type: string;
-    properties?: Record<string, {
-      type: string;
-      description?: string;
-      default?: unknown;
-    }>;
+    properties?: Record<
+      string,
+      { type: string; description?: string; default?: unknown }
+    >;
     required?: string[];
   };
   isMcp: boolean;
+  mcpServerName?: string;
 }
 
 export interface Skill {
-  id: string;
   name: string;
   description: string;
   path: string;
+  body: string;
   metadata: {
     license?: string;
     compatibility?: string;
@@ -36,17 +43,17 @@ export interface Skill {
     allowedTools?: string[];
     metadata?: Record<string, unknown>;
   };
-  body: string;
+  source: "default" | "imported";
 }
 
 export interface MCPServer {
-  id: string;
   name: string;
   command: string;
   args: string[];
   env: Record<string, string>;
   isConnected: boolean;
   tools: Tool[];
+  source: "default" | "imported";
 }
 
 export interface Prompt {
@@ -54,6 +61,7 @@ export interface Prompt {
   name: string;
   description: string;
   content: string;
+  source: "built-in" | "folder" | "imported";
 }
 
 export interface Message {
@@ -68,40 +76,26 @@ export interface Agent {
   name: string;
   type: "single" | "team";
   basePath: string;
-  primaryModel: Model;
-  secondaryModel?: Model;
+  modelId: string;
   systemPrompt: string;
-  tools: Tool[];
-  skills: Skill[];
-  contextHook?: string;
+  toolNames: string[];
+  skillNames: string[];
+  hookEnabled: boolean;
+  teamDescription?: string;
   teamMembers?: Agent[];
+  contacts?: Record<string, Record<string, string>>;
   teamPrompt?: string;
-  visibleMembers?: string[];
   messages: Message[];
 }
 
-export type NavItem =
-  | "agents"
-  | "models"
-  | "tools"
-  | "skills"
-  | "mcps"
-  | "prompts";
-
-export interface CreateAgentForm {
+export interface FileNode {
   name: string;
-  basePath: string;
-  primaryModelId: string;
-  secondaryModelId?: string;
-  systemPrompt: string;
-  toolIds: string[];
-  skillIds: string[];
-  contextHook?: string;
+  path: string;
+  type: "file" | "directory";
+  children?: FileNode[];
+  size?: number;
+  extension?: string;
+  modifiedAt?: number;
 }
 
-export interface CreateTeamForm {
-  name: string;
-  memberIds: string[];
-  teamPrompt: string;
-  visibleMembers: Record<string, string[]>;
-}
+export type SettingsTab = "models" | "skills" | "mcps" | "prompts";

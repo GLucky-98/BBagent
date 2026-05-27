@@ -13,6 +13,52 @@ from .read import create_read_tool
 from .write import create_write_tool
 
 
+async def _build_read(config: dict) -> Tool:
+    policy = Policy(**config["policy"]) if config.get("policy") else None
+    return create_read_tool(policy)
+
+
+async def _build_write(config: dict) -> Tool:
+    policy = Policy(**config["policy"]) if config.get("policy") else None
+    return create_write_tool(policy)
+
+
+async def _build_edit(config: dict) -> Tool:
+    policy = Policy(**config["policy"]) if config.get("policy") else None
+    return create_edit_tool(policy)
+
+
+async def _build_bash(config: dict) -> Tool:
+    policy = Policy(**config["policy"]) if config.get("policy") else None
+    return await create_bash_tool(policy)
+
+
+async def _build_find(config: dict) -> Tool:
+    policy = Policy(**config["policy"]) if config.get("policy") else None
+    return create_find_tool(policy)
+
+
+async def _build_grep(config: dict) -> Tool:
+    policy = Policy(**config["policy"]) if config.get("policy") else None
+    return create_grep_tool(policy)
+
+
+async def _build_ls(config: dict) -> Tool:
+    policy = Policy(**config["policy"]) if config.get("policy") else None
+    return create_ls_tool(policy)
+
+
+TOOL_BUILDERS = {
+    "built_in.read": _build_read,
+    "built_in.write": _build_write,
+    "built_in.edit": _build_edit,
+    "built_in.bash": _build_bash,
+    "built_in.find": _build_find,
+    "built_in.grep": _build_grep,
+    "built_in.ls": _build_ls,
+}
+
+
 async def create_all_tools(policy: Policy = None) -> dict[str, Tool]:
     return {
         "read": create_read_tool(policy),
@@ -46,6 +92,7 @@ def create_readonly_tools(policy: Policy = None) -> dict[str, Tool]:
 __all__ = [
     "Tool",
     "Policy",
+    "TOOL_BUILDERS",
     "create_read_tool",
     "create_write_tool",
     "create_edit_tool",

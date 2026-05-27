@@ -2,6 +2,7 @@
 Write tool - Write content to a file, creating directories as needed.
 """
 import os
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -27,14 +28,16 @@ class WriteOperations:
         return os.path.exists(absolute_path)
 
 
-def create_write_func(policy: Optional[Policy] = None, create_directories: bool = True):
+def create_write_func(policy: Optional[Policy] = None):
 
     if policy is not None:
         cwd = policy.cwd
         max_write_size = policy.max_write_size
+        create_directories = policy.write_create_directories
     else:
         cwd = "."
         max_write_size = 5 * 1024 * 1024
+        create_directories = True
 
     operations = WriteOperations()
 
@@ -87,9 +90,8 @@ def create_write_func(policy: Optional[Policy] = None, create_directories: bool 
 
 def create_write_tool(
     policy: Optional[Policy] = None,
-    create_directories: bool = True,
 ) -> Tool:
-    write_func = create_write_func(policy, create_directories)
+    write_func = create_write_func(policy)
 
     input_schema = {
         "type": "object",
@@ -111,4 +113,6 @@ def create_write_tool(
         name="Write",
         description="Writes content to a file. Creates the file if it doesn't exist.",
         input_schema=input_schema,
+        source="built_in.write",
+        config={"policy": asdict(policy)} if policy else {},
     )

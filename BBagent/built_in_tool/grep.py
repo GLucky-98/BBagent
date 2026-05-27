@@ -4,6 +4,7 @@ Grep tool - Search for patterns in files using regular expressions.
 import fnmatch
 import os
 import re
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -176,4 +177,6 @@ def create_grep_tool(policy: Optional[Policy] = None) -> Tool:
         name="Grep",
         description="Searches for a pattern in files using regular expressions.",
         input_schema=input_schema,
+        source="built_in.grep",
+        config={"policy": asdict(policy)} if policy else {},
     )

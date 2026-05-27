@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
 
 from .agent import Agent
 from .input import EventType
@@ -14,11 +17,12 @@ class TeamConfig:
 
 
 class AgentTeam:
-    def __init__(self, name: str, team_description: str = ""):
+    def __init__(self, name: str, team_description: str = "", base_dir: str | Path = None):
         self.name = name
         self.team_description = team_description
         self.agents: dict[str, Agent] = {}
         self._contacts: dict[str, set[str]] = {}
+        self.base_dir = Path(base_dir) if base_dir else None
 
     @classmethod
     def create(cls, config: TeamConfig) -> 'AgentTeam':
@@ -157,3 +161,82 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
     async def stop(self):
         for agent in self.agents.values():
             await agent.stop()
+
+    def to_config_dict(self) -> dict:
+        return {
+            "version": 1,
+            "name": self.name,
+            "team_description": self.team_description,
+            "agents": {
+                name: {"config_path": str(agent.base_dir / "agent_config.yaml")}
+                for name, agent in self.agents.items()
+            },
+            "contacts": {
+                name: sorted(list(contacts))
+                for name, contacts in self._contacts.items()
+            },
+        }
+
+    def save(self, base_dir: str | Path = None):
+        save_path = Path(base_dir) if base_dir else self.base_dir
+        if save_path is None:
+            raise ValueError("base_dir is required for saving team config")
+        save_path.mkdir(parents=True, exist_ok=True)
+        config_path = save_path / "team_config.yaml"
+        config_dict = self.to_config_dict()
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config_dict, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        for agent in self.agents.values():
+            agent.save()
+
+    @classmethod
+    def load(cls, base_dir: str | Path, *,
+             tool_registries: dict = None,
+             hook_registries: dict = None,
+             extra_tool_builders: dict = None) -> 'AgentTeam':
+        base_path = Path(base_dir)
+        config_path = base_path / "team_config.yaml"
+        if not config_path.exists():
+            raise FileNotFoundError(f"Team config not found: {config_path}")
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            config_dict = yaml.safe_load(f)
+
+        tool_registries = tool_registries or {}
+        hook_registries = hook_registries or {}
+        extra_tool_builders = extra_tool_builders or {}
+
+        name = config_dict.get("name", "Team")
+        team_description = config_dict.get("team_description", "")
+
+        team = cls(name=name, team_description=team_description, base_dir=base_path)
+
+        agents_config = config_dict.get("agents", {})
+        for agent_name, agent_cfg in agents_config.items():
+            config_path_str = agent_cfg.get("config_path")
+            if config_path_str and Path(config_path_str).exists():
+                agent = Agent.load(
+                    Path(config_path_str).parent,
+                    tool_registry=tool_registries.get(agent_name, {}),
+                    hook_registry=hook_registries.get(agent_name, {}),
+                    extra_tool_builders=extra_tool_builders,
+                )
+            else:
+                continue
+
+            if agent.name != agent_name:
+                agent.change_name(agent_name)
+
+            agent.team_prompt = cls._build_team_prompt(team_description)
+
+            contacts_dict = {}
+            contacts_from_config = config_dict.get("contacts", {}).get(agent_name, [])
+            for contact_name in contacts_from_config:
+                contacts_dict[contact_name] = ""
+            team._contacts[agent_name] = set(contacts_dict.keys())
+            agent.teammate_prompt = cls._build_teammate_prompt(contacts_dict)
+
+            team.agents[agent_name] = agent
+            team._inject_team_tools(agent)
+
+        return team

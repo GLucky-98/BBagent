@@ -291,13 +291,13 @@ def create_ctx_compress_hook(
             agent.logger.info(
                 "Compression needed: %d/%d",
                 total_tokens, threshold,
-                context={"visible_tokens": total_tokens, "threshold": threshold, "compression_ratio": round(total_tokens / max_context_tokens, 3)},
+                context={"visible_tokens": total_tokens, "threshold": threshold, "ratio": round(total_tokens / max_context_tokens, 3)},
             )
         else:
             agent.logger.debug(
                 "Compression not needed: %d/%d",
                 total_tokens, threshold,
-                context={"visible_tokens": total_tokens, "threshold": threshold, "compression_ratio": round(total_tokens / max_context_tokens, 3)},
+                context={"visible_tokens": total_tokens, "threshold": threshold, "ratio": round(total_tokens / max_context_tokens, 3)},
             )
 
         ctx.set('compression_needed', needed)

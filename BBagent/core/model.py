@@ -9,6 +9,8 @@ from .message import (
     ToolUseBlock,
 )
 import json
+import os
+import re
 from abc import ABC, abstractmethod
 from typing import List, AsyncIterator, Union
 import httpx
@@ -24,6 +26,10 @@ class Model_Input:
     prompt: str = ''
     tools: List[Tool] = field(default_factory=list)
     messages: List[Message] = field(default_factory=list)
+
+
+PROVIDER_REGISTRY: dict[str, type] = {}
+
 
 class Model(ABC):
     def __init__(self, model: str, api_key: str, base_url: str, max_context_tokens: int = 200000):
@@ -51,6 +57,32 @@ class Model(ABC):
     @abstractmethod
     def model_response_parse(self, response:dict) -> ModelMessage | str:
         pass
+
+    @abstractmethod
+    def to_config_dict(self) -> dict:
+        pass
+
+    @staticmethod
+    def _resolve_env_vars(value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        pattern = re.compile(r'\$\{(\w+)\}')
+        def _replacer(match):
+            var_name = match.group(1)
+            return os.environ.get(var_name, match.group(0))
+        return pattern.sub(_replacer, value)
+
+    @staticmethod
+    def from_config_dict(config: dict) -> 'Model':
+        provider = config.get("provider", "")
+        provider_cls = PROVIDER_REGISTRY.get(provider)
+        if provider_cls is None:
+            raise ValueError(f"Unknown model provider: '{provider}'. Registered providers: {list(PROVIDER_REGISTRY.keys())}")
+        params = {k: v for k, v in config.items() if k != "provider"}
+        for key in list(params.keys()):
+            if isinstance(params[key], str):
+                params[key] = Model._resolve_env_vars(params[key])
+        return provider_cls(**params)
 
     @staticmethod
     def _is_retryable(status_code: int) -> bool:
@@ -337,6 +369,23 @@ class AnthropicModel(Model):
                             input_tokens=input_tokens,
                             output_tokens=output_tokens)       
 
+    def to_config_dict(self) -> dict:
+        base_url_val = self.base_url
+        if base_url_val.endswith("/v1/messages"):
+            base_url_val = base_url_val[:-len("/v1/messages")]
+        config = {
+            "provider": "anthropic",
+            "model": self.model,
+            "api_key": self.api_key,
+            "base_url": base_url_val,
+            "max_tokens": self.max_tokens,
+            "max_context_tokens": self.max_context_tokens,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "thinking": self.thinking,
+        }
+        config.update(self.extra_args)
+        return config
 
 
 # ----------------------------------------------------------------------------
@@ -519,6 +568,24 @@ class OpenAIModel(Model):
             output_tokens=output_tokens
         )
 
+    def to_config_dict(self) -> dict:
+        base_url_val = self.base_url
+        if base_url_val.endswith("/chat/completions"):
+            base_url_val = base_url_val[:-len("/chat/completions")]
+        config = {
+            "provider": "openai",
+            "model": self.model,
+            "api_key": self.api_key,
+            "base_url": base_url_val,
+            "max_completion_tokens": self.max_completion_tokens,
+            "max_context_tokens": self.max_context_tokens,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "thinking": self.thinking,
+        }
+        config.update(self.extra_args)
+        return config
+
     def _parse_content_parts(self, parts: list) -> List[ContentBlock]:
         """将 OpenAI 响应中的 content parts 转换为内部 ContentBlock 列表"""
         blocks = []
@@ -700,3 +767,6 @@ class OpenAIModel(Model):
                         await asyncio.sleep(retry_delay * (2 ** attempt))
                         continue
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
+
+PROVIDER_REGISTRY["anthropic"] = AnthropicModel
+PROVIDER_REGISTRY["openai"] = OpenAIModel

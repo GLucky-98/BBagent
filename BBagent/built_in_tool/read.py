@@ -2,6 +2,7 @@
 Read tool - Read file contents with optional truncation and offset/limit support.
 """
 import os
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -131,4 +132,6 @@ def create_read_tool(policy: Optional[Policy] = None) -> Tool:
         name="Read",
         description="Read the complete contents of a file.",
         input_schema=input_schema,
+        source="built_in.read",
+        config={"policy": asdict(policy)} if policy else {},
     )

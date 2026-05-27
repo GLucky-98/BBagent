@@ -54,7 +54,8 @@ class Tool():
             invoke (同步调用)
             async_invoke (异步调用)
     """
-    def __init__(self, func:Callable, name:str = None, description:str = None, input_schema:dict = None, has_state:bool | None = None) :
+    def __init__(self, func:Callable, name:str = None, description:str = None, input_schema:dict = None, has_state:bool | None = None,
+                 source: str = None, config: dict = None):
         self.name = name if name else func.__name__ 
         self.description = description if description else func.__doc__
         if input_schema:
@@ -71,6 +72,19 @@ class Tool():
         self.func = func
         self.is_async = inspect.iscoroutinefunction(func)
         self.has_state = has_state if has_state is not None else (not inspect.isfunction(func))
+        self.source = source
+        self.config = config or {}
+
+    def to_config_dict(self) -> dict:
+        base = {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.input_schema,
+        }
+        if self.source:
+            base["source"] = self.source
+            base["config"] = self.config
+        return base
 
     def invoke(self,input_dict:dict):
         sig = inspect.signature(self.func)

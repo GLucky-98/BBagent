@@ -2,52 +2,86 @@ import { create } from "zustand";
 import type {
   Agent,
   Model,
-  NavItem,
   Message,
   Tool,
   Skill,
   MCPServer,
   Prompt,
+  SettingsTab,
 } from "../types";
 
 interface AppState {
-  currentNav: NavItem;
-  setCurrentNav: (nav: NavItem) => void;
-
   agents: Agent[];
-  selectedAgentId: string | null;
-  setSelectedAgentId: (id: string | null) => void;
+  activeAgentId: string | null;
+  activeTeamMemberId: string | null;
+  setActiveAgentId: (id: string | null) => void;
+  selectTeamMember: (teamId: string, memberId: string | null) => void;
   addAgent: (agent: Agent) => void;
   addTeam: (team: Agent) => void;
   updateAgent: (id: string, updates: Partial<Agent>) => void;
+  updateTeam: (id: string, updates: Partial<Agent>) => void;
   addMessage: (agentId: string, message: Message) => void;
+
+  isSettingsOpen: boolean;
+  settingsActiveTab: SettingsTab;
+  openSettings: (tab?: SettingsTab) => void;
+  closeSettings: () => void;
+
+  configDialog: {
+    open: boolean;
+    mode: "create" | "edit";
+    type: "agent" | "team" | "";
+    agentId?: string;
+  };
+  openConfigDialog: (
+    mode: "create" | "edit",
+    type: "agent" | "team" | "",
+    agentId?: string
+  ) => void;
+  closeConfigDialog: () => void;
+
+  workingDirPath: string;
+  setWorkingDirPath: (path: string) => void;
+  basedirExpandedPaths: Set<string>;
+  toggleBasedirExpand: (path: string) => void;
+
+  previewFile: {
+    path: string;
+    name: string;
+    content: string | null;
+    mimeType: string;
+  } | null;
+  openFilePreview: (file: {
+    path: string;
+    name: string;
+    content: string | null;
+    mimeType: string;
+  }) => void;
+  closeFilePreview: () => void;
 
   models: Model[];
   selectedModelId: string | null;
   setSelectedModelId: (id: string | null) => void;
   addModel: (model: Model) => void;
+  updateModel: (id: string, updates: Partial<Model>) => void;
 
   tools: Tool[];
-  selectedToolId: string | null;
-  setSelectedToolId: (id: string | null) => void;
-
   mcpServers: MCPServer[];
   selectedMcpId: string | null;
   setSelectedMcpId: (id: string | null) => void;
-  updateMcpConnection: (id: string, isConnected: boolean) => void;
+  updateMcpConnection: (name: string, isConnected: boolean) => void;
+  addMcpServer: (server: MCPServer) => void;
+  importMcpServers: (servers: MCPServer[]) => void;
 
   skills: Skill[];
   selectedSkillId: string | null;
   setSelectedSkillId: (id: string | null) => void;
+  importSkills: (skills: Skill[]) => void;
 
   prompts: Prompt[];
   selectedPromptId: string | null;
   setSelectedPromptId: (id: string | null) => void;
-
-  isCreateDialogOpen: boolean;
-  createType: "single" | "team" | null;
-  setIsCreateDialogOpen: (open: boolean) => void;
-  setCreateType: (type: "single" | "team" | null) => void;
+  importPrompts: (prompts: Prompt[]) => void;
 
   expandedTeams: Set<string>;
   toggleTeamExpanded: (teamId: string) => void;
@@ -57,38 +91,51 @@ const defaultModels: Model[] = [
   {
     id: "model-1",
     name: "Claude Sonnet 4",
-    type: "chat",
     provider: "anthropic",
-    baseUrl: "https://api.anthropic.com",
-    apiKey: "",
     modelName: "claude-sonnet-4-20250514",
+    apiKey: "",
+    baseUrl: "https://api.anthropic.com",
+    maxContextTokens: 200000,
+    maxCompletionTokens: 100000,
+    temperature: 1,
+    topP: 0.95,
+    thinking: { type: "adaptive" },
   },
   {
     id: "model-2",
     name: "Claude Opus 4",
-    type: "chat",
     provider: "anthropic",
-    baseUrl: "https://api.anthropic.com",
-    apiKey: "",
     modelName: "claude-opus-4-20250514",
+    apiKey: "",
+    baseUrl: "https://api.anthropic.com",
+    maxContextTokens: 200000,
+    maxCompletionTokens: 100000,
+    temperature: 1,
+    topP: 0.95,
+    thinking: { type: "adaptive" },
   },
   {
     id: "model-3",
     name: "GPT-4o",
-    type: "chat",
     provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    apiKey: "",
     modelName: "gpt-4o",
+    apiKey: "",
+    baseUrl: "https://api.openai.com/v1",
+    maxContextTokens: 128000,
+    maxCompletionTokens: 100000,
+    temperature: 1,
+    topP: 1,
+    thinking: { type: "enabled" },
   },
   {
     id: "model-4",
     name: "text-embedding-3-large",
-    type: "embedding",
     provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    apiKey: "",
     modelName: "text-embedding-3-large",
+    apiKey: "",
+    baseUrl: "https://api.openai.com/v1",
+    maxContextTokens: 8192,
+    maxCompletionTokens: 8192,
   },
 ];
 
@@ -160,7 +207,7 @@ const defaultTools: Tool[] = [
       properties: {
         pattern: { type: "string", description: "Regex pattern to search for" },
         path: { type: "string", description: "Directory to search in" },
-        output_mode: { type: "string", description: "Output format: content, files_with_matches, count" },
+        output_mode: { type: "string", description: "Output format" },
       },
       required: ["pattern", "path"],
     },
@@ -186,9 +233,7 @@ const defaultTools: Tool[] = [
     description: "List directory contents",
     inputSchema: {
       type: "object",
-      properties: {
-        path: { type: "string", description: "Directory to list" },
-      },
+      properties: { path: { type: "string", description: "Directory to list" } },
       required: ["path"],
     },
     isMcp: false,
@@ -196,15 +241,14 @@ const defaultTools: Tool[] = [
   {
     id: "mcp-tool-1",
     name: "firecrawl_scrape",
-    description: "Extract clean markdown from any URL, including JavaScript-rendered SPAs",
+    description: "Extract clean markdown from any URL",
     inputSchema: {
       type: "object",
-      properties: {
-        url: { type: "string", description: "The URL to scrape" },
-      },
+      properties: { url: { type: "string", description: "The URL to scrape" } },
       required: ["url"],
     },
     isMcp: true,
+    mcpServerName: "firecrawl",
   },
   {
     id: "mcp-tool-2",
@@ -212,76 +256,59 @@ const defaultTools: Tool[] = [
     description: "Web search with full page content extraction",
     inputSchema: {
       type: "object",
-      properties: {
-        query: { type: "string", description: "The search query" },
-        num: { type: "number", description: "Maximum number of results" },
-      },
+      properties: { query: { type: "string", description: "The search query" } },
       required: ["query"],
     },
     isMcp: true,
+    mcpServerName: "firecrawl",
   },
 ];
 
 const defaultSkills: Skill[] = [
   {
-    id: "skill-1",
     name: "code-expert",
     description: "Expert coding assistant with multi-language support",
     path: "/skills/code-expert",
-    metadata: {
-      license: "MIT",
-      compatibility: "All platforms",
-      version: "1.0.0",
-      allowedTools: ["bash", "read", "write", "edit"],
-    },
-    body: "You are an expert code assistant with deep knowledge of multiple programming languages including Python, JavaScript, TypeScript, Rust, Go, and more. You help users write clean, efficient, and maintainable code.\n\nYour expertise includes:\n- Writing new code from scratch\n- Debugging and fixing issues\n- Code review and best practices\n- Performance optimization\n- Writing tests",
+    metadata: { license: "MIT", compatibility: "All platforms", version: "1.0.0", allowedTools: ["bash", "read", "write", "edit"] },
+    body: "You are an expert code assistant with deep knowledge of multiple programming languages.",
+    source: "default",
   },
   {
-    id: "skill-2",
     name: "research-analyst",
     description: "Research and analysis skill for gathering and synthesizing information",
     path: "/skills/research-analyst",
-    metadata: {
-      license: "MIT",
-      compatibility: "All platforms",
-      version: "1.2.0",
-      allowedTools: ["grep", "find"],
-    },
-    body: "You are a research analyst specializing in gathering, organizing, and synthesizing information from various sources. You excel at:\n\n- Finding relevant information efficiently\n- Synthesizing findings into coherent summaries\n- Identifying key insights and patterns\n- Cross-referencing multiple sources\n- Presenting findings in clear, actionable formats",
+    metadata: { license: "MIT", compatibility: "All platforms", version: "1.2.0", allowedTools: ["grep", "find"] },
+    body: "You are a research analyst specializing in gathering and synthesizing information.",
+    source: "default",
   },
   {
-    id: "skill-3",
     name: "web-scraper",
     description: "Extract and structure data from websites",
     path: "/skills/web-scraper",
-    metadata: {
-      license: "Apache-2.0",
-      compatibility: "All platforms",
-      version: "2.1.0",
-      allowedTools: ["firecrawl_scrape", "firecrawl_search"],
-    },
-    body: "You are a web scraping expert capable of extracting structured data from websites. You can handle:\n\n- Single page extraction\n- Multi-page crawling\n- JavaScript-rendered content\n- Structured data extraction\n- Handling anti-scraping measures",
+    metadata: { license: "Apache-2.0", compatibility: "All platforms", version: "2.1.0", allowedTools: ["firecrawl_scrape", "firecrawl_search"] },
+    body: "You are a web scraping expert capable of extracting structured data from websites.",
+    source: "default",
   },
 ];
 
 const defaultMcpServers: MCPServer[] = [
   {
-    id: "mcp-1",
     name: "firecrawl",
     command: "npx",
     args: ["-y", "@firecrawl/mcp"],
     env: { FIRECRAWL_API_KEY: "" },
     isConnected: false,
-    tools: defaultTools.filter((t) => t.isMcp),
+    tools: [],
+    source: "default",
   },
   {
-    id: "mcp-2",
     name: "filesystem",
     command: "python",
     args: ["-m", "mcp_server_filesystem"],
     env: {},
     isConnected: true,
-    tools: defaultTools.filter((t) => !t.isMcp),
+    tools: [],
+    source: "default",
   },
 ];
 
@@ -290,217 +317,138 @@ const defaultPrompts: Prompt[] = [
     id: "prompt-1",
     name: "code-review",
     description: "Review code for quality, bugs, and best practices",
-    content: `You are an expert code reviewer. Analyze the provided code and give constructive feedback on:
-
-1. **Code Quality**: Is the code clean, readable, and well-organized?
-2. **Bugs**: Are there any obvious bugs, edge cases, or potential runtime errors?
-3. **Best Practices**: Does the code follow language-specific best practices?
-4. **Performance**: Are there any obvious performance issues?
-5. **Security**: Are there any potential security vulnerabilities?
-
-Provide your review in a structured format with specific suggestions for improvement.`,
+    content: "You are an expert code reviewer. Analyze the provided code and give constructive feedback on code quality, bugs, best practices, performance, and security.",
+    source: "built-in",
   },
   {
     id: "prompt-2",
     name: "research-summary",
     description: "Summarize research findings into actionable insights",
-    content: `You are a research analyst. Given a set of research findings or documents, create a comprehensive summary that:
-
-1. **Key Findings**: List the most important discoveries
-2. **Supporting Evidence**: Note the strength of evidence for each finding
-3. **Contradictions**: Highlight any conflicting information
-4. **Implications**: Discuss what the findings mean in practice
-5. **Next Steps**: Suggest actionable next steps based on the research
-
-Format your response clearly with headers and bullet points for easy reading.`,
+    content: "You are a research analyst. Given a set of research findings, create a comprehensive summary with key findings, supporting evidence, contradictions, implications, and next steps.",
+    source: "built-in",
   },
   {
     id: "prompt-3",
     name: "task-decomposition",
     description: "Break down complex tasks into manageable steps",
-    content: `You are a task planning expert. Given a complex goal or task, break it down into clear, actionable steps:
-
-1. **Goal Understanding**: Confirm understanding of the end objective
-2. **Dependencies**: Identify what needs to be done first
-3. **Sub-tasks**: Break down into discrete, completable units
-4. **Time Estimate**: Provide rough time estimates for each step
-5. **Risks**: Note potential blockers or failure points
-
-Present the plan as a numbered sequence with clear descriptions of each step.`,
+    content: "You are a task planning expert. Break down complex goals into clear, actionable steps with dependencies, sub-tasks, time estimates, and risks.",
+    source: "built-in",
   },
   {
     id: "prompt-4",
     name: "debugging-assistant",
     description: "Help identify and fix software bugs",
-    content: `You are a debugging expert. When helping fix bugs:
-
-1. **Reproduce**: Help the user create a minimal reproduction case
-2. **Hypothesize**: Propose possible causes based on error messages and symptoms
-3. **Investigate**: Guide the user through diagnostic steps
-4. **Verify**: Confirm the fix works and doesn't break other functionality
-5. **Document**: Summarize what was wrong and how it was fixed
-
-Ask clarifying questions to narrow down the issue before proposing solutions.`,
+    content: "You are a debugging expert. Help reproduce bugs, propose causes, guide investigation, verify fixes, and document solutions.",
+    source: "built-in",
   },
 ];
 
-const defaultAgents: Agent[] = [
-  {
-    id: "agent-1",
-    name: "Code Assistant",
-    type: "single",
-    basePath: "/agents/code-assistant",
-    primaryModel: defaultModels[0],
-    secondaryModel: defaultModels[2],
-    systemPrompt:
-      "You are an expert code assistant. Help users write, debug, and understand code.",
-    tools: [],
-    skills: [],
-    contextHook: "",
-    messages: [
-      {
-        id: "msg-1",
-        role: "user",
-        content: "Hello! Can you help me write a Python function?",
-        timestamp: Date.now() - 300000,
-      },
-      {
-        id: "msg-2",
-        role: "assistant",
-        content: "Of course! I'd be happy to help you write a Python function. What would you like the function to do?",
-        timestamp: Date.now() - 290000,
-      },
-    ],
-  },
-  {
-    id: "agent-2",
-    name: "Research Agent",
-    type: "single",
-    basePath: "/agents/research",
-    primaryModel: defaultModels[1],
-    systemPrompt:
-      "You are a research assistant. Help users find and summarize information.",
-    tools: [],
-    skills: [],
-    messages: [],
-  },
-  {
-    id: "team-1",
-    name: "Dev Team",
-    type: "team",
-    basePath: "/teams/dev",
-    primaryModel: defaultModels[0],
-    systemPrompt: "Coordinate a team of specialized agents to handle development tasks.",
-    tools: [],
-    skills: [],
-    teamPrompt:
-      "Coordinate the research, coding, and review agents to deliver high-quality code.",
-    teamMembers: [
-      {
-        id: "agent-3",
-        name: "Researcher",
-        type: "single",
-        basePath: "/teams/dev/researcher",
-        primaryModel: defaultModels[1],
-        systemPrompt: "Research and gather information for development tasks.",
-        tools: [],
-        skills: [],
-        messages: [],
-      },
-      {
-        id: "agent-4",
-        name: "Coder",
-        type: "single",
-        basePath: "/teams/dev/coder",
-        primaryModel: defaultModels[0],
-        systemPrompt: "Write code based on research and requirements.",
-        tools: [],
-        skills: [],
-        messages: [],
-      },
-      {
-        id: "agent-5",
-        name: "Reviewer",
-        type: "single",
-        basePath: "/teams/dev/reviewer",
-        primaryModel: defaultModels[0],
-        systemPrompt: "Review code for quality and best practices.",
-        tools: [],
-        skills: [],
-        messages: [],
-      },
-    ],
-    messages: [],
-  },
-];
+const defaultAgents: Agent[] = [];
 
-export const useAppStore = create<AppState>((set) => ({
-  currentNav: "agents",
-  setCurrentNav: (nav) => set({ currentNav: nav }),
-
+export const useAppStore = create<AppState>((set, get) => ({
   agents: defaultAgents,
-  selectedAgentId: null,
-  setSelectedAgentId: (id) => set({ selectedAgentId: id }),
-  addAgent: (agent) => set((state) => ({ agents: [...state.agents, agent] })),
-  addTeam: (team) => set((state) => ({ agents: [...state.agents, team] })),
-  updateAgent: (id, updates) =>
-    set((state) => ({
-      agents: state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)),
-    })),
+  activeAgentId: null,
+  activeTeamMemberId: null,
+
+  setActiveAgentId: (id) => {
+    const agent = id ? get().agents.find((a) => a.id === id) : null;
+    set({ activeAgentId: id, activeTeamMemberId: null, workingDirPath: agent?.basePath ?? "", previewFile: null });
+  },
+
+  selectTeamMember: (teamId, memberId) => {
+    if (memberId) {
+      const team = get().agents.find((a) => a.id === teamId);
+      const member = team?.teamMembers?.find((m) => m.id === memberId);
+      set({ activeAgentId: teamId, activeTeamMemberId: memberId, workingDirPath: member?.basePath ?? "", previewFile: null });
+    } else {
+      const team = get().agents.find((a) => a.id === teamId);
+      set({ activeAgentId: teamId, activeTeamMemberId: null, workingDirPath: team?.basePath ?? "", previewFile: null });
+    }
+  },
+
+  addAgent: (agent) => set((state) => ({ agents: [...state.agents, agent], activeAgentId: agent.id, workingDirPath: agent.basePath })),
+  addTeam: (team) => set((state) => ({ agents: [...state.agents, team], activeAgentId: team.id, workingDirPath: team.basePath })),
+  updateAgent: (id, updates) => set((state) => ({ agents: state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)) })),
+  updateTeam: (id, updates) => set((state) => ({ agents: state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)) })),
   addMessage: (agentId, message) =>
-    set((state) => ({
-      agents: state.agents.map((a) =>
-        a.id === agentId ? { ...a, messages: [...a.messages, message] } : a
-      ),
-    })),
+    set((state) => ({ agents: state.agents.map((a) => (a.id === agentId ? { ...a, messages: [...a.messages, message] } : a)) })),
+
+  isSettingsOpen: false,
+  settingsActiveTab: "models",
+  openSettings: (tab = "models") => set({ isSettingsOpen: true, settingsActiveTab: tab }),
+  closeSettings: () => set({ isSettingsOpen: false }),
+
+  configDialog: { open: false, mode: "create", type: "" },
+  openConfigDialog: (mode, type, agentId) => set({ configDialog: { open: true, mode, type, agentId } }),
+  closeConfigDialog: () => set({ configDialog: { open: false, mode: "create", type: "", agentId: undefined } }),
+
+  workingDirPath: "",
+  setWorkingDirPath: (path) => set({ workingDirPath: path }),
+
+  basedirExpandedPaths: new Set<string>(),
+  toggleBasedirExpand: (path) =>
+    set((state) => {
+      const newSet = new Set(state.basedirExpandedPaths);
+      newSet.has(path) ? newSet.delete(path) : newSet.add(path);
+      return { basedirExpandedPaths: newSet };
+    }),
+
+  previewFile: null,
+  openFilePreview: (file) => set({ previewFile: file }),
+  closeFilePreview: () => set({ previewFile: null }),
 
   models: defaultModels,
   selectedModelId: null,
   setSelectedModelId: (id) => set({ selectedModelId: id }),
   addModel: (model) => set((state) => ({ models: [...state.models, model] })),
+  updateModel: (id, updates) =>
+    set((state) => ({ models: state.models.map((m) => (m.id === id ? { ...m, ...updates } : m)) })),
 
   tools: defaultTools,
-  selectedToolId: null,
-  setSelectedToolId: (id) => set({ selectedToolId: id }),
 
   mcpServers: defaultMcpServers,
   selectedMcpId: null,
   setSelectedMcpId: (id) => set({ selectedMcpId: id }),
-  updateMcpConnection: (id, isConnected) =>
-    set((state) => ({
-      mcpServers: state.mcpServers.map((m) =>
-        m.id === id ? { ...m, isConnected } : m
-      ),
-    })),
+  updateMcpConnection: (name, isConnected) =>
+    set((state) => ({ mcpServers: state.mcpServers.map((m) => (m.name === name ? { ...m, isConnected } : m)) })),
+  addMcpServer: (server) => set((state) => ({ mcpServers: [...state.mcpServers, server] })),
+  importMcpServers: (servers) => set((state) => ({ mcpServers: [...state.mcpServers, ...servers] })),
 
   skills: defaultSkills,
   selectedSkillId: null,
   setSelectedSkillId: (id) => set({ selectedSkillId: id }),
+  importSkills: (skills) => set((state) => ({ skills: [...state.skills, ...skills] })),
 
   prompts: defaultPrompts,
   selectedPromptId: null,
   setSelectedPromptId: (id) => set({ selectedPromptId: id }),
+  importPrompts: (prompts) => set((state) => ({ prompts: [...state.prompts, ...prompts] })),
 
-  isCreateDialogOpen: false,
-  createType: null,
-  setIsCreateDialogOpen: (open) => set({ isCreateDialogOpen: open }),
-  setCreateType: (type) => set({ createType: type }),
-
-  expandedTeams: new Set(),
+  expandedTeams: new Set<string>(),
   toggleTeamExpanded: (teamId) =>
     set((state) => {
       const newSet = new Set(state.expandedTeams);
-      if (newSet.has(teamId)) {
-        newSet.delete(teamId);
-      } else {
-        newSet.add(teamId);
-      }
+      newSet.has(teamId) ? newSet.delete(teamId) : newSet.add(teamId);
       return { expandedTeams: newSet };
     }),
 }));
 
 export const useSelectedAgent = () => {
-  const agents = useAppStore((state) => state.agents);
-  const selectedAgentId = useAppStore((state) => state.selectedAgentId);
-  return agents.find((a) => a.id === selectedAgentId) || null;
+  const agents = useAppStore((s) => s.agents);
+  const activeAgentId = useAppStore((s) => s.activeAgentId);
+  const activeTeamMemberId = useAppStore((s) => s.activeTeamMemberId);
+  if (!activeAgentId) return null;
+  const agent = agents.find((a) => a.id === activeAgentId);
+  if (!agent) return null;
+  if (agent.type === "team" && activeTeamMemberId) {
+    return agent.teamMembers?.find((m) => m.id === activeTeamMemberId) ?? null;
+  }
+  return agent;
+};
+
+export const useAgentModel = () => {
+  const selectedAgent = useSelectedAgent();
+  const models = useAppStore((s) => s.models);
+  if (!selectedAgent) return null;
+  return models.find((m) => m.id === selectedAgent.modelId) ?? null;
 };
