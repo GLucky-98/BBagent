@@ -8,9 +8,11 @@ import type {
   MCPServer,
   Prompt,
   SettingsTab,
+  AgentPolicy,
 } from "../types";
+import { api } from "../lib/api";
 
-interface AppState {
+export interface AppState {
   agents: Agent[];
   activeAgentId: string | null;
   activeTeamMemberId: string | null;
@@ -42,6 +44,8 @@ interface AppState {
 
   workingDirPath: string;
   setWorkingDirPath: (path: string) => void;
+  baseDirPath: string;
+  setBaseDirPath: (path: string) => void;
   basedirExpandedPaths: Set<string>;
   toggleBasedirExpand: (path: string) => void;
 
@@ -62,15 +66,15 @@ interface AppState {
   models: Model[];
   selectedModelId: string | null;
   setSelectedModelId: (id: string | null) => void;
-  addModel: (model: Model) => void;
-  updateModel: (id: string, updates: Partial<Model>) => void;
+  addModel: (model: Model) => Promise<void>;
+  updateModel: (id: string, updates: Partial<Model>) => Promise<void>;
 
   tools: Tool[];
   mcpServers: MCPServer[];
   selectedMcpId: string | null;
   setSelectedMcpId: (id: string | null) => void;
   updateMcpConnection: (name: string, isConnected: boolean) => void;
-  addMcpServer: (server: MCPServer) => void;
+  addMcpServer: (server: MCPServer) => Promise<void>;
   importMcpServers: (servers: MCPServer[]) => void;
 
   skills: Skill[];
@@ -81,63 +85,16 @@ interface AppState {
   prompts: Prompt[];
   selectedPromptId: string | null;
   setSelectedPromptId: (id: string | null) => void;
+  addPrompt: (prompt: Prompt) => Promise<void>;
   importPrompts: (prompts: Prompt[]) => void;
 
   expandedTeams: Set<string>;
   toggleTeamExpanded: (teamId: string) => void;
-}
 
-const defaultModels: Model[] = [
-  {
-    id: "model-1",
-    name: "Claude Sonnet 4",
-    provider: "anthropic",
-    modelName: "claude-sonnet-4-20250514",
-    apiKey: "",
-    baseUrl: "https://api.anthropic.com",
-    maxContextTokens: 200000,
-    maxCompletionTokens: 100000,
-    temperature: 1,
-    topP: 0.95,
-    thinking: { type: "adaptive" },
-  },
-  {
-    id: "model-2",
-    name: "Claude Opus 4",
-    provider: "anthropic",
-    modelName: "claude-opus-4-20250514",
-    apiKey: "",
-    baseUrl: "https://api.anthropic.com",
-    maxContextTokens: 200000,
-    maxCompletionTokens: 100000,
-    temperature: 1,
-    topP: 0.95,
-    thinking: { type: "adaptive" },
-  },
-  {
-    id: "model-3",
-    name: "GPT-4o",
-    provider: "openai",
-    modelName: "gpt-4o",
-    apiKey: "",
-    baseUrl: "https://api.openai.com/v1",
-    maxContextTokens: 128000,
-    maxCompletionTokens: 100000,
-    temperature: 1,
-    topP: 1,
-    thinking: { type: "enabled" },
-  },
-  {
-    id: "model-4",
-    name: "text-embedding-3-large",
-    provider: "openai",
-    modelName: "text-embedding-3-large",
-    apiKey: "",
-    baseUrl: "https://api.openai.com/v1",
-    maxContextTokens: 8192,
-    maxCompletionTokens: 8192,
-  },
-];
+  loadAll: () => Promise<void>;
+  createAgentApi: (agent: Agent) => Promise<void>;
+  createTeamApi: (team: Agent) => Promise<void>;
+}
 
 const defaultTools: Tool[] = [
   {
@@ -238,136 +195,37 @@ const defaultTools: Tool[] = [
     },
     isMcp: false,
   },
-  {
-    id: "mcp-tool-1",
-    name: "firecrawl_scrape",
-    description: "Extract clean markdown from any URL",
-    inputSchema: {
-      type: "object",
-      properties: { url: { type: "string", description: "The URL to scrape" } },
-      required: ["url"],
-    },
-    isMcp: true,
-    mcpServerName: "firecrawl",
-  },
-  {
-    id: "mcp-tool-2",
-    name: "firecrawl_search",
-    description: "Web search with full page content extraction",
-    inputSchema: {
-      type: "object",
-      properties: { query: { type: "string", description: "The search query" } },
-      required: ["query"],
-    },
-    isMcp: true,
-    mcpServerName: "firecrawl",
-  },
 ];
-
-const defaultSkills: Skill[] = [
-  {
-    name: "code-expert",
-    description: "Expert coding assistant with multi-language support",
-    path: "/skills/code-expert",
-    metadata: { license: "MIT", compatibility: "All platforms", version: "1.0.0", allowedTools: ["bash", "read", "write", "edit"] },
-    body: "You are an expert code assistant with deep knowledge of multiple programming languages.",
-    source: "default",
-  },
-  {
-    name: "research-analyst",
-    description: "Research and analysis skill for gathering and synthesizing information",
-    path: "/skills/research-analyst",
-    metadata: { license: "MIT", compatibility: "All platforms", version: "1.2.0", allowedTools: ["grep", "find"] },
-    body: "You are a research analyst specializing in gathering and synthesizing information.",
-    source: "default",
-  },
-  {
-    name: "web-scraper",
-    description: "Extract and structure data from websites",
-    path: "/skills/web-scraper",
-    metadata: { license: "Apache-2.0", compatibility: "All platforms", version: "2.1.0", allowedTools: ["firecrawl_scrape", "firecrawl_search"] },
-    body: "You are a web scraping expert capable of extracting structured data from websites.",
-    source: "default",
-  },
-];
-
-const defaultMcpServers: MCPServer[] = [
-  {
-    name: "firecrawl",
-    command: "npx",
-    args: ["-y", "@firecrawl/mcp"],
-    env: { FIRECRAWL_API_KEY: "" },
-    isConnected: false,
-    tools: [],
-    source: "default",
-  },
-  {
-    name: "filesystem",
-    command: "python",
-    args: ["-m", "mcp_server_filesystem"],
-    env: {},
-    isConnected: true,
-    tools: [],
-    source: "default",
-  },
-];
-
-const defaultPrompts: Prompt[] = [
-  {
-    id: "prompt-1",
-    name: "code-review",
-    description: "Review code for quality, bugs, and best practices",
-    content: "You are an expert code reviewer. Analyze the provided code and give constructive feedback on code quality, bugs, best practices, performance, and security.",
-    source: "built-in",
-  },
-  {
-    id: "prompt-2",
-    name: "research-summary",
-    description: "Summarize research findings into actionable insights",
-    content: "You are a research analyst. Given a set of research findings, create a comprehensive summary with key findings, supporting evidence, contradictions, implications, and next steps.",
-    source: "built-in",
-  },
-  {
-    id: "prompt-3",
-    name: "task-decomposition",
-    description: "Break down complex tasks into manageable steps",
-    content: "You are a task planning expert. Break down complex goals into clear, actionable steps with dependencies, sub-tasks, time estimates, and risks.",
-    source: "built-in",
-  },
-  {
-    id: "prompt-4",
-    name: "debugging-assistant",
-    description: "Help identify and fix software bugs",
-    content: "You are a debugging expert. Help reproduce bugs, propose causes, guide investigation, verify fixes, and document solutions.",
-    source: "built-in",
-  },
-];
-
-const defaultAgents: Agent[] = [];
 
 export const useAppStore = create<AppState>((set, get) => ({
-  agents: defaultAgents,
+  agents: [],
   activeAgentId: null,
   activeTeamMemberId: null,
 
   setActiveAgentId: (id) => {
     const agent = id ? get().agents.find((a) => a.id === id) : null;
-    set({ activeAgentId: id, activeTeamMemberId: null, workingDirPath: agent?.basePath ?? "", previewFile: null });
+    set({
+      activeAgentId: id,
+      activeTeamMemberId: null,
+      workingDirPath: agent?.policy?.cwd || "",
+      baseDirPath: agent?.basePath || "",
+      previewFile: null,
+    });
   },
 
   selectTeamMember: (teamId, memberId) => {
     if (memberId) {
       const team = get().agents.find((a) => a.id === teamId);
       const member = team?.teamMembers?.find((m) => m.id === memberId);
-      set({ activeAgentId: teamId, activeTeamMemberId: memberId, workingDirPath: member?.basePath ?? "", previewFile: null });
+      set({ activeAgentId: teamId, activeTeamMemberId: memberId, workingDirPath: member?.policy?.cwd || "", baseDirPath: member?.basePath || "", previewFile: null });
     } else {
       const team = get().agents.find((a) => a.id === teamId);
-      set({ activeAgentId: teamId, activeTeamMemberId: null, workingDirPath: team?.basePath ?? "", previewFile: null });
+      set({ activeAgentId: teamId, activeTeamMemberId: null, workingDirPath: team?.policy?.cwd || "", baseDirPath: team?.basePath || "", previewFile: null });
     }
   },
 
-  addAgent: (agent) => set((state) => ({ agents: [...state.agents, agent], activeAgentId: agent.id, workingDirPath: agent.basePath })),
-  addTeam: (team) => set((state) => ({ agents: [...state.agents, team], activeAgentId: team.id, workingDirPath: team.basePath })),
+  addAgent: (agent) => set((state) => ({ agents: [...state.agents, agent], activeAgentId: agent.id, workingDirPath: agent.policy?.cwd || "", baseDirPath: agent.basePath })),
+  addTeam: (team) => set((state) => ({ agents: [...state.agents, team], activeAgentId: team.id, workingDirPath: team.policy?.cwd || "", baseDirPath: team.basePath })),
   updateAgent: (id, updates) => set((state) => ({ agents: state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)) })),
   updateTeam: (id, updates) => set((state) => ({ agents: state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)) })),
   addMessage: (agentId, message) =>
@@ -385,6 +243,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   workingDirPath: "",
   setWorkingDirPath: (path) => set({ workingDirPath: path }),
 
+  baseDirPath: "",
+  setBaseDirPath: (path) => set({ baseDirPath: path }),
+
   basedirExpandedPaths: new Set<string>(),
   toggleBasedirExpand: (path) =>
     set((state) => {
@@ -397,31 +258,43 @@ export const useAppStore = create<AppState>((set, get) => ({
   openFilePreview: (file) => set({ previewFile: file }),
   closeFilePreview: () => set({ previewFile: null }),
 
-  models: defaultModels,
+  models: [],
   selectedModelId: null,
   setSelectedModelId: (id) => set({ selectedModelId: id }),
-  addModel: (model) => set((state) => ({ models: [...state.models, model] })),
-  updateModel: (id, updates) =>
-    set((state) => ({ models: state.models.map((m) => (m.id === id ? { ...m, ...updates } : m)) })),
+  addModel: async (model) => {
+    await api.createModel(model);
+    set((state) => ({ models: [...state.models, model] }));
+  },
+  updateModel: async (id, updates) => {
+    await api.updateModel(id, updates);
+    set((state) => ({ models: state.models.map((m) => (m.id === id ? { ...m, ...updates } : m)) }));
+  },
 
   tools: defaultTools,
 
-  mcpServers: defaultMcpServers,
+  mcpServers: [],
   selectedMcpId: null,
   setSelectedMcpId: (id) => set({ selectedMcpId: id }),
   updateMcpConnection: (name, isConnected) =>
     set((state) => ({ mcpServers: state.mcpServers.map((m) => (m.name === name ? { ...m, isConnected } : m)) })),
-  addMcpServer: (server) => set((state) => ({ mcpServers: [...state.mcpServers, server] })),
+  addMcpServer: async (server) => {
+    await api.createMcp(server);
+    set((state) => ({ mcpServers: [...state.mcpServers, server] }));
+  },
   importMcpServers: (servers) => set((state) => ({ mcpServers: [...state.mcpServers, ...servers] })),
 
-  skills: defaultSkills,
+  skills: [],
   selectedSkillId: null,
   setSelectedSkillId: (id) => set({ selectedSkillId: id }),
   importSkills: (skills) => set((state) => ({ skills: [...state.skills, ...skills] })),
 
-  prompts: defaultPrompts,
+  prompts: [],
   selectedPromptId: null,
   setSelectedPromptId: (id) => set({ selectedPromptId: id }),
+  addPrompt: async (prompt) => {
+    await api.createPrompt(prompt);
+    set((state) => ({ prompts: [...state.prompts, prompt] }));
+  },
   importPrompts: (prompts) => set((state) => ({ prompts: [...state.prompts, ...prompts] })),
 
   expandedTeams: new Set<string>(),
@@ -431,6 +304,41 @@ export const useAppStore = create<AppState>((set, get) => ({
       newSet.has(teamId) ? newSet.delete(teamId) : newSet.add(teamId);
       return { expandedTeams: newSet };
     }),
+
+  loadAll: async () => {
+    try {
+      const [models, mcps, prompts, skills, agents, teams, state] = await Promise.all([
+        api.listModels(),
+        api.listMcps(),
+        api.listPrompts(),
+        api.listSkills(),
+        api.listAgents(),
+        api.listTeams(),
+        api.getState().catch(() => null),
+      ]);
+      set({
+        models: models || [],
+        mcpServers: mcps || [],
+        prompts: prompts || [],
+        skills: skills || [],
+        agents: (agents || []).concat(teams || []),
+        workingDirPath: state?.workingDirPath || "",
+        baseDirPath: state?.baseDirPath || "",
+      });
+    } catch (e) {
+      console.error("Failed to load state from backend:", e);
+    }
+  },
+
+  createAgentApi: async (agent: Agent) => {
+    await api.createAgent(agent);
+    set((state) => ({ agents: [...state.agents, agent], activeAgentId: agent.id }));
+  },
+
+  createTeamApi: async (team: Agent) => {
+    await api.createTeam(team);
+    set((state) => ({ agents: [...state.agents, team], activeAgentId: team.id }));
+  },
 }));
 
 export const useSelectedAgent = () => {

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { TopNav } from "./components/layout/TopNav";
 import { OnboardingView } from "./components/onboarding/OnboardingView";
 import { WorkspaceView } from "./components/workspace/WorkspaceView";
@@ -6,9 +7,15 @@ import { useAppStore } from "./store";
 
 function App() {
   const agents = useAppStore((s) => s.agents);
+  const activeAgentId = useAppStore((s) => s.activeAgentId);
   const configDialog = useAppStore((s) => s.configDialog);
   const closeConfigDialog = useAppStore((s) => s.closeConfigDialog);
-  const isOnboarding = agents.length === 0;
+  const loadAll = useAppStore((s) => s.loadAll);
+  const isOnboarding = !activeAgentId;
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden min-w-[900px] min-h-[600px]">

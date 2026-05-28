@@ -201,6 +201,7 @@ export function BasedirTree() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[--color-muted-foreground] border-b border-[--color-border] shrink-0">
+        <span className="text-[10px] text-[--color-muted-foreground] uppercase tracking-wide mr-1">Base Path</span>
         <FolderOpen className="w-3.5 h-3.5" />
         <span className="truncate">{rootPath}</span>
       </div>

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Sparkles, MapPin, FileText, Info, FolderOpen, X } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
-import type { Skill } from "../types";
+// import type { Skill } from "../types";
 
 function ImportDialog({ onImport, onClose }: { onImport: (path: string) => void; onClose: () => void }) {
   const [path, setPath] = useState("");
@@ -42,10 +42,10 @@ function SkillList() {
 
   return (
     <div className="w-[300px] h-full bg-white border-r border-[--color-border] flex flex-col">
-      <div className="p-2 border-b border-[--color-border]">
+      <div className="p-3 border-b border-[--color-border]">
         <button onClick={() => setShowImport(!showImport)}
-          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-[--color-border] text-xs font-medium hover:bg-[--color-secondary]">
-          <FolderOpen size={12} />Import from Folder
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[--color-border] text-sm font-medium hover:bg-[--color-secondary]">
+          <FolderOpen size={16} />Import from Folder
         </button>
       </div>
       {showImport && <div className="p-2"><ImportDialog onImport={handleImport} onClose={() => setShowImport(false)} /></div>}

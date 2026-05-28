@@ -59,7 +59,7 @@ function NewServerForm({ onClose }: { onClose: () => void }) {
   );
 }
 
-function MCPList({ onNew, onImport }: { onNew: () => void; onImport: () => void }) {
+function MCPList({ onNew }: { onNew: () => void }) {
   const mcpServers = useAppStore((s) => s.mcpServers);
   const selectedMcpId = useAppStore((s) => s.selectedMcpId);
   const setSelectedMcpId = useAppStore((s) => s.setSelectedMcpId);
@@ -79,14 +79,14 @@ function MCPList({ onNew, onImport }: { onNew: () => void; onImport: () => void 
 
   return (
     <div className="w-[300px] h-full bg-white border-r border-[--color-border] flex flex-col">
-      <div className="p-2 border-b border-[--color-border] space-y-1">
+      <div className="p-3 border-b border-[--color-border] space-y-1.5">
         <button onClick={onNew}
-          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] text-xs font-medium hover:opacity-90">
-          <Plus size={12} />New Server
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90 transition-opacity">
+          <Plus size={16} /><span className="text-sm font-medium">New Server</span>
         </button>
         <button onClick={() => setShowImport(!showImport)}
-          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-[--color-border] text-xs font-medium hover:bg-[--color-secondary]">
-          <FolderOpen size={12} />Import from Folder
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[--color-border] text-sm font-medium hover:bg-[--color-secondary]">
+          <FolderOpen size={16} />Import from Folder
         </button>
       </div>
       {showImport && (
@@ -202,7 +202,6 @@ export function MCPsModule() {
     <div className="flex h-full">
       <MCPList
         onNew={() => setShowNew(true)}
-        onImport={() => {}}
       />
       <MCPDetailPanel showNew={showNew} onCloseForms={closeForms} />
     </div>

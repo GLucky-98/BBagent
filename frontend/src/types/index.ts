@@ -76,6 +76,7 @@ export interface Agent {
   name: string;
   type: "single" | "team";
   basePath: string;
+  workingDir: string;
   modelId: string;
   systemPrompt: string;
   toolNames: string[];
@@ -86,6 +87,23 @@ export interface Agent {
   contacts?: Record<string, Record<string, string>>;
   teamPrompt?: string;
   messages: Message[];
+  policy: AgentPolicy;
+}
+
+export interface AgentPolicy {
+  cwd: string;
+  allowedDirs: string;
+  bashAllowNetwork: boolean;
+  bashMaxOutputLines: number;
+  blockedPaths: string;
+  blockedExtensions: string;
+  maxReadSize: number;
+  maxReadLines: number;
+  maxWriteSize: number;
+  writeCreateDirectories: boolean;
+  bashAllowedCommands: string;
+  bashBlockedCommands: string;
+  bashDefaultTimeout: number;
 }
 
 export interface FileNode {

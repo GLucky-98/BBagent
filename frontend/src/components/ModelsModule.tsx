@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Plus, Box, Play, X } from "lucide-react";
+import { Plus, Box, Play, X, Loader2 } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
+import { api } from "../lib/api";
 import type { Model } from "../types";
 
 const ACTIVE_CLASS = "bg-[--color-primary]/10 text-[--color-primary] font-semibold shadow-[inset_4px_0_0_0_#10b981]";
@@ -161,8 +162,24 @@ function ModelTestPanel({ showForm, editModel, onCloseForm, onNew, onEdit }: {
   const [input, setInput] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const selectedModel = models.find((m) => m.id === selectedModelId);
+
+  const handleTest = async () => {
+    if (!selectedModel || !input.trim()) return;
+    setIsLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await api.testModel(selectedModel.id, input.trim());
+      setResult(res.content);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Test failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className="flex-1 h-full flex flex-col bg-[--color-background] overflow-y-auto">
@@ -172,17 +189,18 @@ function ModelTestPanel({ showForm, editModel, onCloseForm, onNew, onEdit }: {
         <>
           <ModelDetailView selectedModel={selectedModel} />
           <div className="p-4 border-t border-[--color-border]">
-            <div className="flex gap-2 mb-3">
-              <button onClick={onNew} className="flex-1 py-1.5 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] text-xs font-medium hover:opacity-90">New</button>
-              <button onClick={() => onEdit(selectedModel.id)} className="flex-1 py-1.5 rounded-lg border border-[--color-border] text-xs font-medium hover:bg-[--color-secondary]">Edit</button>
+            <div className="mb-3">
+              <button onClick={() => onEdit(selectedModel.id)} className="w-full py-1.5 rounded-lg border border-[--color-border] text-xs font-medium hover:bg-[--color-secondary]">Edit</button>
             </div>
             <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="Test prompt..." rows={3}
               className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring] resize-none text-sm mb-2" />
-            <button onClick={() => { setIsLoading(true); setTimeout(() => { setIsLoading(false); setResult(`[Test response from ${selectedModel.name}]`); }, 1500); }}
-              disabled={isLoading}
+            <button onClick={handleTest}
+              disabled={isLoading || !input.trim()}
               className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] text-sm hover:opacity-90 disabled:opacity-50">
-              <Play size={14} />{isLoading ? "Testing..." : "Run Test"}
+              {isLoading ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+              {isLoading ? "Testing..." : "Run Test"}
             </button>
+            {error && <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700 whitespace-pre-wrap">{error}</div>}
             {result && <pre className="mt-2 p-3 bg-white rounded border border-[--color-border] text-xs whitespace-pre-wrap">{result}</pre>}
           </div>
         </>

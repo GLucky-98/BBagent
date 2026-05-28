@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 
 interface SplitterProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -10,13 +10,10 @@ interface SplitterProps {
 
 export function Splitter({
   containerRef,
-  ratio,
   onRatioChange,
   minRatio = 0.1,
   maxRatio = 0.9,
-}: SplitterProps) {
-  const isDragging = useRef(false);
-
+}: Omit<SplitterProps, 'ratio'>) {
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();

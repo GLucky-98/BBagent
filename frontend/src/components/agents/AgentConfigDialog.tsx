@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
-import { X, Bot, Users, Search, FileText } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { X, Bot, Users, Search, FileText, FolderOpen, Folder, ChevronRight, ChevronUp, Loader2 } from "lucide-react";
 import { useAppStore } from "../../store";
 import { cn } from "../../lib/utils";
-import type { Agent, MCPServer } from "../../types";
+import { api } from "../../lib/api";
+import type { Agent } from "../../types";
 
 interface AgentConfigDialogProps {
   open: boolean;
@@ -33,6 +34,139 @@ function TypeSelection({ onSelect }: { onSelect: (t: "agent" | "team") => void }
   );
 }
 
+function DirectoryPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (path: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [currentPath, setCurrentPath] = useState(value || "~");
+  const [dirs, setDirs] = useState<string[]>([]);
+  const [parentPath, setParentPath] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const loadDirs = async (path: string) => {
+    setLoading(true);
+    try {
+      const res = await api.listDirs(path);
+      setCurrentPath(res.current);
+      setParentPath(res.parent);
+      setDirs(res.directories);
+    } catch {
+      setDirs([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpen = () => {
+    setOpen(true);
+    loadDirs(value || "~");
+  };
+
+  const handleNavigate = (dirName: string) => {
+    const sep = currentPath.endsWith("/") ? "" : "/";
+    const newPath = currentPath + sep + dirName;
+    loadDirs(newPath);
+  };
+
+  const handleGoUp = () => {
+    if (parentPath) loadDirs(parentPath);
+  };
+
+  const handleSelect = () => {
+    onChange(currentPath);
+    setOpen(false);
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    if (open) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <div className="flex gap-1">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="/workspace/agent"
+          className="flex-1 px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring]"
+        />
+        <button
+          type="button"
+          onClick={handleOpen}
+          className="px-3 py-2 rounded-lg border border-[--color-border] hover:bg-[--color-secondary] transition-colors"
+          title="Browse folders"
+        >
+          <FolderOpen size={16} />
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-[--color-border] rounded-lg shadow-lg max-h-[220px] flex flex-col">
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-[--color-border] bg-[--color-muted]/20 text-xs text-[--color-muted-foreground] truncate">
+            <Folder size={12} className="shrink-0" />
+            <span className="truncate">{currentPath}</span>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {loading ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 size={16} className="animate-spin text-[--color-muted-foreground]" />
+              </div>
+            ) : (
+              <>
+                {parentPath && (
+                  <button
+                    onClick={handleGoUp}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-[--color-secondary] text-[--color-muted-foreground]"
+                  >
+                    <ChevronUp size={14} />
+                    <span>..</span>
+                  </button>
+                )}
+                {dirs.length === 0 && !parentPath && (
+                  <div className="px-3 py-6 text-center text-xs text-[--color-muted-foreground]">
+                    No subdirectories
+                  </div>
+                )}
+                {dirs.map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => handleNavigate(d)}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-[--color-secondary]"
+                  >
+                    <Folder size={14} className="text-amber-500 shrink-0" />
+                    <span className="truncate">{d}</span>
+                    <ChevronRight size={14} className="ml-auto shrink-0 text-[--color-muted-foreground]" />
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
+          <div className="px-3 py-2 border-t border-[--color-border]">
+            <button
+              onClick={handleSelect}
+              className="w-full py-1.5 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] text-xs font-medium hover:opacity-90"
+            >
+              Select This Folder
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SingleAgentForm({
   initialData,
   onSave,
@@ -41,7 +175,7 @@ function SingleAgentForm({
     name: string; basePath: string; modelId: string;
     systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean;
   };
-  onSave: (data: { name: string; basePath: string; modelId: string; systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean }) => void;
+  onSave: (data: { name: string; basePath: string; modelId: string; systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean; policy: Record<string, unknown> }) => void;
 }) {
   const models = useAppStore((s) => s.models);
   const tools = useAppStore((s) => s.tools);
@@ -49,6 +183,8 @@ function SingleAgentForm({
   const prompts = useAppStore((s) => s.prompts);
   const [showPromptPicker, setShowPromptPicker] = useState(false);
   const [promptFilter, setPromptFilter] = useState("");
+
+  const [showAllPrompts, setShowAllPrompts] = useState(false);
 
   const [form, setForm] = useState({
     name: initialData?.name ?? "",
@@ -60,7 +196,26 @@ function SingleAgentForm({
     hookEnabled: initialData?.hookEnabled ?? true,
   });
 
+  const [policy, setPolicy] = useState({
+    cwd: "",
+    allowedDirs: "",
+    blockedPaths: "",
+    blockedExtensions: "",
+    maxReadSize: 500000,
+    maxReadLines: 10000,
+    maxWriteSize: 5242880,
+    writeCreateDirectories: true,
+    bashAllowedCommands: "",
+    bashBlockedCommands: "",
+    bashAllowNetwork: true,
+    bashMaxOutputLines: 1000,
+    bashDefaultTimeout: 60,
+  });
+
   const builtInTools = tools.filter((t) => !t.isMcp);
+  const selectedToolNames = new Set(form.toolNames);
+  const hasFileTools = selectedToolNames.has("read") || selectedToolNames.has("write") || selectedToolNames.has("edit");
+  const hasBashTool = selectedToolNames.has("bash");
   const mcpToolsByServer = tools.filter((t) => t.isMcp).reduce<Record<string, typeof tools>>((acc, t) => {
     const key = t.mcpServerName ?? "Other";
     (acc[key] ??= []).push(t);
@@ -68,9 +223,14 @@ function SingleAgentForm({
   }, {});
 
   const filteredPrompts = prompts.filter((p) =>
-    p.name.toLowerCase().includes(promptFilter.toLowerCase()) ||
-    p.description.toLowerCase().includes(promptFilter.toLowerCase())
+    showAllPrompts
+      ? true
+      : promptFilter.trim() === ""
+        ? false
+        : p.name.toLowerCase().includes(promptFilter.toLowerCase())
   );
+
+  const hasTools = form.toolNames.length > 0;
 
   return (
     <div className="p-6">
@@ -86,8 +246,11 @@ function SingleAgentForm({
 
         <div>
           <label className="block text-sm font-medium mb-1.5">Base Path</label>
-          <input type="text" value={form.basePath} onChange={(e) => setForm({ ...form, basePath: e.target.value })}
-            placeholder="/workspace/agent" className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring]" />
+          <p className="text-xs text-[--color-muted-foreground] mb-1.5">Storage for agent logs, conversation history, and memory files</p>
+          <DirectoryPicker
+            value={form.basePath}
+            onChange={(path) => setForm({ ...form, basePath: path })}
+          />
         </div>
 
         <div>
@@ -102,7 +265,7 @@ function SingleAgentForm({
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-sm font-medium">System Prompt</label>
-            <button onClick={() => setShowPromptPicker(!showPromptPicker)}
+            <button onClick={() => { setShowPromptPicker(!showPromptPicker); setPromptFilter(""); }}
               className="flex items-center gap-1 text-xs text-[--color-primary] hover:underline">
               <FileText className="w-3 h-3" />
               {showPromptPicker ? "Hide Prompt Library" : "From Prompt Library"}
@@ -111,18 +274,35 @@ function SingleAgentForm({
           {showPromptPicker && (
             <div className="mb-2 border border-[--color-border] rounded-lg overflow-hidden">
               <div className="flex items-center gap-1 px-3 py-2 border-b border-[--color-border] bg-[--color-muted]/20">
-                <Search className="w-3 h-3 text-[--color-muted-foreground]" />
+                <Search className="w-3 h-3 text-[--color-muted-foreground] shrink-0" />
                 <input type="text" value={promptFilter} onChange={(e) => setPromptFilter(e.target.value)}
-                  placeholder="Filter prompts..." className="flex-1 text-xs bg-transparent outline-none" />
+                  placeholder="Search by prompt title..." className="flex-1 text-xs bg-transparent outline-none" />
+                <button
+                  type="button"
+                  onClick={() => { setShowAllPrompts(!showAllPrompts); setPromptFilter(""); }}
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-[--color-border] hover:bg-[--color-secondary] shrink-0"
+                >
+                  {showAllPrompts ? "Search" : "Browse All"}
+                </button>
               </div>
               <div className="max-h-[120px] overflow-y-auto">
-                {filteredPrompts.map((p) => (
-                  <button key={p.id} onClick={() => { setForm({ ...form, systemPrompt: p.content }); setShowPromptPicker(false); }}
-                    className="w-full text-left px-3 py-2 hover:bg-[--color-secondary] text-sm">
-                    <span className="font-medium">{p.name}</span>
-                    <span className="text-xs text-[--color-muted-foreground] ml-2">{p.description}</span>
-                  </button>
-                ))}
+                {prompts.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-xs text-[--color-muted-foreground]">
+                    No prompts available
+                  </div>
+                ) : filteredPrompts.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-xs text-[--color-muted-foreground]">
+                    No matching prompts found
+                  </div>
+                ) : (
+                  filteredPrompts.map((p) => (
+                    <button key={p.id} onClick={() => { setForm({ ...form, systemPrompt: p.content }); setShowPromptPicker(false); }}
+                      className="w-full text-left px-3 py-2 hover:bg-[--color-secondary] text-sm">
+                      <span className="font-medium">{p.name}</span>
+                      <span className="text-xs text-[--color-muted-foreground] ml-2">{p.description}</span>
+                    </button>
+                  ))
+                )}
               </div>
             </div>
           )}
@@ -163,6 +343,103 @@ function SingleAgentForm({
           </div>
         </div>
 
+        {hasTools && (
+          <div>
+            <label className="block text-sm font-medium mb-1.5">Policy</label>
+            <p className="text-xs text-[--color-muted-foreground] mb-1.5">Directory scope where agent tools are allowed to operate</p>
+            <div className="border border-[--color-border] rounded-lg p-3 space-y-3 bg-[--color-muted]/10">
+              <div>
+                <label className="block text-xs font-medium mb-1">Working Directory (cwd)</label>
+                <DirectoryPicker
+                  value={policy.cwd}
+                  onChange={(path) => setPolicy({ ...policy, cwd: path })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Allowed Directories (comma-separated)</label>
+                <input type="text" value={policy.allowedDirs} onChange={(e) => setPolicy({ ...policy, allowedDirs: e.target.value })}
+                  placeholder="e.g. /workspace,/tmp/output" className="w-full px-2 py-1.5 text-sm rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+              </div>
+              {hasFileTools && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Max Read Size (bytes)</label>
+                      <input type="number" value={policy.maxReadSize} onChange={(e) => setPolicy({ ...policy, maxReadSize: Number(e.target.value) })}
+                        className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Max Read Lines</label>
+                      <input type="number" value={policy.maxReadLines} onChange={(e) => setPolicy({ ...policy, maxReadLines: Number(e.target.value) })}
+                        className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Max Write Size (bytes)</label>
+                      <input type="number" value={policy.maxWriteSize} onChange={(e) => setPolicy({ ...policy, maxWriteSize: Number(e.target.value) })}
+                        className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                    </div>
+                    <div className="flex items-end pb-1.5">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={policy.writeCreateDirectories} onChange={(e) => setPolicy({ ...policy, writeCreateDirectories: e.target.checked })}
+                          className="rounded" />
+                        <span className="text-xs">Create missing dirs</span>
+                      </label>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Blocked Paths (comma-separated)</label>
+                    <input type="text" value={policy.blockedPaths} onChange={(e) => setPolicy({ ...policy, blockedPaths: e.target.value })}
+                      placeholder="e.g. /etc/passwd,*.env" className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Blocked Extensions (comma-separated)</label>
+                    <input type="text" value={policy.blockedExtensions} onChange={(e) => setPolicy({ ...policy, blockedExtensions: e.target.value })}
+                      placeholder="e.g. .exe,.dll,.so" className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                  </div>
+                </>
+              )}
+              {hasBashTool && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Max Bash Output Lines</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <input type="number" value={policy.bashMaxOutputLines} onChange={(e) => setPolicy({ ...policy, bashMaxOutputLines: Number(e.target.value) })}
+                        className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                      <div>
+                        <label className="block text-xs text-[--color-muted-foreground] mb-1">Timeout (seconds)</label>
+                        <input type="number" value={policy.bashDefaultTimeout} onChange={(e) => setPolicy({ ...policy, bashDefaultTimeout: Number(e.target.value) })}
+                          className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Allowed Commands (comma-separated)</label>
+                    <input type="text" value={policy.bashAllowedCommands} onChange={(e) => setPolicy({ ...policy, bashAllowedCommands: e.target.value })}
+                      placeholder="e.g. git,python,npm" className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Blocked Commands (comma-separated)</label>
+                    <input type="text" value={policy.bashBlockedCommands} onChange={(e) => setPolicy({ ...policy, bashBlockedCommands: e.target.value })}
+                      placeholder="e.g. rm,shutdown" className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-medium">Allow Network Commands</span>
+                      <p className="text-[10px] text-[--color-muted-foreground] mt-0.5">Allow bash tools to execute network commands (curl, ssh, etc.)</p>
+                    </div>
+                    <button type="button" onClick={() => setPolicy({ ...policy, bashAllowNetwork: !policy.bashAllowNetwork })}
+                      className={cn("relative w-9 h-5 rounded-full transition-colors shrink-0", policy.bashAllowNetwork ? "bg-emerald-500" : "bg-gray-300")}>
+                      <div className={cn("absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform", policy.bashAllowNetwork ? "translate-x-[18px]" : "translate-x-0.5")} />
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
         <div>
           <label className="block text-sm font-medium mb-1.5">Skills</label>
           <div className="border border-[--color-border] rounded-lg max-h-[150px] overflow-y-auto p-3 space-y-1">
@@ -201,7 +478,8 @@ function SingleAgentForm({
           </label>
         </div>
 
-        <button onClick={() => onSave(form)} disabled={!form.modelId}
+        <button onClick={() => onSave({ ...form, policy })}
+          disabled={!form.modelId}
           className="w-full py-2.5 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed mt-2">
           {initialData ? "Save Changes" : "Create Agent"}
         </button>
@@ -246,12 +524,14 @@ function TeamForm({
       name: memberForm.name || `Member ${(editingMemberIdx ?? members.length) + 1}`,
       type: "single",
       basePath: "",
+      workingDir: "",
       modelId: memberForm.modelId,
       systemPrompt: memberForm.systemPrompt,
       toolNames: memberForm.toolNames,
       skillNames: memberForm.skillNames,
       hookEnabled: memberForm.hookEnabled,
       messages: [],
+      policy: { cwd: "", allowedDirs: "", bashAllowNetwork: true, bashMaxOutputLines: 1000, blockedPaths: "", blockedExtensions: "", maxReadSize: 500000, maxReadLines: 10000, maxWriteSize: 5242880, writeCreateDirectories: true, bashAllowedCommands: "", bashBlockedCommands: "", bashDefaultTimeout: 60 },
     };
     const updated = editingMemberIdx != null
       ? members.map((m, i) => (i === editingMemberIdx ? newMember : m))
@@ -418,8 +698,8 @@ function TeamForm({
 export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentConfigDialogProps) {
   const agents = useAppStore((s) => s.agents);
   const models = useAppStore((s) => s.models);
-  const addAgent = useAppStore((s) => s.addAgent);
-  const addTeam = useAppStore((s) => s.addTeam);
+  const addAgent = useAppStore((s) => s.createAgentApi);
+  const addTeam = useAppStore((s) => s.createTeamApi);
   const updateAgent = useAppStore((s) => s.updateAgent);
   const updateTeam = useAppStore((s) => s.updateTeam);
   const [localType, setLocalType] = useState<"agent" | "team" | "">(type);
@@ -444,11 +724,18 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
     );
   }
 
-  const handleSingleSave = (data: { name: string; basePath: string; modelId: string; systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean }) => {
+  const handleSingleSave = (data: { name: string; basePath: string; modelId: string; systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean; policy: Record<string, unknown> }) => {
+    const agentData = {
+      id: crypto.randomUUID(),
+      type: "single" as const,
+      messages: [],
+      workingDir: typeof data.policy === "object" && data.policy !== null ? String((data.policy as Record<string, unknown>).cwd || "") : "",
+      policy: typeof data.policy === "object" && data.policy !== null ? data.policy as Record<string, unknown> : { cwd: "", allowedDirs: "", bashAllowNetwork: true, bashMaxOutputLines: 1000 },
+    };
     if (mode === "edit" && existingAgent) {
-      updateAgent(existingAgent.id, data);
+      updateAgent(existingAgent.id, { ...data, ...agentData });
     } else {
-      addAgent({ id: crypto.randomUUID(), type: "single", messages: [], ...data });
+      addAgent({ ...data, ...agentData });
     }
     onClose();
   };
@@ -459,6 +746,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
       name: data.name,
       type: "team",
       basePath: "",
+      workingDir: "",
       modelId: models[0]?.id ?? "",
       systemPrompt: data.teamDescription,
       toolNames: [],
@@ -468,6 +756,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
       teamMembers: data.members,
       contacts: data.contacts,
       messages: [],
+      policy: { cwd: "", allowedDirs: "", bashAllowNetwork: true, bashMaxOutputLines: 1000, blockedPaths: "", blockedExtensions: "", maxReadSize: 500000, maxReadLines: 10000, maxWriteSize: 5242880, writeCreateDirectories: true, bashAllowedCommands: "", bashBlockedCommands: "", bashDefaultTimeout: 60 },
     };
     if (mode === "edit" && existingAgent) {
       updateTeam(existingAgent.id, team);

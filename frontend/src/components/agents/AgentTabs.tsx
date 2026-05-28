@@ -26,7 +26,7 @@ export function AgentTabs() {
           agent={agent}
           isActive={agent.id === activeAgentId}
           onClick={() => setActiveAgentId(agent.id)}
-          onConfig={() => openConfigDialog("edit", agent.type, agent.id)}
+          onConfig={() => openConfigDialog("edit", agent.type === "single" ? "agent" : "team", agent.id)}
         />
       ))}
       <button

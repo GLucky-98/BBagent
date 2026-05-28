@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef } from "react";
 import { useAppStore } from "../../store";
 import { WorkingDirView } from "./WorkingDirView";
 import { BasedirTree } from "./BasedirTree";
@@ -31,7 +31,6 @@ export function PanelA_FilePanel() {
 
       <Splitter
         containerRef={containerRef}
-        ratio={splitRatio}
         onRatioChange={setSplitRatio}
       />
 

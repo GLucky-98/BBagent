@@ -1,5 +1,4 @@
 import { AppIcon } from "./AppIcon";
-import { UserMenu } from "./UserMenu";
 import { AgentTabs } from "../agents/AgentTabs";
 
 export function TopNav() {
@@ -9,7 +8,6 @@ export function TopNav() {
       <div className="flex-1 flex items-center h-full overflow-x-auto">
         <AgentTabs />
       </div>
-      <UserMenu />
     </div>
   );
 }

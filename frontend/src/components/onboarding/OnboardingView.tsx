@@ -60,7 +60,7 @@ function useOnboardingSteps(): Step[] {
       description: "Set up and launch your first Agent or Agent Team",
       completed: false,
       inProgress: false,
-      action: () => openConfigDialog("create", "agent"),
+      action: () => openConfigDialog("create", ""),
       actionLabel: "Create \u2192",
       required: true,
     },

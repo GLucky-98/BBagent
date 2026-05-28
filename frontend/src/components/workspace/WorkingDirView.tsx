@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   Folder,
-  FolderOpen,
   File as FileIcon,
   Search,
   ChevronRight,
@@ -81,8 +80,9 @@ export function WorkingDirView() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-1 px-3 py-1.5 border-b border-[--color-border] shrink-0">
+        <span className="text-[10px] text-[--color-muted-foreground] uppercase tracking-wide mr-1">Working Dir</span>
         <span className="text-xs text-[--color-muted-foreground] truncate flex-1">
-          {workingDirPath || "/workspace/src/"}
+          {workingDirPath || "Not set"}
         </span>
         <button className="p-0.5 rounded hover:bg-[--color-secondary] text-[--color-muted-foreground]">
           <RefreshCw className="w-3 h-3" />
