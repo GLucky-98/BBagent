@@ -11,7 +11,6 @@ async def list_teams():
     result = []
     for name, team in state_manager.teams.items():
         result.append(TeamSummary(
-            id=name,
             name=name,
             agentCount=len(team.agents),
             teamDescription=team.team_description,

@@ -13,7 +13,6 @@ from .core import (
     AnthropicModel,
     OpenAIModel,
     Tool,
-    ToolManager,
     tool,
     Session,
     Message,
@@ -30,10 +29,14 @@ from .core import (
     InputChannel,
     AgentTeam,
     TeamConfig,
-    MCPManager,
+    MCPClient,
+    MCPTool,
     MCPServerConfig,
+    parse_config_file,
+    load_configs,
+    restore_mcp_tools,
     Skill,
-    SkillManager,
+    scan_skills,
 )
 
 from .built_in_tool import (
@@ -49,7 +52,13 @@ from .built_in_tool import (
     create_ls_tool,
 )
 
-from .built_in_hook import setup_agent_hook, compress_session, MemoryCompressConfig
+from .built_in_hook import (
+    create_memory_compress_hook,
+    setup_agent_hook,
+    compress_session,
+    MemoryCompressConfig,
+    HOOK_CREATOR,
+)
 
 __all__ = [
     "Agent",
@@ -66,7 +75,6 @@ __all__ = [
     "AnthropicModel",
     "OpenAIModel",
     "Tool",
-    "ToolManager",
     "tool",
     "Session",
     "Message",
@@ -83,10 +91,14 @@ __all__ = [
     "InputChannel",
     "AgentTeam",
     "TeamConfig",
-    "MCPManager",
+    "MCPClient",
+    "MCPTool",
     "MCPServerConfig",
+    "parse_config_file",
+    "load_configs",
+    "restore_mcp_tools",
     "Skill",
-    "SkillManager",
+    "scan_skills",
     "create_all_tools",
     "create_coding_tools",
     "create_readonly_tools",
@@ -99,10 +111,10 @@ __all__ = [
     "create_ls_tool",
 ]
 
-from .built_in_hook import setup_agent_hook, compress_session, MemoryCompressConfig
-
 __all__ += [
+    "create_memory_compress_hook",
     "setup_agent_hook",
+    "HOOK_CREATOR",
     "compress_session",
     "MemoryCompressConfig",
 ]

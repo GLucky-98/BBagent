@@ -34,7 +34,7 @@ export function ChatWindow() {
   const handleSend = () => {
     if (!input.trim() || !selectedAgent) return;
     const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: input.trim(), timestamp: Date.now() };
-    addMessage(selectedAgent.id, userMessage);
+    addMessage(selectedAgent.name, userMessage);
     setInput("");
   };
 
@@ -87,7 +87,7 @@ export function ChatWindow() {
               style={{ minHeight: "48px", maxHeight: "120px" }} />
           </div>
           <button onClick={handleSend} disabled={!input.trim()}
-            className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", "bg-[--color-primary] text-[--color-primary-foreground]", "transition-all duration-200", "hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed")}>
+            className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-[--color-border]", "bg-[--color-primary] text-[--color-primary-foreground]", "transition-all duration-200", "hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed")}>
             <Send size={18} />
           </button>
         </div>

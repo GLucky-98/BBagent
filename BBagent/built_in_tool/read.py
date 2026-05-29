@@ -14,7 +14,15 @@ DEFAULT_MAX_BYTES = 500_000
 DEFAULT_MAX_LINES = 10_000
 
 
-def create_read_func(policy: Optional[Policy] = None):
+def create_read_tool(
+    policy_or_config: Policy | dict | None = None,
+) -> Tool:
+    if isinstance(policy_or_config, Policy):
+        policy = policy_or_config
+    elif isinstance(policy_or_config, dict):
+        policy = Policy(**policy_or_config.get("policy", {})) if policy_or_config.get("policy") else None
+    else:
+        policy = None
 
     if policy is not None:
         cwd = policy.cwd
@@ -101,12 +109,6 @@ def create_read_func(policy: Optional[Policy] = None):
 
         except Exception as e:
             return f"Error reading file: {str(e)}"
-
-    return read_func
-
-
-def create_read_tool(policy: Optional[Policy] = None) -> Tool:
-    read_func = create_read_func(policy)
 
     input_schema = {
         "type": "object",

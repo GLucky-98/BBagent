@@ -1,0 +1,34 @@
+[
+  {
+    "id": "a59dffab986b3bfd47a19e55fe607bc5b205e849d81346a4b1d1b7b3d134bb7c",
+    "content": "User Alice Chen is a senior DevOps engineer at CloudScale Inc., managing approximately 500 Kubernetes clusters with a specialization in observability using Prometheus and Grafana.",
+    "session_id": "2026-05-13_22-35-34_d3b24af6",
+    "date_created": "2026-05-13T22:35:43.260019",
+    "access_count": 0,
+    "last_accessed": ""
+  },
+  {
+    "id": "2b41b336e657843757dcb7750b9d9317bbe67aa20ea627c240d21c1d5b42dfee",
+    "content": "User Alice Chen prefers Helm charts over Kustomize for Kubernetes deployments and uses Python for automation tasks.",
+    "session_id": "2026-05-13_22-35-34_d3b24af6",
+    "date_created": "2026-05-13T22:35:43.260031",
+    "access_count": 0,
+    "last_accessed": ""
+  },
+  {
+    "id": "55b4c968ca5788816d659f6bfc7ea167603af980243c345799a18a66c3b04da6",
+    "content": "User Alice Chen prefers dark mode in all IDEs and terminals, finding light mode strains her eyes during long on-call shifts.",
+    "session_id": "2026-05-13_22-35-34_d3b24af6",
+    "date_created": "2026-05-13T22:35:43.260034",
+    "access_count": 0,
+    "last_accessed": ""
+  },
+  {
+    "id": "821b330800319ba95bfdb24d55e2bdd213bb10c20275a3212c2191769f8cb56b",
+    "content": "User Alice Chen built a custom alert aggregation pipeline in Python using asyncio and Kafka that groups related alerts and pages on-call only for critical clusters, reducing alert volume by 80% over a three-week development period.",
+    "session_id": "2026-05-13_22-35-34_d3b24af6",
+    "date_created": "2026-05-13T22:35:43.260036",
+    "access_count": 0,
+    "last_accessed": ""
+  }
+]

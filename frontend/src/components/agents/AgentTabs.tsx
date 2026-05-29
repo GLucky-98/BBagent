@@ -4,8 +4,8 @@ import { AgentTab } from "./AgentTab";
 
 export function AgentTabs() {
   const agents = useAppStore((s) => s.agents);
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
-  const setActiveAgentId = useAppStore((s) => s.setActiveAgentId);
+  const activeAgentName = useAppStore((s) => s.activeAgentName);
+  const setActiveAgentName = useAppStore((s) => s.setActiveAgentName);
   const openConfigDialog = useAppStore((s) => s.openConfigDialog);
 
   if (agents.length === 0) {
@@ -22,11 +22,11 @@ export function AgentTabs() {
     <div className="flex items-center h-full gap-0.5">
       {agents.map((agent) => (
         <AgentTab
-          key={agent.id}
+          key={agent.name}
           agent={agent}
-          isActive={agent.id === activeAgentId}
-          onClick={() => setActiveAgentId(agent.id)}
-          onConfig={() => openConfigDialog("edit", agent.type === "single" ? "agent" : "team", agent.id)}
+          isActive={agent.name === activeAgentName}
+          onClick={() => setActiveAgentName(agent.name)}
+          onConfig={() => openConfigDialog("edit", agent.type === "single" ? "agent" : "team", agent.name)}
         />
       ))}
       <button

@@ -73,6 +73,7 @@ class Agent:
         self.session = agent_config.session or Session.create(self.session_dir)
 
         self.tools: dict[str, Tool] = {}
+        self._mcp_clients: dict = {}
         if agent_config.tools:
             self.add_tools(agent_config.tools)
 
@@ -158,7 +159,11 @@ class Agent:
             "name": self.name,
             "system_prompt": self.system_prompt,
             "model": self.model.to_config_dict(),
-            "tools": [t.to_config_dict() for t in self.tools.values()],
+            "tools": [
+                t.to_config_dict() for t in self.tools.values()
+                if not getattr(t, '_hook_managed', False)
+                and not getattr(t, '_team_managed', False)
+            ],
             "skills": [s.to_config_dict() for s in self.skills.values()],
             "hooks": self.hook.to_config_dict() if self.hook else [],
             "session": {
@@ -172,13 +177,11 @@ class Agent:
 
     @classmethod
     def from_config_dict(cls, config_dict: dict, *,
-                         tool_registry: dict = None,
-                         hook_registry: dict = None,
                          extra_tool_builders: dict = None,
+                         extra_hook_builders: dict = None,
                          base_dir: str | Path = None) -> 'Agent':
-        tool_registry = tool_registry or {}
-        hook_registry = hook_registry or {}
         extra_tool_builders = extra_tool_builders or {}
+        extra_hook_builders = extra_hook_builders or {}
 
         model_config = config_dict.get("model", {})
         model = Model.from_config_dict(model_config)
@@ -189,10 +192,21 @@ class Agent:
         system_prompt = config_dict.get("system_prompt", "")
 
         tools = []
-        from ..built_in_tool import TOOL_BUILDERS as BUILT_IN_TOOL_BUILDERS
-        all_builders = {**BUILT_IN_TOOL_BUILDERS, **extra_tool_builders}
+        from ..built_in_tool import TOOL_CREATOR as BUILT_IN_TOOL_CREATOR
+        all_builders = {**BUILT_IN_TOOL_CREATOR, **extra_tool_builders}
 
-        for tool_cfg in config_dict.get("tools", []):
+        mcp_cfgs = [t for t in config_dict.get("tools", []) if t.get("source") == "mcp"]
+        other_cfgs = [t for t in config_dict.get("tools", []) if t.get("source") != "mcp"]
+
+        mcp_clients = {}
+
+        if mcp_cfgs:
+            from .mcp import restore_mcp_tools
+            loop = asyncio.get_event_loop()
+            mcp_tools, mcp_clients = loop.run_until_complete(restore_mcp_tools(mcp_cfgs))
+            tools.extend(mcp_tools)
+
+        for tool_cfg in other_cfgs:
             source = tool_cfg.get("source")
             tool_cfg_data = tool_cfg.get("config", {})
 
@@ -201,18 +215,14 @@ class Agent:
                 loop = asyncio.get_event_loop()
                 tool = loop.run_until_complete(builder(tool_cfg_data))
                 tools.append(tool)
-            elif tool_cfg.get("name") in tool_registry:
-                tools.append(tool_registry[tool_cfg["name"]])
-            else:
-                pass
 
         skills = []
         for skill_cfg in config_dict.get("skills", []):
             skill_path = skill_cfg.get("path")
             if skill_path and Path(skill_path).exists():
-                from .skill import SkillManager
-                sm = SkillManager(Path(skill_path).parent)
-                skill = sm.skills.get(skill_cfg["name"])
+                from .skill import scan_skills
+                skills_dict = scan_skills(Path(skill_path).parent)
+                skill = skills_dict.get(skill_cfg["name"])
                 if skill:
                     skills.append(skill)
 
@@ -239,12 +249,21 @@ class Agent:
         )
         agent = cls(config)
 
-        hook_cfg = config_dict.get("hooks", [])
-        if hook_cfg:
-            for hc in hook_cfg:
-                hook_name = hc.get("name")
-                if hook_name in hook_registry:
-                    hook_registry[hook_name](agent.hook)
+        if mcp_clients:
+            agent.register_mcp_clients(mcp_clients)
+
+        from ..built_in_hook import HOOK_CREATOR as BUILT_IN_HOOK_CREATOR
+        all_hook_builders = {**BUILT_IN_HOOK_CREATOR, **extra_hook_builders}
+
+        hook_cfgs = config_dict.get("hooks", [])
+        if hook_cfgs:
+            for hc in hook_cfgs:
+                source = hc.get("source")
+                hook_config = hc.get("config", {})
+
+                if source and source in all_hook_builders:
+                    builder = all_hook_builders[source]
+                    builder(agent, hook_config)
 
         timer_cfgs = config_dict.get("timers", [])
         for tc in timer_cfgs:
@@ -257,14 +276,10 @@ class Agent:
         return agent
 
     @classmethod
-    def load(cls, base_dir: str | Path, agent_name: str = None, *,
-             tool_registry: dict = None,
-             hook_registry: dict = None,
-             extra_tool_builders: dict = None) -> 'Agent':
+    def load(cls, base_dir: str | Path, *,
+             extra_tool_builders: dict = None,
+             extra_hook_builders: dict = None) -> 'Agent':
         base_path = Path(base_dir)
-        if agent_name:
-            base_path = base_path / agent_name
-
         config_path = base_path / 'agent_config.yaml'
         if not config_path.exists():
             raise FileNotFoundError(f"Agent config not found: {config_path}")
@@ -274,10 +289,9 @@ class Agent:
 
         return cls.from_config_dict(
             config_dict,
-            tool_registry=tool_registry,
-            hook_registry=hook_registry,
             extra_tool_builders=extra_tool_builders,
-            base_dir=base_path.parent if agent_name else base_path,
+            extra_hook_builders=extra_hook_builders,
+            base_dir=base_path,
         )
     
     async def load_session(self, session_file_path: Path | str):
@@ -320,6 +334,36 @@ class Agent:
     def add_tools(self, tools: List[Tool]):
         for t in tools:
             self.tools[t.name] = t
+
+    def register_mcp_clients(self, clients: dict):
+        self._mcp_clients.update(clients)
+
+    def remove_tools(self, tool_names: List[str]):
+        from .mcp import MCPTool
+
+        mcp_servers_to_close: list = []
+        for name in tool_names:
+            tool = self.tools.pop(name, None)
+            if tool is None:
+                continue
+            if isinstance(tool, MCPTool):
+                server_name = tool.mcp_server_name
+                remaining = any(
+                    isinstance(t, MCPTool) and t.mcp_server_name == server_name
+                    for t in self.tools.values()
+                )
+                if not remaining and server_name in self._mcp_clients:
+                    mcp_servers_to_close.append(server_name)
+
+        for server_name in mcp_servers_to_close:
+            client = self._mcp_clients.pop(server_name, None)
+            if client:
+                self.logger.info(f"Closing MCP client '{server_name}': no remaining tools")
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(client.close())
+                except RuntimeError:
+                    asyncio.run(client.close())
     
     def _add_load_skills_tool(self):
         @tool

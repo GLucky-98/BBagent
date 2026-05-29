@@ -14,7 +14,7 @@ from .memory import (
 )
 from .ctx_compress_hook import create_ctx_compress_hook, compress_session, COMPRESS_PROMPT, COMPRESS_PREFIX
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 from ..core import Agent, Model, HookContext, HookType
 
@@ -83,7 +83,16 @@ class MemoryCompressConfig:
 
 
 def setup_agent_hook(agent: Agent, config: MemoryCompressConfig = None):
-    config = config or MemoryCompressConfig()
+    return create_memory_compress_hook(agent, config)
+
+
+def create_memory_compress_hook(agent: Agent, config: MemoryCompressConfig | dict = None):
+    if config is None:
+        config = MemoryCompressConfig()
+    elif isinstance(config, dict):
+        config = MemoryCompressConfig(**config)
+
+    agent.hook.bind("built_in.memory_compress", asdict(config))
     agent.hook_config = config
 
     submodel = config.submodel or agent.model
@@ -101,6 +110,7 @@ def setup_agent_hook(agent: Agent, config: MemoryCompressConfig = None):
         lambda: agent.session.id,
         prompt=config.add_memory_tool_prompt,
     )
+    add_tool.mark_hook_managed()
     agent.add_tools([add_tool])
 
     check_compress, do_compress = create_ctx_compress_hook(
@@ -148,8 +158,15 @@ def setup_agent_hook(agent: Agent, config: MemoryCompressConfig = None):
     agent.change_system_prompt(agent.system_prompt + prompt)
 
 
+HOOK_CREATOR = {
+    "built_in.memory_compress": create_memory_compress_hook,
+}
+
+
 __all__ = [
+    "create_memory_compress_hook",
     "setup_agent_hook",
+    "HOOK_CREATOR",
     "compress_session",
     "extract_memories",
     "MEMORY_SYSTEM_PROMPT",

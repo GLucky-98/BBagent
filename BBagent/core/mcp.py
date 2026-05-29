@@ -65,9 +65,9 @@ def make_notification(method: str, params: Optional[Dict] = None) -> str:
 # MCP 客户端类
 # ------------------------------------------------------------
 class MCPClient:
-    def __init__(self, MCPserver_config: MCPServerConfig, client_name: str, logger: logging.Logger = None):
+    def __init__(self, MCPserver_config: MCPServerConfig, logger: logging.Logger = None):
         self.name = MCPserver_config.name
-        self.client_name = client_name
+        self.config = MCPserver_config
         self.command = [MCPserver_config.command] + MCPserver_config.args
         self.env = {**os.environ, **MCPserver_config.env}
         self.process: Optional[asyncio.subprocess.Process] = None
@@ -193,7 +193,7 @@ class MCPClient:
             "protocolVersion": "2024-11-05",
             "capabilities": {},  # 客户端能力（本例为空）
             "clientInfo": {
-                "name": self.client_name,
+                "name": self.name,
                 "version": "0.1.0"
             }
         })
@@ -237,6 +237,11 @@ class MCPClient:
         })
         return result
 
+    async def create_tools(self) -> list:
+        """获取工具列表并包装为 MCPTool 对象"""
+        tools_data = await self.list_tools()
+        return [MCPTool(self, t) for t in tools_data]
+
     async def close(self):
         """关闭子进程"""
         if self.process:
@@ -258,9 +263,20 @@ class MCPClient:
             self.process = None
             
 class MCPTool(Tool):
-    def __init__(self, mcp_client: MCPClient, config: Dict[str, Any]) :
+    def __init__(self, mcp_client: MCPClient, config: Dict[str, Any]):
+        self.mcp_server_name = mcp_client.name
+        self.mcp_config = mcp_client.config
+        self._mcp_tool_name = config["name"]
         func = self.create_tool_from_config(mcp_client, config)
-        super().__init__(func, has_state=True)
+        super().__init__(
+            func,
+            source="mcp",
+            config={
+                "mcp_server_name": self.mcp_server_name,
+                "mcp_config": asdict(self.mcp_config),
+                "tool_name": self._mcp_tool_name,
+            }
+        )
         
     @staticmethod
     def create_tool_from_config(mcp_client: MCPClient, config: Dict[str, Any]):
@@ -353,142 +369,140 @@ class MCPTool(Tool):
 
         return tool_func
     
-class MCPManager:
-    def __init__(self, config_dir: str = ""):
-        self.config_dir: str = config_dir
-        self.configs: Dict[str, MCPServerConfig] = {}
-        self.clients: Dict[str, MCPClient] = {}
-        self.client_tools: Dict[str, List[MCPTool]] = {}
-        self._logger = logging.getLogger("mcp.manager")
-        if config_dir:
-            self._load_configs(config_dir)
+_config_logger = logging.getLogger("mcp.config")
 
-    def _parse_config_file(self, file_path: str) -> List[MCPServerConfig]:
-        """解析单个 JSON 配置文件，支持两种格式
 
-        格式一（单服务器）：顶层含 name + command 字段
-        格式二（多服务器）：顶层含 mcpServers 字段，key 为 name
-        """
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            self._logger.warning(f"Failed to parse {file_path}: {e}")
-            return []
+def parse_config_file(file_path: str) -> List[MCPServerConfig]:
+    """解析单个 JSON 配置文件，支持两种格式
 
-        configs: List[MCPServerConfig] = []
-
-        if "mcpServers" in data and isinstance(data["mcpServers"], dict):
-            for name, server_data in data["mcpServers"].items():
-                if not isinstance(server_data, dict) or "command" not in server_data:
-                    continue
-                configs.append(MCPServerConfig(
-                    name=name,
-                    command=server_data.get("command", ""),
-                    args=server_data.get("args", []),
-                    env=server_data.get("env", {}),
-                ))
-        elif "name" in data and "command" in data:
-            configs.append(MCPServerConfig(
-                name=data.get("name", ""),
-                command=data.get("command", ""),
-                args=data.get("args", []),
-                env=data.get("env", {}),
-            ))
-
-        return configs
-
-    def _load_configs(self, config_dir: str) -> None:
-        """扫描目录下所有 JSON 文件，加载符合格式的配置"""
-        if not os.path.isdir(config_dir):
-            self._logger.warning(f"Config directory not found: {config_dir}")
-            return
-
-        count = 0
-        for filename in sorted(os.listdir(config_dir)):
-            if not filename.endswith(".json"):
-                continue
-            file_path = os.path.join(config_dir, filename)
-            configs = self._parse_config_file(file_path)
-            for cfg in configs:
-                if cfg.name and cfg.command:
-                    self.configs[cfg.name] = cfg
-                    count += 1
-        self._logger.info(f"Loaded {count} MCP server config(s) from {config_dir}")
-
-    def add_config(self, config: MCPServerConfig) -> None:
-        """运行时手动添加单个配置"""
-        if config.name and config.command:
-            self.configs[config.name] = config
-
-    def create_client(self, name: str) -> Optional[MCPClient]:
-        if name not in self.configs:
-            self._logger.warning(f"Config '{name}' not found")
-            return None
-        if name in self.clients:
-            return self.clients[name]
-        config = self.configs[name]
-        client = MCPClient(config, client_name=name, logger=self._logger)
-        self.clients[name] = client
-        return client
-
-    def create_all_clients(self) -> List[MCPClient]:
-        """为所有已加载配置创建客户端实例"""
-        created = []
-        for name in self.configs:
-            client = self.create_client(name)
-            if client:
-                created.append(client)
-        return created
-
-    async def activate_client(self, name: str) -> List[MCPTool]:
-        """激活指定客户端：自动创建（如未创建）→ 启动进程 → 握手 → 获取工具"""
-        if name not in self.clients:
-            self.create_client(name)
-        client = self.clients.get(name)
-        if not client:
-            return []
-        if client.state == 'active':
-            return self.client_tools.get(name, [])
-        return await self._activate(client)
-
-    async def activate_all(self) -> List[MCPTool]:
-        """激活所有未激活的客户端"""
-        self.create_all_clients()
-        all_tools: List[MCPTool] = []
-        for name, client in self.clients.items():
-            if client.state == 'inactive':
-                tools = await self._activate(client)
-                all_tools.extend(tools)
-        return all_tools
-
-    async def _activate(self, client: MCPClient) -> List[MCPTool]:
-        await client.start()
-        await client.initialize()
-        tools_data = await client.list_tools()
-        if tools_data:
-            tools = [MCPTool(client, t) for t in tools_data]
-            self.client_tools[client.name] = tools
-            self._logger.info(f"Activated mcp client: {client.name} ({len(tools)} tool(s))")
-            return tools
-        self._logger.info(f"Activated mcp client: {client.name} (0 tools)")
+    格式一（单服务器）：顶层含 name + command 字段
+    格式二（多服务器）：顶层含 mcpServers 字段，key 为 name
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        _config_logger.warning(f"Failed to parse {file_path}: {e}")
         return []
 
-    async def deactivate_client(self, name: str) -> List[MCPTool]:
-        """停止单个客户端：关闭进程，清理 client 和 tools（配置保留）"""
-        tools: List[MCPTool] = []
-        client = self.clients.pop(name, None)
-        if client:
-            await client.close()
-            tools = self.client_tools.pop(name, [])
-            self._logger.info(f"Deactivated mcp client: {name}")
-        return tools
+    configs: List[MCPServerConfig] = []
 
-    async def deactivate_all(self) -> List[MCPTool]:
-        """停止所有客户端"""
-        all_tools: List[MCPTool] = []
-        for name in list(self.clients.keys()):
-            tools = await self.deactivate_client(name)
-            all_tools.extend(tools)
-        return all_tools
+    if "mcpServers" in data and isinstance(data["mcpServers"], dict):
+        for name, server_data in data["mcpServers"].items():
+            if not isinstance(server_data, dict) or "command" not in server_data:
+                continue
+            configs.append(MCPServerConfig(
+                name=name,
+                command=server_data.get("command", ""),
+                args=server_data.get("args", []),
+                env=server_data.get("env", {}),
+            ))
+    elif "name" in data and "command" in data:
+        configs.append(MCPServerConfig(
+            name=data.get("name", ""),
+            command=data.get("command", ""),
+            args=data.get("args", []),
+            env=data.get("env", {}),
+        ))
+
+    return configs
+
+
+def load_configs(config_dir: str) -> Dict[str, MCPServerConfig]:
+    """扫描目录下所有 JSON 文件，加载符合格式的 MCP 配置
+
+    Returns:
+        Dict[str, MCPServerConfig]: 以 name 为 key 的配置字典
+    """
+    result: Dict[str, MCPServerConfig] = {}
+    if not os.path.isdir(config_dir):
+        _config_logger.warning(f"Config directory not found: {config_dir}")
+        return result
+
+    count = 0
+    for filename in sorted(os.listdir(config_dir)):
+        if not filename.endswith(".json"):
+            continue
+        file_path = os.path.join(config_dir, filename)
+        configs = parse_config_file(file_path)
+        for cfg in configs:
+            if cfg.name and cfg.command:
+                result[cfg.name] = cfg
+                count += 1
+    _config_logger.info(f"Loaded {count} MCP server config(s) from {config_dir}")
+    return result
+
+
+_restore_logger = logging.getLogger("mcp.restore")
+
+
+async def restore_mcp_tools(tool_configs: List[dict], logger: logging.Logger = None) -> tuple:
+    """从序列化配置恢复 MCPTool 对象
+
+    按 mcp_server_name 分组，每个 server 只创建一个 MCPClient，
+    避免重复建立连接。
+
+    Args:
+        tool_configs: 一组 source="mcp" 的 tool 序列化配置
+        logger: 可选的 logger，用于输出恢复过程日志
+
+    Returns:
+        (tools: List[MCPTool], clients: Dict[str, MCPClient])
+    """
+    from collections import defaultdict
+
+    log = logger or _restore_logger
+
+    server_groups: Dict[str, MCPServerConfig] = {}
+    requested_tools: Dict[str, set] = defaultdict(set)
+
+    for cfg in tool_configs:
+        config_data = cfg.get("config", {})
+        server_name = config_data.get("mcp_server_name")
+        tool_name = config_data.get("tool_name")
+        if not server_name or not tool_name:
+            log.warning(f"Invalid MCP tool config, skipping: {cfg.get('name')}")
+            continue
+        if server_name not in server_groups:
+            server_groups[server_name] = MCPServerConfig(**config_data.get("mcp_config", {}))
+        requested_tools[server_name].add(tool_name)
+
+    tools: List[MCPTool] = []
+    clients: Dict[str, MCPClient] = {}
+
+    for server_name, server_config in server_groups.items():
+        client = None
+        try:
+            client = MCPClient(server_config, logger=logger)
+            await client.start()
+            await client.initialize()
+            all_mcp_tools = await client.create_tools()
+
+            tool_map: Dict[str, MCPTool] = {}
+            for t in all_mcp_tools:
+                tool_map[t._mcp_tool_name] = t
+
+            for requested_name in requested_tools[server_name]:
+                if requested_name in tool_map:
+                    tools.append(tool_map[requested_name])
+                else:
+                    log.warning(
+                        f"Tool '{requested_name}' not found on MCP server '{server_name}'"
+                    )
+
+            clients[server_name] = client
+            log.info(
+                f"Restored {len(requested_tools[server_name])} tool(s) from MCP server '{server_name}'"
+            )
+        except Exception as e:
+            log.warning(
+                f"Failed to restore MCP server '{server_name}': {e}"
+            )
+            try:
+                if client:
+                    await client.close()
+            except Exception:
+                pass
+
+    return tools, clients
 

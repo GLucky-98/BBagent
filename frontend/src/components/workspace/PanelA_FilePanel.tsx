@@ -5,11 +5,11 @@ import { BasedirTree } from "./BasedirTree";
 import { Splitter } from "./Splitter";
 
 export function PanelA_FilePanel() {
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
+  const activeAgentName = useAppStore((s) => s.activeAgentName);
   const [splitRatio, setSplitRatio] = useState(0.4);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  if (!activeAgentId) {
+  if (!activeAgentName) {
     return (
       <div className="w-[300px] shrink-0 border-r border-[--color-border] bg-white flex items-center justify-center text-sm text-[--color-muted-foreground]">
         Select an agent

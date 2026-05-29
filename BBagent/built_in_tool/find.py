@@ -18,7 +18,15 @@ class FindOperations:
         return os.path.isdir(path)
 
 
-def create_find_func(policy: Optional[Policy] = None):
+def create_find_tool(
+    policy_or_config: Policy | dict | None = None,
+) -> Tool:
+    if isinstance(policy_or_config, Policy):
+        policy = policy_or_config
+    elif isinstance(policy_or_config, dict):
+        policy = Policy(**policy_or_config.get("policy", {})) if policy_or_config.get("policy") else None
+    else:
+        policy = None
 
     if policy is not None:
         cwd = policy.cwd
@@ -101,12 +109,6 @@ def create_find_func(policy: Optional[Policy] = None):
 
         except Exception as e:
             return f"Error finding files: {str(e)}"
-
-    return find_func
-
-
-def create_find_tool(policy: Optional[Policy] = None) -> Tool:
-    find_func = create_find_func(policy)
 
     input_schema = {
         "type": "object",

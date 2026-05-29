@@ -190,12 +190,12 @@ const mockFileTree: FileNode = {
 };
 
 export function BasedirTree() {
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
+  const activeAgentName = useAppStore((s) => s.activeAgentName);
   const agents = useAppStore((s) => s.agents);
   const expandedPaths = useAppStore((s) => s.basedirExpandedPaths);
   const toggleExpand = useAppStore((s) => s.toggleBasedirExpand);
 
-  const agent = agents.find((a) => a.id === activeAgentId);
+  const agent = agents.find((a) => a.name === activeAgentName);
   const rootPath = agent?.basePath ?? mockFileTree.path;
 
   return (

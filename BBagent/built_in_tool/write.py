@@ -28,7 +28,15 @@ class WriteOperations:
         return os.path.exists(absolute_path)
 
 
-def create_write_func(policy: Optional[Policy] = None):
+def create_write_tool(
+    policy_or_config: Policy | dict | None = None,
+) -> Tool:
+    if isinstance(policy_or_config, Policy):
+        policy = policy_or_config
+    elif isinstance(policy_or_config, dict):
+        policy = Policy(**policy_or_config.get("policy", {})) if policy_or_config.get("policy") else None
+    else:
+        policy = None
 
     if policy is not None:
         cwd = policy.cwd
@@ -84,14 +92,6 @@ def create_write_func(policy: Optional[Policy] = None):
 
         except Exception as e:
             return f"Error writing file: {str(e)}"
-
-    return write_func
-
-
-def create_write_tool(
-    policy: Optional[Policy] = None,
-) -> Tool:
-    write_func = create_write_func(policy)
 
     input_schema = {
         "type": "object",

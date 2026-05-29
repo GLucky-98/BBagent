@@ -5,10 +5,10 @@ import { PanelA_FilePanel } from "./PanelA_FilePanel";
 import { PanelC_FilePreview } from "./PanelC_FilePreview";
 
 export function WorkspaceView() {
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
+  const activeAgentName = useAppStore((s) => s.activeAgentName);
   const previewFile = useAppStore((s) => s.previewFile);
 
-  if (!activeAgentId) {
+  if (!activeAgentName) {
     return (
       <div className="flex-1 flex items-center justify-center bg-[--color-muted]/30">
         <div className="text-center">

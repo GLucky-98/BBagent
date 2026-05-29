@@ -14,15 +14,16 @@ import { api } from "../lib/api";
 
 export interface AppState {
   agents: Agent[];
-  activeAgentId: string | null;
-  activeTeamMemberId: string | null;
-  setActiveAgentId: (id: string | null) => void;
-  selectTeamMember: (teamId: string, memberId: string | null) => void;
+  activeAgentName: string | null;
+  activeTeamMemberName: string | null;
+  setActiveAgentName: (name: string | null) => void;
+  selectTeamMember: (teamName: string, memberName: string | null) => void;
   addAgent: (agent: Agent) => void;
   addTeam: (team: Agent) => void;
-  updateAgent: (id: string, updates: Partial<Agent>) => void;
-  updateTeam: (id: string, updates: Partial<Agent>) => void;
-  addMessage: (agentId: string, message: Message) => void;
+  updateAgent: (name: string, updates: Partial<Agent>) => void;
+  updateTeam: (name: string, updates: Partial<Agent>) => void;
+  removeAgent: (name: string, deleteFiles?: boolean) => Promise<void>;
+  addMessage: (agentName: string, message: Message) => void;
 
   isSettingsOpen: boolean;
   settingsActiveTab: SettingsTab;
@@ -33,12 +34,12 @@ export interface AppState {
     open: boolean;
     mode: "create" | "edit";
     type: "agent" | "team" | "";
-    agentId?: string;
+    agentName?: string;
   };
   openConfigDialog: (
     mode: "create" | "edit",
     type: "agent" | "team" | "",
-    agentId?: string
+    agentName?: string
   ) => void;
   closeConfigDialog: () => void;
 
@@ -75,21 +76,21 @@ export interface AppState {
   setSelectedMcpId: (id: string | null) => void;
   updateMcpConnection: (name: string, isConnected: boolean) => void;
   addMcpServer: (server: MCPServer) => Promise<void>;
-  importMcpServers: (servers: MCPServer[]) => void;
+  importMcpServers: (path: string) => Promise<void>;
 
   skills: Skill[];
   selectedSkillId: string | null;
   setSelectedSkillId: (id: string | null) => void;
-  importSkills: (skills: Skill[]) => void;
+  importSkills: (path: string) => Promise<void>;
 
   prompts: Prompt[];
   selectedPromptId: string | null;
   setSelectedPromptId: (id: string | null) => void;
   addPrompt: (prompt: Prompt) => Promise<void>;
-  importPrompts: (prompts: Prompt[]) => void;
+  importPrompts: (path: string) => Promise<void>;
 
   expandedTeams: Set<string>;
-  toggleTeamExpanded: (teamId: string) => void;
+  toggleTeamExpanded: (teamName: string) => void;
 
   loadAll: () => Promise<void>;
   createAgentApi: (agent: Agent) => Promise<void>;
@@ -199,37 +200,47 @@ const defaultTools: Tool[] = [
 
 export const useAppStore = create<AppState>((set, get) => ({
   agents: [],
-  activeAgentId: null,
-  activeTeamMemberId: null,
+  activeAgentName: null,
+  activeTeamMemberName: null,
 
-  setActiveAgentId: (id) => {
-    const agent = id ? get().agents.find((a) => a.id === id) : null;
+  setActiveAgentName: (name) => {
+    const agent = name ? get().agents.find((a) => a.name === name) : null;
     set({
-      activeAgentId: id,
-      activeTeamMemberId: null,
+      activeAgentName: name,
+      activeTeamMemberName: null,
       workingDirPath: agent?.policy?.cwd || "",
       baseDirPath: agent?.basePath || "",
       previewFile: null,
     });
   },
 
-  selectTeamMember: (teamId, memberId) => {
-    if (memberId) {
-      const team = get().agents.find((a) => a.id === teamId);
-      const member = team?.teamMembers?.find((m) => m.id === memberId);
-      set({ activeAgentId: teamId, activeTeamMemberId: memberId, workingDirPath: member?.policy?.cwd || "", baseDirPath: member?.basePath || "", previewFile: null });
+  selectTeamMember: (teamName, memberName) => {
+    if (memberName) {
+      const team = get().agents.find((a) => a.name === teamName);
+      const member = team?.teamMembers?.find((m) => m.name === memberName);
+      set({ activeAgentName: teamName, activeTeamMemberName: memberName, workingDirPath: member?.policy?.cwd || "", baseDirPath: member?.basePath || "", previewFile: null });
     } else {
-      const team = get().agents.find((a) => a.id === teamId);
-      set({ activeAgentId: teamId, activeTeamMemberId: null, workingDirPath: team?.policy?.cwd || "", baseDirPath: team?.basePath || "", previewFile: null });
+      const team = get().agents.find((a) => a.name === teamName);
+      set({ activeAgentName: teamName, activeTeamMemberName: null, workingDirPath: team?.policy?.cwd || "", baseDirPath: team?.basePath || "", previewFile: null });
     }
   },
 
-  addAgent: (agent) => set((state) => ({ agents: [...state.agents, agent], activeAgentId: agent.id, workingDirPath: agent.policy?.cwd || "", baseDirPath: agent.basePath })),
-  addTeam: (team) => set((state) => ({ agents: [...state.agents, team], activeAgentId: team.id, workingDirPath: team.policy?.cwd || "", baseDirPath: team.basePath })),
-  updateAgent: (id, updates) => set((state) => ({ agents: state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)) })),
-  updateTeam: (id, updates) => set((state) => ({ agents: state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)) })),
-  addMessage: (agentId, message) =>
-    set((state) => ({ agents: state.agents.map((a) => (a.id === agentId ? { ...a, messages: [...a.messages, message] } : a)) })),
+  addAgent: (agent) => set((state) => ({ agents: [...state.agents, agent], activeAgentName: agent.name, workingDirPath: agent.policy?.cwd || "", baseDirPath: agent.basePath })),
+  addTeam: (team) => set((state) => ({ agents: [...state.agents, team], activeAgentName: team.name, workingDirPath: team.policy?.cwd || "", baseDirPath: team.basePath })),
+  updateAgent: (name, updates) => set((state) => ({ agents: state.agents.map((a) => (a.name === name ? { ...a, ...updates } : a)) })),
+  updateTeam: (name, updates) => set((state) => ({ agents: state.agents.map((a) => (a.name === name ? { ...a, ...updates } : a)) })),
+  removeAgent: async (name, deleteFiles) => {
+    const agent = get().agents.find((a) => a.name === name);
+    if (!agent) return;
+    await api.deleteAgent(agent.name, deleteFiles);
+    set((state) => ({
+      agents: state.agents.filter((a) => a.name !== name),
+      activeAgentName: state.activeAgentName === name ? null : state.activeAgentName,
+      previewFile: state.activeAgentName === name ? null : state.previewFile,
+    }));
+  },
+  addMessage: (agentName, message) =>
+    set((state) => ({ agents: state.agents.map((a) => (a.name === agentName ? { ...a, messages: [...a.messages, message] } : a)) })),
 
   isSettingsOpen: false,
   settingsActiveTab: "models",
@@ -237,8 +248,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   closeSettings: () => set({ isSettingsOpen: false }),
 
   configDialog: { open: false, mode: "create", type: "" },
-  openConfigDialog: (mode, type, agentId) => set({ configDialog: { open: true, mode, type, agentId } }),
-  closeConfigDialog: () => set({ configDialog: { open: false, mode: "create", type: "", agentId: undefined } }),
+  openConfigDialog: (mode, type, agentName) => set({ configDialog: { open: true, mode, type, agentName } }),
+  closeConfigDialog: () => set({ configDialog: { open: false, mode: "create", type: "", agentName: undefined } }),
 
   workingDirPath: "",
   setWorkingDirPath: (path) => set({ workingDirPath: path }),
@@ -281,12 +292,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api.createMcp(server);
     set((state) => ({ mcpServers: [...state.mcpServers, server] }));
   },
-  importMcpServers: (servers) => set((state) => ({ mcpServers: [...state.mcpServers, ...servers] })),
+  importMcpServers: async (path: string) => {
+    const result = await api.importMcps(path);
+    if (result.imported > 0) {
+      const mcps = await api.listMcps();
+      set({ mcpServers: mcps || [] });
+    }
+  },
 
   skills: [],
   selectedSkillId: null,
   setSelectedSkillId: (id) => set({ selectedSkillId: id }),
-  importSkills: (skills) => set((state) => ({ skills: [...state.skills, ...skills] })),
+  importSkills: async (path: string) => {
+    const result = await api.importSkills(path);
+    if (result.imported > 0) {
+      const skills = await api.listSkills();
+      set({ skills: skills || [] });
+    }
+  },
 
   prompts: [],
   selectedPromptId: null,
@@ -295,13 +318,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api.createPrompt(prompt);
     set((state) => ({ prompts: [...state.prompts, prompt] }));
   },
-  importPrompts: (prompts) => set((state) => ({ prompts: [...state.prompts, ...prompts] })),
+  importPrompts: async (path: string) => {
+    const result = await api.importPrompts(path);
+    if (result.imported > 0) {
+      const prompts = await api.listPrompts();
+      set({ prompts: prompts || [] });
+    }
+  },
 
   expandedTeams: new Set<string>(),
-  toggleTeamExpanded: (teamId) =>
+  toggleTeamExpanded: (teamName) =>
     set((state) => {
       const newSet = new Set(state.expandedTeams);
-      newSet.has(teamId) ? newSet.delete(teamId) : newSet.add(teamId);
+      newSet.has(teamName) ? newSet.delete(teamName) : newSet.add(teamName);
       return { expandedTeams: newSet };
     }),
 
@@ -331,25 +360,28 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   createAgentApi: async (agent: Agent) => {
-    await api.createAgent(agent);
-    set((state) => ({ agents: [...state.agents, agent], activeAgentId: agent.id }));
+    const created = await api.createAgent(agent);
+    set((state) => ({
+      agents: [...state.agents, created],
+      activeAgentName: created.name,
+    }));
   },
 
   createTeamApi: async (team: Agent) => {
-    await api.createTeam(team);
-    set((state) => ({ agents: [...state.agents, team], activeAgentId: team.id }));
+    const created = await api.createTeam(team);
+    set((state) => ({ agents: [...state.agents, created], activeAgentName: created.id }));
   },
 }));
 
 export const useSelectedAgent = () => {
   const agents = useAppStore((s) => s.agents);
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
-  const activeTeamMemberId = useAppStore((s) => s.activeTeamMemberId);
-  if (!activeAgentId) return null;
-  const agent = agents.find((a) => a.id === activeAgentId);
+  const activeAgentName = useAppStore((s) => s.activeAgentName);
+  const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
+  if (!activeAgentName) return null;
+  const agent = agents.find((a) => a.name === activeAgentName);
   if (!agent) return null;
-  if (agent.type === "team" && activeTeamMemberId) {
-    return agent.teamMembers?.find((m) => m.id === activeTeamMemberId) ?? null;
+  if (agent.type === "team" && activeTeamMemberName) {
+    return agent.teamMembers?.find((m) => m.name === activeTeamMemberName) ?? null;
   }
   return agent;
 };

@@ -6,9 +6,8 @@ from typing import Dict, List, Optional
 from BBagent.core.agent import Agent, AgentConfig as CoreAgentConfig
 from BBagent.core.team import AgentTeam, TeamConfig as CoreTeamConfig
 from BBagent.core.model import Model
-from BBagent.core.skill import Skill, SkillManager
-from BBagent.core.mcp import MCPManager, MCPServerConfig as CoreMCPServerConfig
-from BBagent.core.tool import ToolManager
+from BBagent.core.skill import Skill, scan_skills
+from BBagent.core.mcp import MCPClient, MCPTool, MCPServerConfig as CoreMCPServerConfig
 
 from backend.schemas import (
     ModelConfig,
@@ -24,6 +23,8 @@ logger = logging.getLogger("bbagent.state")
 
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
+
+IMPORTED_SKILLS_DIRS_FILE = DATA_DIR / "imported_skills_dirs.json"
 
 
 class StateManager:
@@ -44,11 +45,13 @@ class StateManager:
         self.mcp_servers: List[MCPServerConfig] = []
         self.prompts: List[PromptConfig] = []
         self.skills: Dict[str, Skill] = {}
+        self.imported_skills_dirs: List[str] = []
         self.agents: Dict[str, Agent] = {}
         self.teams: Dict[str, AgentTeam] = {}
         self.ui_state: UIState = UIState()
 
-        self._mcp_manager: Optional[MCPManager] = None
+        self._mcp_clients: Dict[str, MCPClient] = {}
+        self._mcp_tools: Dict[str, List[MCPTool]] = {}
         self._ensure_data_dir()
         self.load_all()
 
@@ -59,15 +62,18 @@ class StateManager:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         (DATA_DIR / "agents").mkdir(exist_ok=True)
         (DATA_DIR / "teams").mkdir(exist_ok=True)
+        (DATA_DIR / "models").mkdir(exist_ok=True)
+        (DATA_DIR / "mcps").mkdir(exist_ok=True)
+        (DATA_DIR / "prompts").mkdir(exist_ok=True)
 
     def _models_path(self) -> Path:
-        return DATA_DIR / "models.json"
+        return DATA_DIR / "models" / "models.json"
 
     def _mcps_path(self) -> Path:
-        return DATA_DIR / "mcp_servers.json"
+        return DATA_DIR / "mcps" / "servers.json"
 
     def _prompts_path(self) -> Path:
-        return DATA_DIR / "prompts.json"
+        return DATA_DIR / "prompts" / "prompts.json"
 
     def _store_path(self) -> Path:
         return DATA_DIR / "store.json"
@@ -125,13 +131,13 @@ class StateManager:
         skills_dir = PROJECT_ROOT / "skills"
         if skills_dir.exists():
             try:
-                sm = SkillManager(skills_dir)
-                self.skills = sm.skills
+                self.skills = scan_skills(skills_dir)
             except Exception as e:
                 logger.warning(f"Failed to load skills: {e}")
                 self.skills = {}
         else:
             self.skills = {}
+        self._load_imported_skills_dirs()
 
     def _load_agents(self):
         agents_dir = DATA_DIR / "agents"
@@ -301,18 +307,47 @@ class StateManager:
     # ------------------------------------------------------------------
     def list_skills(self) -> List[SkillConfig]:
         result = []
+        default_path = str((PROJECT_ROOT / "skills").resolve())
         for skill in self.skills.values():
+            skill_path = str(skill.path.resolve()) if skill.path else ""
+            source = "default" if skill_path.startswith(default_path) else "imported"
             result.append(
                 SkillConfig(
                     name=skill.name,
                     description=skill.description,
-                    path=str(skill.path) if skill.path else "",
+                    path=skill_path,
                     body=skill.body,
                     metadata=skill.metadata.to_dict() if skill.metadata else {},
-                    source="default",
+                    source=source,
                 )
             )
         return result
+
+    def _load_imported_skills_dirs(self):
+        if IMPORTED_SKILLS_DIRS_FILE.exists():
+            try:
+                dirs = json.loads(IMPORTED_SKILLS_DIRS_FILE.read_text(encoding="utf-8"))
+                for d in dirs:
+                    try:
+                        imported_skills = scan_skills(Path(d))
+                        for name, skill in imported_skills.items():
+                            if name not in self.skills:
+                                self.skills[name] = skill
+                    except Exception as e:
+                        logger.warning(f"Failed to load imported skills from {d}: {e}")
+                self.imported_skills_dirs = dirs
+            except Exception as e:
+                logger.warning(f"Failed to load imported skills dirs: {e}")
+                self.imported_skills_dirs = []
+
+    def save_imported_skills_dirs(self, dir_path: Path):
+        path_str = str(dir_path.resolve())
+        if path_str not in self.imported_skills_dirs:
+            self.imported_skills_dirs.append(path_str)
+        IMPORTED_SKILLS_DIRS_FILE.write_text(
+            json.dumps(self.imported_skills_dirs, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     # ------------------------------------------------------------------
     # Agent CRUD
@@ -322,7 +357,6 @@ class StateManager:
         if not agent:
             return None
         return AgentConfig(
-            id=agent.name,
             name=agent.name,
             modelId=agent.model.to_config_dict().get("provider", ""),
             systemPrompt=agent.system_prompt,
@@ -353,7 +387,7 @@ class StateManager:
 
         tools = []
         if config.toolNames:
-            tools = ToolManager.distribute(agent_id=config.name, tool_names=config.toolNames)
+            tools = []
 
         skills = []
         for skill_name in config.skillNames:
@@ -361,16 +395,19 @@ class StateManager:
             if skill:
                 skills.append(skill)
 
-        core_config = CoreAgentConfig(
-            model=model,
-            name=config.name,
-            system_prompt=config.systemPrompt,
-            tools=tools,
-            skills=skills,
-        )
+        core_kwargs = {
+            "model": model,
+            "base_dir": DATA_DIR / "agents",
+            "system_prompt": config.systemPrompt,
+            "tools": tools,
+            "skills": skills,
+        }
+        if config.name and config.name.strip():
+            core_kwargs["name"] = config.name.strip()
+        core_config = CoreAgentConfig(**core_kwargs)
         agent = Agent(core_config)
         agent.save()
-        self.agents[config.name] = agent
+        self.agents[agent.name] = agent
         return agent
 
     def update_agent(self, name: str, updates: dict) -> Optional[Agent]:
@@ -415,7 +452,6 @@ class StateManager:
         if not team:
             return None
         return TeamConfig(
-            id=team.name,
             name=team.name,
             teamDescription=team.team_description,
             agentNames=list(team.agents.keys()),
@@ -464,20 +500,44 @@ class StateManager:
         return False
 
     # ------------------------------------------------------------------
-    # MCP Manager
+    # MCP 连接管理
     # ------------------------------------------------------------------
-    def get_mcp_manager(self) -> MCPManager:
-        if self._mcp_manager is None:
-            self._mcp_manager = MCPManager()
-            for cfg in self.mcp_servers:
-                core_cfg = CoreMCPServerConfig(
-                    name=cfg.name,
-                    command=cfg.command,
-                    args=cfg.args,
-                    env=cfg.env,
-                )
-                self._mcp_manager.add_config(core_cfg)
-        return self._mcp_manager
+    def _get_mcp_core_config(self, name: str) -> Optional[CoreMCPServerConfig]:
+        cfg = self.get_mcp(name)
+        if not cfg:
+            return None
+        return CoreMCPServerConfig(
+            name=cfg.name,
+            command=cfg.command,
+            args=cfg.args,
+            env=cfg.env,
+        )
+
+    async def activate_mcp(self, name: str) -> List[MCPTool]:
+        if name in self._mcp_clients and self._mcp_clients[name].state == 'active':
+            return self._mcp_tools.get(name, [])
+
+        core_cfg = self._get_mcp_core_config(name)
+        if not core_cfg:
+            raise ValueError(f"MCP server '{name}' not found")
+
+        client = MCPClient(core_cfg)
+        await client.start()
+        await client.initialize()
+        tools = await client.create_tools()
+        self._mcp_clients[name] = client
+        self._mcp_tools[name] = tools
+        logger.info(f"Activated MCP client: {name} ({len(tools)} tool(s))")
+        return tools
+
+    async def deactivate_mcp(self, name: str) -> List[MCPTool]:
+        client = self._mcp_clients.pop(name, None)
+        if client:
+            await client.close()
+            tools = self._mcp_tools.pop(name, [])
+            logger.info(f"Deactivated MCP client: {name}")
+            return tools
+        return []
 
 
 # 全局单例

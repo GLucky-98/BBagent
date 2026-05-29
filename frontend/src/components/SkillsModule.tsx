@@ -1,40 +1,24 @@
 import { useState } from "react";
-import { Sparkles, MapPin, FileText, Info, FolderOpen, X } from "lucide-react";
+import { Sparkles, MapPin, FileText, Info, FolderOpen } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
-// import type { Skill } from "../types";
-
-function ImportDialog({ onImport, onClose }: { onImport: (path: string) => void; onClose: () => void }) {
-  const [path, setPath] = useState("");
-  return (
-    <div className="mb-3 p-3 rounded-lg border border-[--color-border] bg-[--color-background]">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-semibold">Import Skills</h3>
-        <button onClick={onClose} className="p-1 rounded hover:bg-[--color-secondary]"><X size={12} /></button>
-      </div>
-      <input type="text" value={path} onChange={(e) => setPath(e.target.value)}
-        placeholder="/path/to/skills/folder" className="w-full px-2 py-1.5 text-sm rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring] mb-2" />
-      <div className="flex gap-2">
-        <button onClick={() => { onImport(path); onClose(); }} disabled={!path}
-          className="flex-1 py-1.5 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] text-xs font-medium hover:opacity-90 disabled:opacity-50">Import</button>
-        <button onClick={onClose} className="px-3 py-1.5 rounded-lg border border-[--color-border] text-xs hover:bg-[--color-secondary]">Cancel</button>
-      </div>
-    </div>
-  );
-}
+import { FolderPickerModal } from "./FolderPickerModal";
 
 function SkillList() {
   const skills = useAppStore((s) => s.skills);
   const selectedSkillId = useAppStore((s) => s.selectedSkillId);
   const setSelectedSkillId = useAppStore((s) => s.setSelectedSkillId);
   const importSkills = useAppStore((s) => s.importSkills);
-  const [showImport, setShowImport] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
 
-  const handleImport = (_path: string) => {
-    importSkills([{
-      name: "imported-skill", description: "Imported skill", path: "/skills/imported", body: "Imported skill body.",
-      metadata: { license: "MIT", version: "1.0.0" }, source: "imported",
-    }]);
+  const handleImport = async (path: string) => {
+    setImporting(true);
+    try {
+      await importSkills(path);
+    } finally {
+      setImporting(false);
+    }
   };
 
   const defaults = skills.filter((s) => s.source === "default");
@@ -43,12 +27,23 @@ function SkillList() {
   return (
     <div className="w-[300px] h-full bg-white border-r border-[--color-border] flex flex-col">
       <div className="p-3 border-b border-[--color-border]">
-        <button onClick={() => setShowImport(!showImport)}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[--color-border] text-sm font-medium hover:bg-[--color-secondary]">
-          <FolderOpen size={16} />Import from Folder
+        <button
+          onClick={() => setImportModalOpen(true)}
+          disabled={importing}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[--color-border] text-sm hover:bg-[--color-secondary] disabled:opacity-50"
+        >
+          <FolderOpen size={16} />
+          {importing ? "Importing..." : "Import from Folder"}
         </button>
       </div>
-      {showImport && <div className="p-2"><ImportDialog onImport={handleImport} onClose={() => setShowImport(false)} /></div>}
+
+      <FolderPickerModal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onSelect={handleImport}
+        title="Select Skills Folder"
+      />
+
       <div className="flex-1 overflow-y-auto p-2">
         {skills.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-[--color-muted-foreground]">

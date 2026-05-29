@@ -99,7 +99,7 @@ function NewModelForm({ onClose, editModel }: { onClose: () => void; editModel?:
         </div>
       </div>
 
-      <button onClick={handleSave} className="w-full py-2 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] text-sm font-medium hover:opacity-90">Save</button>
+      <button onClick={handleSave} className="w-full py-2 rounded-lg border border-[--color-border] bg-[--color-primary] text-[--color-primary-foreground] text-sm hover:opacity-90">Save</button>
     </div>
   );
 }
@@ -123,8 +123,8 @@ function ModelList({ onNew }: { onNew: () => void }) {
     <div className="w-[300px] h-full bg-white border-r border-[--color-border] flex flex-col">
       <div className="p-3 border-b border-[--color-border]">
         <button onClick={onNew}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90 transition-opacity">
-          <Plus size={16} /><span className="text-sm font-medium">New Model</span>
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[--color-border] bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90 transition-opacity">
+          <Plus size={16} /><span className="text-sm">New Model</span>
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-2">
@@ -190,13 +190,13 @@ function ModelTestPanel({ showForm, editModel, onCloseForm, onNew, onEdit }: {
           <ModelDetailView selectedModel={selectedModel} />
           <div className="p-4 border-t border-[--color-border]">
             <div className="mb-3">
-              <button onClick={() => onEdit(selectedModel.id)} className="w-full py-1.5 rounded-lg border border-[--color-border] text-xs font-medium hover:bg-[--color-secondary]">Edit</button>
+              <button onClick={() => onEdit(selectedModel.id)} className="w-full py-1.5 rounded-lg border border-[--color-border] text-xs hover:bg-[--color-secondary]">Edit</button>
             </div>
             <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="Test prompt..." rows={3}
               className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring] resize-none text-sm mb-2" />
             <button onClick={handleTest}
               disabled={isLoading || !input.trim()}
-              className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] text-sm hover:opacity-90 disabled:opacity-50">
+              className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg border border-[--color-border] bg-[--color-primary] text-[--color-primary-foreground] text-sm hover:opacity-90 disabled:opacity-50">
               {isLoading ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
               {isLoading ? "Testing..." : "Run Test"}
             </button>

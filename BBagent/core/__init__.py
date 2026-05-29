@@ -4,11 +4,13 @@ from .input import AgentEvent, EventType, InputChannel
 from .logger import AgentLogger, StructuredFormatter, ContextFilter
 from .mcp import (
     MCPClient,
-    MCPManager,
     MCPServerConfig,
     MCPTool,
     make_request,
     make_notification,
+    parse_config_file,
+    load_configs,
+    restore_mcp_tools,
 )
 from .message import (
     Session,
@@ -22,11 +24,10 @@ from .message import (
     ToolUseBlock,
 )
 from .model import Model, Model_Input, AnthropicModel, OpenAIModel
-from .skill import Skill, SkillMetadata, SkillManager
+from .skill import Skill, SkillMetadata, scan_skills
 from .team import AgentTeam, TeamConfig
 from .tool import (
     Tool,
-    ToolManager,
     inline_refs,
     tool,
 )
@@ -48,11 +49,13 @@ __all__ = [
     "ContextFilter",
     "InputChannel",
     "MCPClient",
-    "MCPManager",
     "MCPServerConfig",
     "MCPTool",
     "make_request",
     "make_notification",
+    "parse_config_file",
+    "load_configs",
+    "restore_mcp_tools",
     "Session",
     "Message",
     "HumanMessage",
@@ -68,11 +71,10 @@ __all__ = [
     "OpenAIModel",
     "Skill",
     "SkillMetadata",
-    "SkillManager",
+    "scan_skills",
     "AgentTeam",
     "TeamConfig",
     "Tool",
-    "ToolManager",
     "inline_refs",
     "tool",
 ]

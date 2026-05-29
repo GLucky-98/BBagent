@@ -3,6 +3,7 @@ import { Server, Plug, Unplug, Loader2, Plus, FolderOpen, X } from "lucide-react
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 import type { MCPServer } from "../types";
+import { FolderPickerModal } from "./FolderPickerModal";
 
 const ACTIVE_CLASS = "bg-[--color-primary]/10 text-[--color-primary] font-semibold shadow-[inset_4px_0_0_0_#10b981]";
 
@@ -53,7 +54,7 @@ function NewServerForm({ onClose }: { onClose: () => void }) {
             rows={4} className="w-full px-2 py-1.5 text-sm rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring] resize-none" />
         </div>
         <button onClick={handleSave} disabled={!form.name || !form.command}
-          className="w-full py-2 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] text-sm font-medium hover:opacity-90 disabled:opacity-50">Save</button>
+          className="w-full py-2 rounded-lg border border-[--color-border] bg-[--color-primary] text-[--color-primary-foreground] text-sm hover:opacity-90 disabled:opacity-50">Save</button>
       </div>
     </div>
   );
@@ -64,14 +65,16 @@ function MCPList({ onNew }: { onNew: () => void }) {
   const selectedMcpId = useAppStore((s) => s.selectedMcpId);
   const setSelectedMcpId = useAppStore((s) => s.setSelectedMcpId);
   const importMcpServers = useAppStore((s) => s.importMcpServers);
-  const [showImport, setShowImport] = useState(false);
-  const [importPath, setImportPath] = useState("");
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
 
-  const handleImport = () => {
-    importMcpServers([
-      { name: "imported-server", command: "node", args: ["./server.js"], env: {}, isConnected: false, tools: [], source: "imported" },
-    ]);
-    setShowImport(false); setImportPath("");
+  const handleImport = async (path: string) => {
+    setImporting(true);
+    try {
+      await importMcpServers(path);
+    } finally {
+      setImporting(false);
+    }
   };
 
   const defaults = mcpServers.filter((s) => s.source === "default");
@@ -81,25 +84,26 @@ function MCPList({ onNew }: { onNew: () => void }) {
     <div className="w-[300px] h-full bg-white border-r border-[--color-border] flex flex-col">
       <div className="p-3 border-b border-[--color-border] space-y-1.5">
         <button onClick={onNew}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90 transition-opacity">
-          <Plus size={16} /><span className="text-sm font-medium">New Server</span>
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[--color-border] bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90 transition-opacity">
+          <Plus size={16} /><span className="text-sm">New Server</span>
         </button>
-        <button onClick={() => setShowImport(!showImport)}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[--color-border] text-sm font-medium hover:bg-[--color-secondary]">
-          <FolderOpen size={16} />Import from Folder
+        <button
+          onClick={() => setImportModalOpen(true)}
+          disabled={importing}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[--color-border] text-sm hover:bg-[--color-secondary] disabled:opacity-50"
+        >
+          <FolderOpen size={16} />
+          {importing ? "Importing..." : "Import from Folder"}
         </button>
       </div>
-      {showImport && (
-        <div className="p-2 border-b border-[--color-border] space-y-2">
-          <input type="text" value={importPath} onChange={(e) => setImportPath(e.target.value)}
-            placeholder="/path/to/mcp/configs" className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
-          <div className="flex gap-2">
-            <button onClick={handleImport} disabled={!importPath}
-              className="flex-1 py-1 rounded-lg bg-[--color-primary] text-[--color-primary-foreground] text-xs font-medium hover:opacity-90 disabled:opacity-50">Import</button>
-            <button onClick={() => setShowImport(false)} className="px-3 py-1 rounded-lg border border-[--color-border] text-xs hover:bg-[--color-secondary]">Cancel</button>
-          </div>
-        </div>
-      )}
+
+      <FolderPickerModal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onSelect={handleImport}
+        title="Select MCP Configs Folder"
+      />
+
       <div className="flex-1 overflow-y-auto p-2">
         {mcpServers.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-[--color-muted-foreground]">
@@ -164,7 +168,7 @@ function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseFo
             </div>
           </div>
           <button onClick={selectedServer.isConnected ? handleDisconnect : handleConnect} disabled={isConnecting}
-            className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium", selectedServer.isConnected ? "bg-red-100 text-red-600 hover:bg-red-200" : "bg-emerald-100 text-emerald-600 hover:bg-emerald-200", isConnecting && "opacity-50 cursor-not-allowed")}>
+            className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[--color-border] text-xs", selectedServer.isConnected ? "bg-red-100 text-red-600 hover:bg-red-200" : "bg-emerald-100 text-emerald-600 hover:bg-emerald-200", isConnecting && "opacity-50 cursor-not-allowed")}>
             {isConnecting ? <Loader2 size={14} className="animate-spin" /> : selectedServer.isConnected ? <Unplug size={14} /> : <Plug size={14} />}
             <span>{isConnecting ? "Connecting..." : selectedServer.isConnected ? "Disconnect" : "Connect"}</span>
           </button>

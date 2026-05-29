@@ -27,22 +27,26 @@ export const api = {
   deleteMcp: (name: string) => request(`/mcps/${name}`, { method: "DELETE" }),
   activateMcp: (name: string) => request(`/mcps/${name}/activate`, { method: "POST" }),
   deactivateMcp: (name: string) => request(`/mcps/${name}/deactivate`, { method: "POST" }),
+  importMcps: (path: string) => request("/mcps/import", { method: "POST", body: JSON.stringify({ path }) }),
 
   // Prompts
   listPrompts: () => request("/prompts"),
   createPrompt: (data: unknown) => request("/prompts", { method: "POST", body: JSON.stringify(data) }),
   updatePrompt: (id: string, data: unknown) => request(`/prompts/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deletePrompt: (id: string) => request(`/prompts/${id}`, { method: "DELETE" }),
+  importPrompts: (path: string) => request("/prompts/import", { method: "POST", body: JSON.stringify({ path }) }),
 
   // Skills
   listSkills: () => request("/skills"),
+  importSkills: (path: string) => request("/skills/import", { method: "POST", body: JSON.stringify({ path }) }),
 
   // Agents
   listAgents: () => request("/agents"),
   getAgent: (name: string) => request(`/agents/${name}`),
   createAgent: (data: unknown) => request("/agents", { method: "POST", body: JSON.stringify(data) }),
   updateAgent: (name: string, data: unknown) => request(`/agents/${name}`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteAgent: (name: string) => request(`/agents/${name}`, { method: "DELETE" }),
+  deleteAgent: (name: string, deleteFiles?: boolean) =>
+    request(`/agents/${name}${deleteFiles ? '?delete_files=true' : ''}`, { method: "DELETE" }),
   newSession: (name: string) => request(`/agents/${name}/new_session`, { method: "POST" }),
 
   // Teams

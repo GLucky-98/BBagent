@@ -72,7 +72,6 @@ export interface Message {
 }
 
 export interface Agent {
-  id: string;
   name: string;
   type: "single" | "team";
   basePath: string;

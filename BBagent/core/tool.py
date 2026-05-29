@@ -1,9 +1,7 @@
 import inspect
-import json
-import logging
 from typing import Any, get_type_hints
 from pydantic import BaseModel, TypeAdapter
-from typing import Callable, Dict, List
+from typing import Callable
 import copy
 
 # ------------------------------------------------------------
@@ -54,7 +52,7 @@ class Tool():
             invoke (同步调用)
             async_invoke (异步调用)
     """
-    def __init__(self, func:Callable, name:str = None, description:str = None, input_schema:dict = None, has_state:bool | None = None,
+    def __init__(self, func:Callable, name:str = None, description:str = None, input_schema:dict = None,
                  source: str = None, config: dict = None):
         self.name = name if name else func.__name__ 
         self.description = description if description else func.__doc__
@@ -71,9 +69,16 @@ class Tool():
         
         self.func = func
         self.is_async = inspect.iscoroutinefunction(func)
-        self.has_state = has_state if has_state is not None else (not inspect.isfunction(func))
         self.source = source
         self.config = config or {}
+        self._hook_managed = False
+        self._team_managed = False
+
+    def mark_hook_managed(self):
+        self._hook_managed = True
+
+    def mark_team_managed(self):
+        self._team_managed = True
 
     def to_config_dict(self) -> dict:
         base = {
@@ -175,79 +180,4 @@ def tool(func:Callable):
     return Tool(func)
 
 
-# ------------------------------------------------------------
-# ToolManager
-# ------------------------------------------------------------
-class ToolManager:
-    _default: 'ToolManager | None' = None
 
-    def __init__(self):
-        self._blueprints: Dict[str, Tool] = {}
-        self._shared: Dict[str, Tool] = {}
-        self._agent_tools: Dict[str, Dict[str, Tool]] = {}
-        self._logger = logging.getLogger("tool.manager")
-
-    def _register(self, tools: List[Tool] | Tool):
-        if isinstance(tools, Tool):
-            tools = [tools]
-        for t in tools:
-            self._blueprints[t.name] = t
-
-    def _distribute(self, agent_id: str, tool_names: List[str]) -> List[Tool]:
-        agent_dict = self._agent_tools.setdefault(agent_id, {})
-        result = []
-        for name in tool_names:
-            bp = self._blueprints.get(name)
-            if not bp:
-                continue
-            if bp.has_state:
-                tool = copy.deepcopy(bp)
-            else:
-                tool = self._shared.setdefault(name, bp)
-            agent_dict[name] = tool
-            result.append(tool)
-        return result
-
-    def _get_agent_tools(self, agent_id: str) -> List[Tool]:
-        return list(self._agent_tools.get(agent_id, {}).values())
-
-    def _list_all(self) -> List[Tool]:
-        return list(self._blueprints.values())
-
-    def _unregister_agent(self, agent_id: str):
-        self._agent_tools.pop(agent_id, None)
-
-    def _clear(self):
-        self._blueprints.clear()
-        self._shared.clear()
-        self._agent_tools.clear()
-
-    @classmethod
-    def default(cls) -> 'ToolManager':
-        if cls._default is None:
-            cls._default = cls()
-        return cls._default
-
-    @classmethod
-    def register(cls, tools: List[Tool] | Tool):
-        cls.default()._register(tools)
-
-    @classmethod
-    def distribute(cls, agent_id: str, tool_names: List[str]) -> List[Tool]:
-        return cls.default()._distribute(agent_id, tool_names)
-
-    @classmethod
-    def get_agent_tools(cls, agent_id: str) -> List[Tool]:
-        return cls.default()._get_agent_tools(agent_id)
-
-    @classmethod
-    def list_all(cls) -> List[Tool]:
-        return cls.default()._list_all()
-
-    @classmethod
-    def unregister_agent(cls, agent_id: str):
-        cls.default()._unregister_agent(agent_id)
-
-    @classmethod
-    def reset(cls):
-        cls._default = None

@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Query
 
 from backend.state import state_manager
 from backend.schemas import AgentConfig, AgentSummary
@@ -44,9 +46,22 @@ async def update_agent(name: str, updates: dict):
 
 
 @router.delete("/{name}")
-async def delete_agent(name: str):
+async def delete_agent(name: str, delete_files: bool = Query(default=False)):
+    base_path = None
+    if delete_files:
+        agent = state_manager.agents.get(name)
+        if agent:
+            base_path = getattr(agent, "base_dir", None)
+
     if not state_manager.delete_agent(name):
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    if delete_files and base_path:
+        bp = Path(str(base_path)).expanduser().resolve()
+        if bp.exists():
+            import shutil
+            shutil.rmtree(bp)
+
     return {"success": True}
 
 

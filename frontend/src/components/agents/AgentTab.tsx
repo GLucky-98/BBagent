@@ -1,9 +1,10 @@
 import { useState, useMemo } from "react";
-import { Settings2 } from "lucide-react";
+import { Settings2, Trash2 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { cn } from "../../lib/utils";
 import { useAppStore } from "../../store";
 import { TeamDropdown } from "./TeamDropdown";
+import { ConfirmDialog } from "../ConfirmDialog";
 import type { Agent } from "../../types";
 
 interface AgentTabProps {
@@ -16,57 +17,84 @@ interface AgentTabProps {
 export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
-  const activeTeamMemberId = useAppStore((s) => s.activeTeamMemberId);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const activeAgentName = useAppStore((s) => s.activeAgentName);
+  const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
+  const removeAgent = useAppStore((s) => s.removeAgent);
   const isTeam = agent.type === "team";
 
   const displayName = useMemo(() => {
     if (!isTeam) return agent.name;
-    if (agent.id !== activeAgentId || !activeTeamMemberId) return agent.name;
-    const member = agent.teamMembers?.find((m) => m.id === activeTeamMemberId);
+    if (agent.name !== activeAgentName || !activeTeamMemberName) return agent.name;
+    const member = agent.teamMembers?.find((m) => m.name === activeTeamMemberName);
     return member ? `${agent.name} \u203A ${member.name}` : agent.name;
-  }, [agent, isTeam, activeAgentId, activeTeamMemberId]);
+  }, [agent, isTeam, activeAgentName, activeTeamMemberName]);
+
+  const handleDelete = (deleteFiles: boolean) => {
+    setDeleteDialogOpen(false);
+    removeAgent(agent.name, deleteFiles);
+  };
 
   return (
-    <DropdownMenu.Root open={isTeam && dropdownOpen} onOpenChange={setDropdownOpen}>
-      <div
-        className={cn(
-          "flex items-center gap-1 px-3 py-1.5 h-full cursor-pointer border-b-2 transition-colors select-none min-w-0 max-w-[200px]",
-          !isActive && "bg-transparent text-[--color-muted-foreground] border-transparent hover:bg-[--color-secondary]/50"
-        )}
-        style={isActive ? {
-          backgroundColor: "var(--color-background)",
-          color: "var(--color-foreground)",
-          borderBottomColor: "#3b82f6",
-          fontWeight: 500,
-        } : undefined}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-      >
-        {isTeam ? (
-          <DropdownMenu.Trigger asChild>
-            <span className="text-sm font-medium truncate flex-1">
+    <>
+      <DropdownMenu.Root open={isTeam && dropdownOpen} onOpenChange={setDropdownOpen}>
+        <div
+          className={cn(
+            "flex items-center gap-1 px-3 py-1.5 h-full cursor-pointer border-b-2 transition-colors select-none min-w-0 max-w-[200px]",
+            !isActive && "bg-transparent text-[--color-muted-foreground] border-transparent hover:bg-[--color-secondary]/50"
+          )}
+          style={isActive ? {
+            backgroundColor: "var(--color-background)",
+            color: "var(--color-foreground)",
+            borderBottomColor: "#3b82f6",
+            fontWeight: 500,
+          } : undefined}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+        >
+          {isTeam ? (
+            <DropdownMenu.Trigger asChild>
+              <span className="text-sm font-medium truncate flex-1">
+                {displayName}
+              </span>
+            </DropdownMenu.Trigger>
+          ) : (
+            <span className="text-sm font-medium truncate flex-1" onClick={onClick}>
               {displayName}
             </span>
-          </DropdownMenu.Trigger>
-        ) : (
-          <span className="text-sm font-medium truncate flex-1" onClick={onClick}>
-            {displayName}
-          </span>
+          )}
+          {(isHovered || isActive) && (
+            <>
+              <button onClick={(e) => { e.stopPropagation(); onConfig(); }} className="w-5 h-5 flex items-center justify-center rounded hover:bg-[--color-muted] text-[--color-muted-foreground] hover:text-[--color-foreground] shrink-0">
+                <Settings2 className="w-3 h-3" />
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setDeleteDialogOpen(true); }} className="w-5 h-5 flex items-center justify-center rounded hover:bg-red-50 text-[--color-muted-foreground] hover:text-red-600 shrink-0">
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </>
+          )}
+        </div>
+        {isTeam && (
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content align="start" sideOffset={4} className="z-[100]">
+              <TeamDropdown agent={agent} />
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
         )}
-        {(isHovered || isActive) && (
-          <button onClick={(e) => { e.stopPropagation(); onConfig(); }} className="w-5 h-5 flex items-center justify-center rounded hover:bg-[--color-muted] text-[--color-muted-foreground] hover:text-[--color-foreground] shrink-0">
-            <Settings2 className="w-3 h-3" />
-          </button>
-        )}
-      </div>
-      {isTeam && (
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content align="start" sideOffset={4} className="z-[100]">
-            <TeamDropdown agent={agent} />
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      )}
-    </DropdownMenu.Root>
+      </DropdownMenu.Root>
+
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        title="Delete Agent"
+        message={`Are you sure you want to delete "${agent.name}"? Do you want to delete the source files as well?`}
+        confirmLabel="Yes"
+        secondaryLabel="No"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={() => handleDelete(true)}
+        onSecondary={() => handleDelete(false)}
+        onCancel={() => setDeleteDialogOpen(false)}
+      />
+    </>
   );
 }

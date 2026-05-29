@@ -60,7 +60,6 @@ class MessageItem(BaseModel):
 
 
 class AgentSummary(BaseModel):
-    id: str
     name: str
     type: Literal["single", "team"] = "single"
     modelId: str
@@ -71,7 +70,6 @@ class AgentSummary(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    id: str
     name: str
     type: Literal["single", "team"] = "single"
     basePath: str = ""
@@ -90,14 +88,12 @@ class AgentConfig(BaseModel):
 
 
 class TeamSummary(BaseModel):
-    id: str
     name: str
     agentCount: int
     teamDescription: str = ""
 
 
 class TeamConfig(BaseModel):
-    id: str
     name: str
     teamDescription: str = ""
     agentNames: list[str] = Field(default_factory=list)
@@ -116,8 +112,8 @@ class FileNode(BaseModel):
 
 class UIState(BaseModel):
     currentTab: Literal["agent", "team"] = "agent"
-    currentAgentId: str | None = None
-    currentTeamId: str | None = None
+    currentAgentName: str | None = None
+    currentTeamName: str | None = None
     settingsOpen: bool = False
     settingsTab: str = "models"
     workingDirPath: str = ""

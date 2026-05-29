@@ -23,7 +23,15 @@ class EditOperations:
         return os.access(absolute_path, os.W_OK)
 
 
-def create_edit_func(policy: Optional[Policy] = None):
+def create_edit_tool(
+    policy_or_config: Policy | dict | None = None,
+) -> Tool:
+    if isinstance(policy_or_config, Policy):
+        policy = policy_or_config
+    elif isinstance(policy_or_config, dict):
+        policy = Policy(**policy_or_config.get("policy", {})) if policy_or_config.get("policy") else None
+    else:
+        policy = None
 
     if policy is not None:
         cwd = policy.cwd
@@ -88,12 +96,6 @@ def create_edit_func(policy: Optional[Policy] = None):
 
         except Exception as e:
             return f"Error editing file: {str(e)}"
-
-    return edit_func
-
-
-def create_edit_tool(policy: Optional[Policy] = None) -> Tool:
-    edit_func = create_edit_func(policy)
 
     input_schema = {
         "type": "object",

@@ -50,7 +50,15 @@ async def _exec_bash_command(
         return -1, "", str(e)
 
 
-async def create_bash_func(policy: Optional[Policy] = None):
+async def create_bash_tool(
+    policy_or_config: Policy | dict | None = None,
+) -> Tool:
+    if isinstance(policy_or_config, Policy):
+        policy = policy_or_config
+    elif isinstance(policy_or_config, dict):
+        policy = Policy(**policy_or_config.get("policy", {})) if policy_or_config.get("policy") else None
+    else:
+        policy = None
 
     if policy is not None:
         cwd = policy.cwd
@@ -96,7 +104,6 @@ async def create_bash_func(policy: Optional[Policy] = None):
                 output_parts.append(f"[stdout]\n{stdout}")
             if stderr:
                 output_parts.append(f"[stderr]\n{stderr}")
-
             if exit_code != 0:
                 output_parts.append(f"\n[exit code: {exit_code}]")
 
@@ -108,12 +115,6 @@ async def create_bash_func(policy: Optional[Policy] = None):
 
         except Exception as e:
             return f"Error executing command: {str(e)}"
-
-    return bash_func
-
-
-async def create_bash_tool(policy: Optional[Policy] = None) -> Tool:
-    bash_func = await create_bash_func(policy)
 
     input_schema = {
         "type": "object",

@@ -1,7 +1,17 @@
+import json
+import uuid
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from backend.state import state_manager
 from backend.schemas import MCPServerConfig
+
+
+class ImportRequest(BaseModel):
+    path: str
+
 
 router = APIRouter()
 
@@ -36,19 +46,59 @@ async def delete_mcp(name: str):
 
 @router.post("/{name}/activate")
 async def activate_mcp(name: str):
-    manager = state_manager.get_mcp_manager()
     try:
-        tools = await manager.activate_client(name)
+        tools = await state_manager.activate_mcp(name)
         return {"success": True, "tools": len(tools)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{name}/deactivate")
 async def deactivate_mcp(name: str):
-    manager = state_manager.get_mcp_manager()
     try:
-        await manager.deactivate_client(name)
+        await state_manager.deactivate_mcp(name)
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/import")
+async def import_mcps(req: ImportRequest):
+    target = Path(req.path).expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=400, detail="Not a valid directory")
+
+    imported = []
+    for item in sorted(target.iterdir()):
+        if not item.is_file() or item.suffix.lower() != ".json":
+            continue
+        try:
+            data = json.loads(item.read_text(encoding="utf-8"))
+            if "mcpServers" in data:
+                servers = data["mcpServers"]
+                entries = servers if isinstance(servers, list) else list(servers.values())
+            elif isinstance(data, list):
+                entries = data
+            elif isinstance(data, dict) and "name" in data and "command" in data:
+                entries = [data]
+            else:
+                continue
+
+            for entry in entries:
+                cfg = MCPServerConfig(
+                    name=entry.get("name", item.stem),
+                    command=entry.get("command", ""),
+                    args=entry.get("args", []),
+                    env=entry.get("env", {}),
+                    source="imported",
+                )
+                if state_manager.get_mcp(cfg.name):
+                    continue
+                state_manager.add_mcp(cfg)
+                imported.append(cfg.name)
+        except Exception:
+            continue
+
+    return {"imported": len(imported)}

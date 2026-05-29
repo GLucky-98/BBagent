@@ -18,7 +18,15 @@ class GrepOperations:
             return f.read()
 
 
-def create_grep_func(policy: Optional[Policy] = None):
+def create_grep_tool(
+    policy_or_config: Policy | dict | None = None,
+) -> Tool:
+    if isinstance(policy_or_config, Policy):
+        policy = policy_or_config
+    elif isinstance(policy_or_config, dict):
+        policy = Policy(**policy_or_config.get("policy", {})) if policy_or_config.get("policy") else None
+    else:
+        policy = None
 
     if policy is not None:
         cwd = policy.cwd
@@ -57,7 +65,6 @@ def create_grep_func(policy: Optional[Policy] = None):
 
         try:
             files_to_search = []
-
             if os.path.isfile(resolved_path):
                 files_to_search = [resolved_path]
             else:
@@ -130,12 +137,6 @@ def create_grep_func(policy: Optional[Policy] = None):
 
         except Exception as e:
             return f"Error searching files: {str(e)}"
-
-    return grep_func
-
-
-def create_grep_tool(policy: Optional[Policy] = None) -> Tool:
-    grep_func = create_grep_func(policy)
 
     input_schema = {
         "type": "object",

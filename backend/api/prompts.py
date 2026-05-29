@@ -1,7 +1,16 @@
+import uuid
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from backend.state import state_manager
 from backend.schemas import PromptConfig
+
+
+class ImportRequest(BaseModel):
+    path: str
+
 
 router = APIRouter()
 
@@ -32,3 +41,34 @@ async def delete_prompt(prompt_id: str):
     if not state_manager.delete_prompt(prompt_id):
         raise HTTPException(status_code=404, detail="Prompt not found")
     return {"success": True}
+
+
+@router.post("/import")
+async def import_prompts(req: ImportRequest):
+    target = Path(req.path).expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=400, detail="Not a valid directory")
+
+    imported = []
+    for item in sorted(target.iterdir()):
+        if not item.is_file():
+            continue
+        if item.suffix.lower() not in (".md", ".txt"):
+            continue
+        try:
+            content = item.read_text(encoding="utf-8")
+            cfg = PromptConfig(
+                id=str(uuid.uuid4()),
+                name=item.stem,
+                description=f"Imported from {item.name}",
+                content=content,
+                source="imported",
+            )
+            if state_manager.get_prompt(cfg.id):
+                continue
+            state_manager.add_prompt(cfg)
+            imported.append(cfg.name)
+        except Exception:
+            continue
+
+    return {"imported": len(imported)}

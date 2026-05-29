@@ -93,42 +93,45 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             count = team._broadcast(agent_name, message)
             return f"Broadcast sent to {count} agents"
 
-        agent.add_tools([
-            Tool(
-                func=send_message,
-                name="send_message",
-                description="Send a message to another agent in the team by name",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "to_agent": {
-                            "type": "string",
-                            "description": "Name of the target agent to send the message to"
-                        },
-                        "message": {
-                            "type": "string",
-                            "description": "Content of the message to send"
-                        }
+        send_msg_tool = Tool(
+            func=send_message,
+            name="send_message",
+            description="Send a message to another agent in the team by name",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "to_agent": {
+                        "type": "string",
+                        "description": "Name of the target agent to send the message to"
                     },
-                    "required": ["to_agent", "message"]
-                }
-            ),
-            Tool(
-                func=broadcast,
-                name="broadcast",
-                description="Broadcast a message to all visible teammates",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "message": {
-                            "type": "string",
-                            "description": "Content of the message to broadcast"
-                        }
-                    },
-                    "required": ["message"]
-                }
-            ),
-        ])
+                    "message": {
+                        "type": "string",
+                        "description": "Content of the message to send"
+                    }
+                },
+                "required": ["to_agent", "message"]
+            }
+        )
+        send_msg_tool.mark_team_managed()
+
+        broadcast_tool = Tool(
+            func=broadcast,
+            name="broadcast",
+            description="Broadcast a message to all visible teammates",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Content of the message to broadcast"
+                    }
+                },
+                "required": ["message"]
+            }
+        )
+        broadcast_tool.mark_team_managed()
+
+        agent.add_tools([send_msg_tool, broadcast_tool])
 
     def _send(self, from_agent: str, to_agent: str, content: str):
         target = self.agents.get(to_agent)
@@ -191,8 +194,6 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
 
     @classmethod
     def load(cls, base_dir: str | Path, *,
-             tool_registries: dict = None,
-             hook_registries: dict = None,
              extra_tool_builders: dict = None) -> 'AgentTeam':
         base_path = Path(base_dir)
         config_path = base_path / "team_config.yaml"
@@ -202,8 +203,6 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         with open(config_path, "r", encoding="utf-8") as f:
             config_dict = yaml.safe_load(f)
 
-        tool_registries = tool_registries or {}
-        hook_registries = hook_registries or {}
         extra_tool_builders = extra_tool_builders or {}
 
         name = config_dict.get("name", "Team")
@@ -217,8 +216,6 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             if config_path_str and Path(config_path_str).exists():
                 agent = Agent.load(
                     Path(config_path_str).parent,
-                    tool_registry=tool_registries.get(agent_name, {}),
-                    hook_registry=hook_registries.get(agent_name, {}),
                     extra_tool_builders=extra_tool_builders,
                 )
             else:

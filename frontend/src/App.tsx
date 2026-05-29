@@ -6,12 +6,11 @@ import { AgentConfigDialog } from "./components/agents/AgentConfigDialog";
 import { useAppStore } from "./store";
 
 function App() {
-  const agents = useAppStore((s) => s.agents);
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
+  const activeAgentName = useAppStore((s) => s.activeAgentName);
   const configDialog = useAppStore((s) => s.configDialog);
   const closeConfigDialog = useAppStore((s) => s.closeConfigDialog);
   const loadAll = useAppStore((s) => s.loadAll);
-  const isOnboarding = !activeAgentId;
+  const isOnboarding = !activeAgentName;
 
   useEffect(() => {
     loadAll();
@@ -26,7 +25,7 @@ function App() {
         onClose={closeConfigDialog}
         mode={configDialog.mode}
         type={configDialog.type}
-        agentId={configDialog.agentId}
+        agentName={configDialog.agentName}
       />
     </div>
   );
