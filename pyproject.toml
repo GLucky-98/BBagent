@@ -11,18 +11,14 @@ dependencies = [
     "pydantic>=2.0",
     "httpx",
     "pyyaml",
-    "aiosqlite",
-    "aiohttp",
+    "ollama",
     "jieba",
     "chromadb",
     "rank_bm25",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
 ]
 
 [tool.setuptools.packages.find]
 include = ["BBagent*"]
 
-[tool.uv.workspace]
-members = [
-    "example",
-    "BBagent",
-]
