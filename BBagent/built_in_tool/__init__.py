@@ -4,6 +4,7 @@ Tools package - File system and shell operation tools.
 from ..core.tool import Tool
 from .policy import Policy
 
+from .ask_human import create_ask_human_tool
 from .bash import create_bash_tool
 from .edit import create_edit_tool
 from .find import create_find_tool
@@ -11,6 +12,7 @@ from .grep import create_grep_tool
 from .ls import create_ls_tool
 from .read import create_read_tool
 from .write import create_write_tool
+from .sub_agent import create_sub_agent_tool
 
 
 TOOL_CREATOR = {
@@ -21,6 +23,8 @@ TOOL_CREATOR = {
     "built_in.find": create_find_tool,
     "built_in.grep": create_grep_tool,
     "built_in.ls": create_ls_tool,
+    "built_in.ask_human": create_ask_human_tool,
+    "built_in.sub_agent": create_sub_agent_tool,
 }
 
 
@@ -65,6 +69,8 @@ __all__ = [
     "create_grep_tool",
     "create_find_tool",
     "create_ls_tool",
+    "create_ask_human_tool",
+    "create_sub_agent_tool",
     "create_all_tools",
     "create_coding_tools",
     "create_readonly_tools",

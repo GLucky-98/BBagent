@@ -82,6 +82,10 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         team = self
         agent_name = agent.name
 
+        visible = team._get_visible_contacts(agent_name)
+        if not visible:
+            return
+
         def send_message(to_agent: str, message: str) -> str:
             visible = team._get_visible_contacts(agent_name)
             if to_agent not in visible:

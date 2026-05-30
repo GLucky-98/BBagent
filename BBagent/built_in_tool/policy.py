@@ -40,6 +40,10 @@ class Policy:
     bash_max_output_lines: int = 1000
     bash_default_timeout: int = 60
 
+    # ── SubAgent 配置 ──
+    sub_agent_model: Optional[dict] = None
+    sub_agent_blocked_tools: Optional[list[str]] = None
+
     def __post_init__(self):
         if self.allowed_dirs is None:
             self.allowed_dirs = [Path(self.cwd)]

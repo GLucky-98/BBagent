@@ -50,6 +50,7 @@ from .built_in_tool import (
     create_grep_tool,
     create_find_tool,
     create_ls_tool,
+    create_ask_human_tool,
 )
 
 from .built_in_hook import (
@@ -109,6 +110,7 @@ __all__ = [
     "create_grep_tool",
     "create_find_tool",
     "create_ls_tool",
+    "create_ask_human_tool",
 ]
 
 __all__ += [

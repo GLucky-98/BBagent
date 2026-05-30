@@ -45,7 +45,9 @@ class AgentConfig:
             self.tools = []
         if self.skills is None:
             self.skills = []
-        self.base_dir = Path(self.base_dir) / self.name
+        self.base_dir = Path(self.base_dir)
+        if self.base_dir.name != self.name:
+            self.base_dir = self.base_dir / self.name
 
 
 @dataclass
@@ -188,7 +190,10 @@ class Agent:
 
         agent_base_dir = Path(base_dir) if base_dir else Path.cwd()
         name = config_dict.get("name", "Agent")
-        agent_dir = agent_base_dir / name
+        if agent_base_dir.name == name:
+            agent_dir = agent_base_dir
+        else:
+            agent_dir = agent_base_dir / name
         system_prompt = config_dict.get("system_prompt", "")
 
         tools = []
@@ -212,8 +217,11 @@ class Agent:
 
             if source and source in all_builders:
                 builder = all_builders[source]
-                loop = asyncio.get_event_loop()
-                tool = loop.run_until_complete(builder(tool_cfg_data))
+                if asyncio.iscoroutinefunction(builder):
+                    loop = asyncio.get_event_loop()
+                    tool = loop.run_until_complete(builder(tool_cfg_data))
+                else:
+                    tool = builder(tool_cfg_data)
                 tools.append(tool)
 
         skills = []
@@ -334,6 +342,7 @@ class Agent:
     def add_tools(self, tools: List[Tool]):
         for t in tools:
             self.tools[t.name] = t
+        self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
 
     def register_mcp_clients(self, clients: dict):
         self._mcp_clients.update(clients)
@@ -585,7 +594,10 @@ Your available skills are:
                 self._event_queue = asyncio.Queue()
                 self._running = False
                 self.state = AgentState.Ready
-                self.save()
+                try:
+                    self.save()
+                except Exception as e:
+                    self.logger.warning(f"Failed to save agent state on stop: {e}")
                 self.logger.info("Agent event loop stopped")
 
     async def interrupt(self):
@@ -666,6 +678,7 @@ class SubAgent:
     def add_tools(self, tools: List[Tool]):
         for t in tools:
             self.tools[t.name] = t
+        self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
     
     def _add_load_skills_tool(self):
         @tool
