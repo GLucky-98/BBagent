@@ -9,6 +9,7 @@ import type {
   Prompt,
   SettingsTab,
   AgentPolicy,
+  SessionInfo,
 } from "../types";
 import { api } from "../lib/api";
 
@@ -55,12 +56,14 @@ export interface AppState {
     name: string;
     content: string | null;
     mimeType: string;
+    error?: string;
   } | null;
   openFilePreview: (file: {
     path: string;
     name: string;
     content: string | null;
     mimeType: string;
+    error?: string;
   }) => void;
   closeFilePreview: () => void;
 
@@ -74,7 +77,6 @@ export interface AppState {
   mcpServers: MCPServer[];
   selectedMcpId: string | null;
   setSelectedMcpId: (id: string | null) => void;
-  updateMcpConnection: (name: string, isConnected: boolean) => void;
   addMcpServer: (server: MCPServer) => Promise<void>;
   importMcpServers: (path: string) => Promise<void>;
 
@@ -91,6 +93,18 @@ export interface AppState {
 
   expandedTeams: Set<string>;
   toggleTeamExpanded: (teamName: string) => void;
+
+  agentStates: Record<string, "ready" | "waiting" | "running" | "error">;
+  isAgentStreaming: Record<string, boolean>;
+  setAgentState: (name: string, state: "ready" | "waiting" | "running" | "error") => void;
+  setIsStreaming: (name: string, streaming: boolean) => void;
+  agentSessions: Record<string, SessionInfo[]>;
+  loadAgentSessions: (name: string) => Promise<void>;
+  switchSession: (name: string, sessionId: string) => Promise<void>;
+  createNewSession: (name: string) => Promise<void>;
+  loadAgentMessages: (name: string) => Promise<void>;
+  startAgent: (name: string) => Promise<void>;
+  stopAgent: (name: string) => Promise<void>;
 
   loadAll: () => Promise<void>;
   createAgentApi: (agent: Agent) => Promise<void>;
@@ -196,6 +210,19 @@ const defaultTools: Tool[] = [
     },
     isMcp: false,
   },
+  {
+    id: "tool-8",
+    name: "ask_human",
+    description: "Ask the human user a question when you need clarification, additional information, or a decision",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "The question to ask the human user" },
+      },
+      required: ["question"],
+    },
+    isMcp: false,
+  },
 ];
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -225,8 +252,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  addAgent: (agent) => set((state) => ({ agents: [...state.agents, agent], activeAgentName: agent.name, workingDirPath: agent.policy?.cwd || "", baseDirPath: agent.basePath })),
-  addTeam: (team) => set((state) => ({ agents: [...state.agents, team], activeAgentName: team.name, workingDirPath: team.policy?.cwd || "", baseDirPath: team.basePath })),
+  addAgent: (agent) => set((state) => {
+    if (state.agents.some((a) => a.name === agent.name)) return state;
+    return { agents: [...state.agents, agent], activeAgentName: agent.name, workingDirPath: agent.policy?.cwd || "", baseDirPath: agent.basePath };
+  }),
+  addTeam: (team) => set((state) => {
+    if (state.agents.some((a) => a.name === team.name)) return state;
+    return { agents: [...state.agents, team], activeAgentName: team.name, workingDirPath: team.policy?.cwd || "", baseDirPath: team.basePath };
+  }),
   updateAgent: (name, updates) => set((state) => ({ agents: state.agents.map((a) => (a.name === name ? { ...a, ...updates } : a)) })),
   updateTeam: (name, updates) => set((state) => ({ agents: state.agents.map((a) => (a.name === name ? { ...a, ...updates } : a)) })),
   removeAgent: async (name, deleteFiles) => {
@@ -286,8 +319,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   mcpServers: [],
   selectedMcpId: null,
   setSelectedMcpId: (id) => set({ selectedMcpId: id }),
-  updateMcpConnection: (name, isConnected) =>
-    set((state) => ({ mcpServers: state.mcpServers.map((m) => (m.name === name ? { ...m, isConnected } : m)) })),
   addMcpServer: async (server) => {
     await api.createMcp(server);
     set((state) => ({ mcpServers: [...state.mcpServers, server] }));
@@ -334,6 +365,80 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { expandedTeams: newSet };
     }),
 
+  agentStates: {},
+  isAgentStreaming: {},
+
+  setAgentState: (name, state) =>
+    set((s) => ({
+      agentStates: { ...s.agentStates, [name]: state },
+      agents: s.agents.map((a) => (a.name === name ? { ...a, state } : a)),
+    })),
+
+  setIsStreaming: (name, streaming) =>
+    set((s) => ({
+      isAgentStreaming: { ...s.isAgentStreaming, [name]: streaming },
+    })),
+
+  agentSessions: {},
+
+  loadAgentSessions: async (name: string) => {
+    try {
+      const sessions = await api.listSessions(name);
+      set((s) => ({ agentSessions: { ...s.agentSessions, [name]: sessions } }));
+    } catch (e) {
+      console.error("Failed to load sessions:", e);
+    }
+  },
+
+  switchSession: async (name: string, sessionId: string) => {
+    await api.switchSession(name, sessionId);
+    const sessions = get().agentSessions[name] || [];
+    set((s) => ({
+      agentSessions: {
+        ...s.agentSessions,
+        [name]: sessions.map((sess) => ({
+          ...sess,
+          isActive: sess.id === sessionId,
+        })),
+      },
+    }));
+    await get().loadAgentMessages(name);
+  },
+
+  createNewSession: async (name: string) => {
+    const result = await api.newSession(name);
+    await get().loadAgentSessions(name);
+    set((s) => ({
+      agents: s.agents.map((a) =>
+        a.name === name ? { ...a, messages: [], currentSessionId: result.session_id } : a
+      ),
+    }));
+  },
+
+  loadAgentMessages: async (name: string) => {
+    try {
+      const messages = await api.getAgentMessages(name);
+      set((s) => ({
+        agents: s.agents.map((a) =>
+          a.name === name ? { ...a, messages: messages.map((m: Message, i: number) => ({ ...m, id: m.messageId || `hist-${i}` })) } : a
+        ),
+      }));
+    } catch (e) {
+      console.error("Failed to load messages:", e);
+    }
+  },
+
+  startAgent: async (name: string) => {
+    const result = await api.startAgent(name);
+    get().setAgentState(name, result.state as "ready" | "waiting" | "running" | "error");
+  },
+
+  stopAgent: async (name: string) => {
+    const result = await api.stopAgent(name);
+    get().setAgentState(name, result.state as "ready" | "waiting" | "running" | "error");
+    get().setIsStreaming(name, false);
+  },
+
   loadAll: async () => {
     try {
       const [models, mcps, prompts, skills, agents, teams, state] = await Promise.all([
@@ -345,14 +450,32 @@ export const useAppStore = create<AppState>((set, get) => ({
         api.listTeams(),
         api.getState().catch(() => null),
       ]);
+
+      const allAgents = (agents || []).concat(teams || []);
+      const seen = new Set<string>();
+      const deduped = allAgents.filter((a: Agent) => {
+        if (seen.has(a.name)) return false;
+        seen.add(a.name);
+        return true;
+      });
+      const agentStates: Record<string, "ready" | "waiting" | "running" | "error"> = {};
+      const agentSessionsMap: Record<string, SessionInfo[]> = {};
+
+      for (const agent of deduped) {
+        agentStates[agent.name] = agent.state || "ready";
+        agentSessionsMap[agent.name] = agent.sessions || [];
+      }
+
       set({
         models: models || [],
         mcpServers: mcps || [],
         prompts: prompts || [],
         skills: skills || [],
-        agents: (agents || []).concat(teams || []),
+        agents: deduped,
         workingDirPath: state?.workingDirPath || "",
         baseDirPath: state?.baseDirPath || "",
+        agentStates,
+        agentSessions: agentSessionsMap,
       });
     } catch (e) {
       console.error("Failed to load state from backend:", e);
@@ -361,15 +484,22 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   createAgentApi: async (agent: Agent) => {
     const created = await api.createAgent(agent);
-    set((state) => ({
-      agents: [...state.agents, created],
-      activeAgentName: created.name,
-    }));
+    set((state) => {
+      if (state.agents.some((a) => a.name === created.name)) return state;
+      return {
+        agents: [...state.agents, created],
+        activeAgentName: created.name,
+        agentStates: { ...state.agentStates, [created.name]: created.state || "waiting" },
+      };
+    });
   },
 
   createTeamApi: async (team: Agent) => {
     const created = await api.createTeam(team);
-    set((state) => ({ agents: [...state.agents, created], activeAgentName: created.id }));
+    set((state) => {
+      if (state.agents.some((a) => a.name === created.name)) return state;
+      return { agents: [...state.agents, created], activeAgentName: created.id };
+    });
   },
 }));
 

@@ -1,13 +1,13 @@
+import asyncio
 import json
-import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from BBagent.core.agent import Agent, AgentConfig as CoreAgentConfig
+from BBagent.core.agent import Agent, AgentConfig as CoreAgentConfig, AgentState
 from BBagent.core.team import AgentTeam, TeamConfig as CoreTeamConfig
 from BBagent.core.model import Model
 from BBagent.core.skill import Skill, scan_skills
-from BBagent.core.mcp import MCPClient, MCPTool, MCPServerConfig as CoreMCPServerConfig
+from BBagent.core.mcp import MCPClient, MCPServerConfig as CoreMCPServerConfig
 
 from backend.schemas import (
     ModelConfig,
@@ -18,14 +18,37 @@ from backend.schemas import (
     TeamConfig,
     UIState,
 )
+from backend.dispatcher import AgentOutputDispatcher
+from backend.logging import get_backend_logger, log_operation
+from backend.errors import (
+    AppError, ErrorCode,
+    NotFoundError, ConflictError, InternalError,
+)
 
-logger = logging.getLogger("bbagent.state")
+# camelCase (frontend) -> snake_case (core Policy)
+_POLICY_FIELD_MAP = {
+    "allowedDirs": "allowed_dirs",
+    "blockedPaths": "blocked_paths",
+    "blockedExtensions": "blocked_extensions",
+    "maxReadSize": "max_read_size",
+    "maxReadLines": "max_read_lines",
+    "maxWriteSize": "max_write_size",
+    "writeCreateDirectories": "write_create_directories",
+    "bashAllowedCommands": "bash_allowed_commands",
+    "bashBlockedCommands": "bash_blocked_commands",
+    "bashAllowNetwork": "bash_allow_network",
+    "bashMaxOutputLines": "bash_max_output_lines",
+    "bashDefaultTimeout": "bash_default_timeout",
+}
+
+
+def _policy_to_snake(policy: dict) -> dict:
+    return {_POLICY_FIELD_MAP.get(k, k): v for k, v in policy.items()}
+
+logger = get_backend_logger("state")
 
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
-
-IMPORTED_SKILLS_DIRS_FILE = DATA_DIR / "imported_skills_dirs.json"
-
 
 class StateManager:
     _instance: Optional["StateManager"] = None
@@ -45,13 +68,14 @@ class StateManager:
         self.mcp_servers: List[MCPServerConfig] = []
         self.prompts: List[PromptConfig] = []
         self.skills: Dict[str, Skill] = {}
-        self.imported_skills_dirs: List[str] = []
+        self.skill_dirs: List[str] = []
         self.agents: Dict[str, Agent] = {}
         self.teams: Dict[str, AgentTeam] = {}
         self.ui_state: UIState = UIState()
 
-        self._mcp_clients: Dict[str, MCPClient] = {}
-        self._mcp_tools: Dict[str, List[MCPTool]] = {}
+        self._agent_dispatchers: Dict[str, AgentOutputDispatcher] = {}
+        self._agent_tasks: Dict[str, asyncio.Task] = {}
+
         self._ensure_data_dir()
         self.load_all()
 
@@ -65,15 +89,19 @@ class StateManager:
         (DATA_DIR / "models").mkdir(exist_ok=True)
         (DATA_DIR / "mcps").mkdir(exist_ok=True)
         (DATA_DIR / "prompts").mkdir(exist_ok=True)
+        (DATA_DIR / "skills").mkdir(exist_ok=True)
 
-    def _models_path(self) -> Path:
-        return DATA_DIR / "models" / "models.json"
+    def _models_dir(self) -> Path:
+        return DATA_DIR / "models"
 
-    def _mcps_path(self) -> Path:
-        return DATA_DIR / "mcps" / "servers.json"
+    def _mcps_dir(self) -> Path:
+        return DATA_DIR / "mcps"
 
-    def _prompts_path(self) -> Path:
-        return DATA_DIR / "prompts" / "prompts.json"
+    def _prompts_dir(self) -> Path:
+        return DATA_DIR / "prompts"
+
+    def _skill_dirs_path(self) -> Path:
+        return DATA_DIR / "skills" / "skills.json"
 
     def _store_path(self) -> Path:
         return DATA_DIR / "store.json"
@@ -92,57 +120,90 @@ class StateManager:
         logger.info("StateManager loaded all data")
 
     def _load_models(self):
-        path = self._models_path()
-        if path.exists():
+        models_dir = self._models_dir()
+        self.models = []
+        seen_ids: set = set()
+
+        for item in sorted(models_dir.iterdir()):
+            if not item.is_file() or item.suffix != ".json":
+                continue
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                self.models = [ModelConfig(**m) for m in data]
+                data = json.loads(item.read_text(encoding="utf-8"))
+                config = ModelConfig(**data)
+                if config.id not in seen_ids:
+                    self.models.append(config)
+                    seen_ids.add(config.id)
             except Exception as e:
-                logger.warning(f"Failed to load models: {e}")
-                self.models = []
-        else:
-            self.models = []
+                logger.warning(f"Failed to load model from {item}: {e}")
 
     def _load_mcps(self):
-        path = self._mcps_path()
-        if path.exists():
+        mcps_dir = self._mcps_dir()
+        self.mcp_servers = []
+        seen_names: set = set()
+
+        for item in sorted(mcps_dir.iterdir()):
+            if not item.is_file() or item.suffix != ".json":
+                continue
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                self.mcp_servers = [MCPServerConfig(**m) for m in data]
+                data = json.loads(item.read_text(encoding="utf-8"))
+                entries = self._extract_mcp_entries(data, item.stem)
+                for entry in entries:
+                    config = MCPServerConfig(**entry)
+                    if config.name not in seen_names:
+                        self.mcp_servers.append(config)
+                        seen_names.add(config.name)
+                        self._save_mcp_file(config)
             except Exception as e:
-                logger.warning(f"Failed to load mcps: {e}")
-                self.mcp_servers = []
-        else:
-            self.mcp_servers = []
+                logger.warning(f"Failed to load MCP from {item}: {e}")
 
     def _load_prompts(self):
-        path = self._prompts_path()
-        if path.exists():
+        prompts_dir = self._prompts_dir()
+        self.prompts = []
+        seen_ids: set = set()
+
+        for item in sorted(prompts_dir.iterdir()):
+            if not item.is_file() or item.suffix != ".json":
+                continue
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                self.prompts = [PromptConfig(**p) for p in data]
+                data = json.loads(item.read_text(encoding="utf-8"))
+                config = PromptConfig(**data)
+                if config.id not in seen_ids:
+                    self.prompts.append(config)
+                    seen_ids.add(config.id)
             except Exception as e:
-                logger.warning(f"Failed to load prompts: {e}")
-                self.prompts = []
-        else:
-            self.prompts = []
+                logger.warning(f"Failed to load prompt from {item}: {e}")
 
     def _load_skills(self):
-        skills_dir = PROJECT_ROOT / "skills"
-        if skills_dir.exists():
+        dirs_path = self._skill_dirs_path()
+
+        if dirs_path.exists():
             try:
-                self.skills = scan_skills(skills_dir)
+                self.skill_dirs = json.loads(dirs_path.read_text(encoding="utf-8"))
             except Exception as e:
-                logger.warning(f"Failed to load skills: {e}")
-                self.skills = {}
+                logger.warning(f"Failed to load skill dirs: {e}")
+                self.skill_dirs = []
         else:
-            self.skills = {}
-        self._load_imported_skills_dirs()
+            self.skill_dirs = []
+
+        self.skills = {}
+        for d in self.skill_dirs:
+            dir_path = Path(d)
+            if not dir_path.exists():
+                continue
+            try:
+                scanned = scan_skills(dir_path)
+                for name, skill in scanned.items():
+                    if name not in self.skills:
+                        self.skills[name] = skill
+            except Exception as e:
+                logger.warning(f"Failed to load skills from {d}: {e}")
 
     def _load_agents(self):
         agents_dir = DATA_DIR / "agents"
         if not agents_dir.exists():
             return
+        loaded = 0
+        failed = 0
         for agent_dir in agents_dir.iterdir():
             if not agent_dir.is_dir():
                 continue
@@ -152,8 +213,13 @@ class StateManager:
             try:
                 agent = Agent.load(agent_dir)
                 self.agents[agent.name] = agent
+                self._agent_dispatchers[agent.name] = AgentOutputDispatcher()
+                loaded += 1
+                logger.info(f"Loaded agent '{agent.name}' from {agent_dir.name}")
             except Exception as e:
-                logger.warning(f"Failed to load agent from {agent_dir}: {e}")
+                failed += 1
+                logger.error("Failed to load agent from %s: %s", agent_dir.name, e, exc_info=True)
+        logger.info("Agent loading complete: %d loaded, %d failed", loaded, failed)
 
     def _load_teams(self):
         teams_dir = DATA_DIR / "teams"
@@ -184,20 +250,111 @@ class StateManager:
     # ------------------------------------------------------------------
     # 保存
     # ------------------------------------------------------------------
+    def _model_file_path(self, model_id: str) -> Path:
+        safe_id = "".join(c for c in model_id if c.isalnum() or c in "._-")
+        return self._models_dir() / f"{safe_id}.json"
+
+    def _save_model_file(self, config: ModelConfig):
+        path = self._model_file_path(config.id)
+        path.write_text(
+            config.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+
+    def _delete_model_file(self, model_id: str):
+        path = self._model_file_path(model_id)
+        if path.exists():
+            path.unlink()
+
     def save_models(self):
-        path = self._models_path()
-        data = [m.model_dump(mode="json") for m in self.models]
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        existing_ids = {m.id for m in self.models}
+        for item in sorted(self._models_dir().iterdir()):
+            if not item.is_file() or item.suffix != ".json":
+                continue
+            model_id = item.stem
+            if model_id not in existing_ids:
+                try:
+                    item.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to remove stale model file {item}: {e}")
+        for config in self.models:
+            self._save_model_file(config)
+
+    def _mcp_file_path(self, name: str) -> Path:
+        safe_name = "".join(c for c in name if c.isalnum() or c in "._-")
+        return self._mcps_dir() / f"{safe_name}.json"
+
+    @staticmethod
+    def _extract_mcp_entries(data: dict, default_name: str) -> list[dict]:
+        if "mcpServers" in data:
+            servers = data["mcpServers"]
+            if isinstance(servers, list):
+                entries = [{"name": e.pop("name", default_name), **e} for e in servers if isinstance(e, dict)]
+            elif isinstance(servers, dict):
+                entries = [{"name": name, **cfg} for name, cfg in servers.items() if isinstance(cfg, dict)]
+            else:
+                entries = []
+        elif isinstance(data, dict) and "name" in data and "command" in data:
+            entries = [data]
+        else:
+            entries = []
+        return entries
+
+    def _save_mcp_file(self, config: MCPServerConfig):
+        path = self._mcp_file_path(config.name)
+        path.write_text(
+            config.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+
+    def _delete_mcp_file(self, name: str):
+        path = self._mcp_file_path(name)
+        if path.exists():
+            path.unlink()
 
     def save_mcps(self):
-        path = self._mcps_path()
-        data = [m.model_dump(mode="json") for m in self.mcp_servers]
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        existing_names = {m.name for m in self.mcp_servers}
+        for item in sorted(self._mcps_dir().iterdir()):
+            if not item.is_file() or item.suffix != ".json":
+                continue
+            name = item.stem
+            if name not in existing_names:
+                try:
+                    item.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to remove stale MCP file {item}: {e}")
+        for config in self.mcp_servers:
+            self._save_mcp_file(config)
+
+    def _prompt_file_path(self, prompt_id: str) -> Path:
+        safe_id = "".join(c for c in prompt_id if c.isalnum() or c in "._-")
+        return self._prompts_dir() / f"{safe_id}.json"
+
+    def _save_prompt_file(self, config: PromptConfig):
+        path = self._prompt_file_path(config.id)
+        path.write_text(
+            config.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+
+    def _delete_prompt_file(self, prompt_id: str):
+        path = self._prompt_file_path(prompt_id)
+        if path.exists():
+            path.unlink()
 
     def save_prompts(self):
-        path = self._prompts_path()
-        data = [p.model_dump(mode="json") for p in self.prompts]
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        existing_ids = {p.id for p in self.prompts}
+        for item in sorted(self._prompts_dir().iterdir()):
+            if not item.is_file() or item.suffix != ".json":
+                continue
+            prompt_id = item.stem
+            if prompt_id not in existing_ids:
+                try:
+                    item.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to remove stale prompt file {item}: {e}")
+        for config in self.prompts:
+            self._save_prompt_file(config)
 
     def save_ui_state(self):
         path = self._store_path()
@@ -217,24 +374,28 @@ class StateManager:
 
     def add_model(self, config: ModelConfig) -> ModelConfig:
         self.models.append(config)
-        self.save_models()
+        self._save_model_file(config)
         return config
 
     def update_model(self, model_id: str, updates: dict) -> Optional[ModelConfig]:
         for i, m in enumerate(self.models):
             if m.id == model_id:
+                old_id = m.id
                 data = m.model_dump()
                 data.update(updates)
                 self.models[i] = ModelConfig(**data)
-                self.save_models()
-                return self.models[i]
+                new_config = self.models[i]
+                if new_config.id != old_id:
+                    self._delete_model_file(old_id)
+                self._save_model_file(new_config)
+                return new_config
         return None
 
     def delete_model(self, model_id: str) -> bool:
         for i, m in enumerate(self.models):
             if m.id == model_id:
                 self.models.pop(i)
-                self.save_models()
+                self._delete_model_file(model_id)
                 return True
         return False
 
@@ -247,26 +408,39 @@ class StateManager:
                 return m
         return None
 
-    def add_mcp(self, config: MCPServerConfig) -> MCPServerConfig:
+    async def add_mcp(self, config: MCPServerConfig) -> MCPServerConfig:
         self.mcp_servers.append(config)
-        self.save_mcps()
+        self._save_mcp_file(config)
+        try:
+            await self._discover_mcp_tools(config.name)
+        except Exception as e:
+            logger.warning(f"Failed to discover tools for MCP '{config.name}': {e}")
         return config
 
-    def update_mcp(self, name: str, updates: dict) -> Optional[MCPServerConfig]:
+    async def update_mcp(self, name: str, updates: dict) -> Optional[MCPServerConfig]:
         for i, m in enumerate(self.mcp_servers):
             if m.name == name:
+                old_name = m.name
                 data = m.model_dump()
                 data.update(updates)
                 self.mcp_servers[i] = MCPServerConfig(**data)
-                self.save_mcps()
-                return self.mcp_servers[i]
+                new_config = self.mcp_servers[i]
+                if new_config.name != old_name:
+                    self._delete_mcp_file(old_name)
+                self._save_mcp_file(new_config)
+                if any(k in updates for k in ("command", "args", "env")):
+                    try:
+                        await self._discover_mcp_tools(new_config.name)
+                    except Exception as e:
+                        logger.warning(f"Failed to re-discover tools for MCP '{new_config.name}': {e}")
+                return new_config
         return None
 
     def delete_mcp(self, name: str) -> bool:
         for i, m in enumerate(self.mcp_servers):
             if m.name == name:
                 self.mcp_servers.pop(i)
-                self.save_mcps()
+                self._delete_mcp_file(name)
                 return True
         return False
 
@@ -281,24 +455,28 @@ class StateManager:
 
     def add_prompt(self, config: PromptConfig) -> PromptConfig:
         self.prompts.append(config)
-        self.save_prompts()
+        self._save_prompt_file(config)
         return config
 
     def update_prompt(self, prompt_id: str, updates: dict) -> Optional[PromptConfig]:
         for i, p in enumerate(self.prompts):
             if p.id == prompt_id:
+                old_id = p.id
                 data = p.model_dump()
                 data.update(updates)
                 self.prompts[i] = PromptConfig(**data)
-                self.save_prompts()
-                return self.prompts[i]
+                new_config = self.prompts[i]
+                if new_config.id != old_id:
+                    self._delete_prompt_file(old_id)
+                self._save_prompt_file(new_config)
+                return new_config
         return None
 
     def delete_prompt(self, prompt_id: str) -> bool:
         for i, p in enumerate(self.prompts):
             if p.id == prompt_id:
                 self.prompts.pop(i)
-                self.save_prompts()
+                self._delete_prompt_file(prompt_id)
                 return True
         return False
 
@@ -307,10 +485,8 @@ class StateManager:
     # ------------------------------------------------------------------
     def list_skills(self) -> List[SkillConfig]:
         result = []
-        default_path = str((PROJECT_ROOT / "skills").resolve())
         for skill in self.skills.values():
             skill_path = str(skill.path.resolve()) if skill.path else ""
-            source = "default" if skill_path.startswith(default_path) else "imported"
             result.append(
                 SkillConfig(
                     name=skill.name,
@@ -318,36 +494,22 @@ class StateManager:
                     path=skill_path,
                     body=skill.body,
                     metadata=skill.metadata.to_dict() if skill.metadata else {},
-                    source=source,
                 )
             )
         return result
 
-    def _load_imported_skills_dirs(self):
-        if IMPORTED_SKILLS_DIRS_FILE.exists():
-            try:
-                dirs = json.loads(IMPORTED_SKILLS_DIRS_FILE.read_text(encoding="utf-8"))
-                for d in dirs:
-                    try:
-                        imported_skills = scan_skills(Path(d))
-                        for name, skill in imported_skills.items():
-                            if name not in self.skills:
-                                self.skills[name] = skill
-                    except Exception as e:
-                        logger.warning(f"Failed to load imported skills from {d}: {e}")
-                self.imported_skills_dirs = dirs
-            except Exception as e:
-                logger.warning(f"Failed to load imported skills dirs: {e}")
-                self.imported_skills_dirs = []
+    def _save_skill_dirs(self):
+        path = self._skill_dirs_path()
+        path.write_text(
+            json.dumps(self.skill_dirs, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     def save_imported_skills_dirs(self, dir_path: Path):
         path_str = str(dir_path.resolve())
-        if path_str not in self.imported_skills_dirs:
-            self.imported_skills_dirs.append(path_str)
-        IMPORTED_SKILLS_DIRS_FILE.write_text(
-            json.dumps(self.imported_skills_dirs, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        if path_str not in self.skill_dirs:
+            self.skill_dirs.append(path_str)
+        self._save_skill_dirs()
 
     # ------------------------------------------------------------------
     # Agent CRUD
@@ -368,10 +530,10 @@ class StateManager:
             policy=getattr(agent, "policy", {}) or {},
         )
 
-    def create_agent(self, config: AgentConfig) -> Agent:
+    async def create_agent(self, config: AgentConfig) -> Agent:
         model_cfg = self.get_model(config.modelId)
         if not model_cfg:
-            raise ValueError(f"Model not found: {config.modelId}")
+            raise NotFoundError(ErrorCode.MODEL_NOT_FOUND, f"Model '{config.modelId}' not found")
 
         model = Model.from_config_dict({
             "provider": model_cfg.provider,
@@ -385,37 +547,136 @@ class StateManager:
             "thinking": model_cfg.thinking,
         })
 
-        tools = []
-        if config.toolNames:
-            tools = []
+        with log_operation(logger, "create_agent", agent_name=config.name):
+            tools, mcp_clients = await self._build_tools_and_mcp_clients(
+                config.toolNames, config.policy
+            )
 
-        skills = []
-        for skill_name in config.skillNames:
-            skill = self.skills.get(skill_name)
-            if skill:
-                skills.append(skill)
+            skills = []
+            for skill_name in config.skillNames:
+                skill = self.skills.get(skill_name)
+                if skill:
+                    skills.append(skill)
 
-        core_kwargs = {
-            "model": model,
-            "base_dir": DATA_DIR / "agents",
-            "system_prompt": config.systemPrompt,
-            "tools": tools,
-            "skills": skills,
-        }
-        if config.name and config.name.strip():
-            core_kwargs["name"] = config.name.strip()
-        core_config = CoreAgentConfig(**core_kwargs)
-        agent = Agent(core_config)
-        agent.save()
-        self.agents[agent.name] = agent
-        return agent
+            core_kwargs = {
+                "model": model,
+                "base_dir": DATA_DIR / "agents",
+                "system_prompt": config.systemPrompt,
+                "tools": tools,
+                "skills": skills,
+            }
+            if config.name and config.name.strip():
+                core_kwargs["name"] = config.name.strip()
 
-    def update_agent(self, name: str, updates: dict) -> Optional[Agent]:
+            core_config = CoreAgentConfig(**core_kwargs)
+            agent = Agent(core_config)
+
+            if mcp_clients:
+                agent.register_mcp_clients(mcp_clients)
+
+            agent.save()
+            self.agents[agent.name] = agent
+            self._agent_dispatchers[agent.name] = AgentOutputDispatcher()
+            await self.start_agent(agent.name)
+            return agent
+
+    async def start_agent(self, name: str):
         agent = self.agents.get(name)
         if not agent:
+            raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{name}' not found")
+
+        if agent._running:
+            logger.info("Agent '%s' already running, skipped", name)
+            return
+
+        dispatcher = self._agent_dispatchers.get(name)
+        if not dispatcher:
+            dispatcher = AgentOutputDispatcher()
+            self._agent_dispatchers[name] = dispatcher
+
+        agent.on_output(dispatcher.on_chunk)
+
+        async def _run():
+            try:
+                await agent.start()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error("Agent '%s' event loop crashed: %s", name, e, exc_info=True)
+
+        with log_operation(logger, "start_agent", agent_name=name):
+            task = asyncio.create_task(_run())
+            self._agent_tasks[name] = task
+
+    async def stop_agent(self, name: str):
+        agent = self.agents.get(name)
+        if not agent:
+            raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{name}' not found")
+
+        with log_operation(logger, "stop_agent", agent_name=name):
+            await agent.stop()
+
+            task = self._agent_tasks.pop(name, None)
+            if task and not task.done():
+                try:
+                    await asyncio.wait_for(task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Agent '%s' task did not stop within 5s, cancelling", name)
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+            dispatcher = self._agent_dispatchers.get(name)
+            if dispatcher:
+                await dispatcher.broadcast_system(f"Agent '{name}' has been stopped")
+
+    async def start_all_agents(self):
+        total = len(self.agents)
+        started = 0
+        failed = 0
+        for name in list(self.agents.keys()):
+            try:
+                await self.start_agent(name)
+                started += 1
+            except Exception as e:
+                failed += 1
+                logger.error("Auto-start failed for '%s': %s", name, e)
+        if total > 0:
+            logger.info("Auto-start: %d/%d started, %d failed", started, total, failed)
+
+    def delete_agent(self, name: str) -> bool:
+        agent = self.agents.get(name)
+        if not agent:
+            raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{name}' not found")
+
+        with log_operation(logger, "delete_agent", agent_name=name):
+            task = self._agent_tasks.pop(name, None)
+            if task and not task.done():
+                task.cancel()
+
+            del self.agents[name]
+            self._agent_dispatchers.pop(name, None)
+
+            agent_dir = DATA_DIR / "agents" / name
+            if agent_dir.exists():
+                import shutil
+                shutil.rmtree(agent_dir)
+            return True
+
+    async def update_agent(self, name: str, updates: dict) -> Optional[Agent]:
+        agent = self.agents.get(name)
+        if not agent:
+            logger.warning("Update requested for non-existent agent '%s'", name)
             return None
+
+        changed_fields = list(updates.keys())
+        logger.info("Updating agent '%s': fields=%s", name, changed_fields)
+
         if "systemPrompt" in updates:
             agent.change_system_prompt(updates["systemPrompt"])
+
         if "modelId" in updates:
             model_cfg = self.get_model(updates["modelId"])
             if model_cfg:
@@ -431,18 +692,173 @@ class StateManager:
                     "thinking": model_cfg.thinking,
                 })
                 agent.change_model(model)
+                logger.info("Agent '%s': model changed to '%s'", name, updates["modelId"])
+            else:
+                logger.warning("Agent '%s': model '%s' not found, keeping current", name, updates["modelId"])
+
+        if "policy" in updates:
+            from BBagent.built_in_tool import TOOL_CREATOR
+            from BBagent.built_in_tool.policy import Policy
+
+            policy_obj = Policy(**_policy_to_snake(updates["policy"])) if updates["policy"] else None
+            for tool_name, tool in list(agent.tools.items()):
+                source = getattr(tool, 'source', None)
+                if not source or source not in TOOL_CREATOR:
+                    continue
+                del agent.tools[tool_name]
+                builder = TOOL_CREATOR[source]
+                if asyncio.iscoroutinefunction(builder):
+                    new_tool = await builder(policy_obj)
+                else:
+                    new_tool = builder(policy_obj)
+                agent.tools[new_tool.name] = new_tool
+
+        if "toolNames" in updates:
+            existing_names = set(agent.tools.keys())
+            new_tool_names = [n for n in updates["toolNames"] if n not in existing_names]
+            if new_tool_names:
+                logger.info("Agent '%s': adding tools %s", name, new_tool_names)
+                new_tools, mcp_clients = await self._build_tools_and_mcp_clients(
+                    new_tool_names, updates.get("policy")
+                )
+                agent.add_tools(new_tools)
+                if mcp_clients:
+                    agent.register_mcp_clients(mcp_clients)
+
+        if "skillNames" in updates:
+            existing_names = set(agent.skills.keys())
+            new_skill_names = [n for n in updates["skillNames"] if n not in existing_names]
+            new_skills = [self.skills[n] for n in new_skill_names if n in self.skills]
+            if new_skills:
+                logger.info("Agent '%s': adding skills %s", name, [s.name for s in new_skills])
+                agent.add_skills(new_skills)
+
         agent.save()
+        logger.info("Agent '%s' updated successfully", name)
         return agent
 
-    def delete_agent(self, name: str) -> bool:
-        if name in self.agents:
-            del self.agents[name]
-            agent_dir = DATA_DIR / "agents" / name
-            if agent_dir.exists():
-                import shutil
-                shutil.rmtree(agent_dir)
-            return True
-        return False
+    # ------------------------------------------------------------------
+    # Session management
+    # ------------------------------------------------------------------
+    def get_agent_state(self, name: str) -> dict:
+        agent = self.agents.get(name)
+        if not agent:
+            return {"state": "unknown", "session_id": ""}
+        return {
+            "state": str(agent.state) if agent.state else AgentState.Ready,
+            "session_id": agent.session.id if agent.session else "",
+        }
+
+    def get_agent_sessions(self, name: str) -> list[dict]:
+        agent = self.agents.get(name)
+        if not agent:
+            raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{name}' not found")
+
+        session_dir = agent.session_dir
+        if not session_dir.exists():
+            return []
+
+        sessions = []
+        for sdir in sorted(session_dir.iterdir(), reverse=True):
+            if not sdir.is_dir():
+                continue
+            jsonl = sdir / f"{sdir.name}.jsonl"
+            if not jsonl.exists():
+                continue
+            timestamp = ""
+            turn_count = 0
+            md = sdir / f"{sdir.name}.md"
+            if md.exists():
+                try:
+                    meta = self._parse_session_metadata(md)
+                    timestamp = meta.get("timestamp", "")
+                    turn_count = int(meta.get("turn_count", 0))
+                except Exception:
+                    pass
+            sessions.append({
+                "id": sdir.name,
+                "timestamp": timestamp,
+                "turnCount": turn_count,
+                "isActive": agent.session.id == sdir.name,
+            })
+        return sessions
+
+    @staticmethod
+    def _parse_session_metadata(md_path) -> dict:
+        text = md_path.read_text(encoding="utf-8")
+        result = {}
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if ":" in stripped and not stripped.startswith("#") and not stripped.startswith("##"):
+                key, _, value = stripped.partition(":")
+                result[key.strip()] = value.strip()
+        return result
+
+    async def switch_agent_session(self, name: str, session_id: str):
+        agent = self.agents.get(name)
+        if not agent:
+            raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{name}' not found")
+
+        session_path = agent.session_dir / session_id / f"{session_id}.jsonl"
+        if not session_path.exists():
+            raise NotFoundError(ErrorCode.SESSION_NOT_FOUND, f"Session '{session_id}' not found")
+
+        with log_operation(logger, "switch_session", agent_name=name):
+            await agent.load_session(session_path)
+
+    async def new_agent_session(self, name: str):
+        agent = self.agents.get(name)
+        if not agent:
+            raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{name}' not found")
+
+        with log_operation(logger, "new_session", agent_name=name):
+            await agent.new_session()
+
+    def get_agent_messages(self, name: str) -> list[dict]:
+        agent = self.agents.get(name)
+        if not agent or not agent.session:
+            return []
+
+        result = []
+        for turn in agent.session.turns:
+            for msg in turn.messages:
+                msg_dict = msg.to_dict()
+                entry = {
+                    "role": msg_dict.get("role", ""),
+                    "content": "",
+                    "source_agent": name,
+                    "timestamp": msg_dict.get("timestamp", 0),
+                }
+
+                content = msg_dict.get("content", "")
+                if isinstance(content, str):
+                    entry["content"] = content
+                elif isinstance(content, list):
+                    for block in content:
+                        bt = block.get("type", "")
+                        if bt == "text":
+                            entry["content"] += block.get("text", "")
+                        elif bt == "tooluse":
+                            entry["chunkType"] = "tool_use"
+                            entry["toolName"] = block.get("name", "")
+                            entry["toolInput"] = block.get("input", {})
+
+                if msg_dict.get("role") == "model":
+                    thinking = msg_dict.get("thinking", "")
+                    if thinking:
+                        entry["thinking"] = thinking
+
+                if msg_dict.get("role") == "tool":
+                    entry["role"] = "system"
+                    entry["chunkType"] = "tool_result"
+                    entry["toolName"] = msg_dict.get("name", "")
+                    entry["content"] = f"[{msg_dict.get('name', '')}]\n{str(msg_dict.get('content', ''))[:500]}"
+
+                result.append(entry)
+        return result
+
+    def get_agent_dispatcher(self, name: str) -> AgentOutputDispatcher | None:
+        return self._agent_dispatchers.get(name)
 
     # ------------------------------------------------------------------
     # Team CRUD
@@ -500,44 +916,102 @@ class StateManager:
         return False
 
     # ------------------------------------------------------------------
-    # MCP 连接管理
+    # MCP discover & per-Agent client creation
     # ------------------------------------------------------------------
-    def _get_mcp_core_config(self, name: str) -> Optional[CoreMCPServerConfig]:
-        cfg = self.get_mcp(name)
-        if not cfg:
-            return None
-        return CoreMCPServerConfig(
-            name=cfg.name,
-            command=cfg.command,
-            args=cfg.args,
-            env=cfg.env,
-        )
-
-    async def activate_mcp(self, name: str) -> List[MCPTool]:
-        if name in self._mcp_clients and self._mcp_clients[name].state == 'active':
-            return self._mcp_tools.get(name, [])
-
-        core_cfg = self._get_mcp_core_config(name)
-        if not core_cfg:
+    async def _discover_mcp_tools(self, name: str) -> list:
+        mcp_cfg = self.get_mcp(name)
+        if not mcp_cfg:
             raise ValueError(f"MCP server '{name}' not found")
 
+        core_cfg = CoreMCPServerConfig(
+            name=mcp_cfg.name,
+            command=mcp_cfg.command,
+            args=mcp_cfg.args,
+            env=mcp_cfg.env,
+        )
+        client = MCPClient(core_cfg)
+        try:
+            await client.start()
+            await client.initialize()
+            tools_data = await client.list_tools()
+        finally:
+            await client.close()
+
+        from backend.schemas import ToolConfig
+        tool_configs = [
+            ToolConfig(
+                id=f"{name}.{t['name']}",
+                name=t["name"],
+                description=t.get("description", ""),
+                inputSchema=t.get("inputSchema", {}),
+                isMcp=True,
+                mcpServerName=name,
+            )
+            for t in tools_data
+        ]
+        mcp_cfg.tools = tool_configs
+        self._save_mcp_file(mcp_cfg)
+        logger.info(f"Discovered {len(tool_configs)} tool(s) from MCP server '{name}'")
+        return tool_configs
+
+    async def _create_mcp_client_for_agent(self, server_name: str) -> tuple:
+        mcp_cfg = self.get_mcp(server_name)
+        if not mcp_cfg:
+            raise ValueError(f"MCP server '{server_name}' not found")
+
+        core_cfg = CoreMCPServerConfig(
+            name=mcp_cfg.name,
+            command=mcp_cfg.command,
+            args=mcp_cfg.args,
+            env=mcp_cfg.env,
+        )
         client = MCPClient(core_cfg)
         await client.start()
         await client.initialize()
         tools = await client.create_tools()
-        self._mcp_clients[name] = client
-        self._mcp_tools[name] = tools
-        logger.info(f"Activated MCP client: {name} ({len(tools)} tool(s))")
-        return tools
+        return tools, client
 
-    async def deactivate_mcp(self, name: str) -> List[MCPTool]:
-        client = self._mcp_clients.pop(name, None)
-        if client:
-            await client.close()
-            tools = self._mcp_tools.pop(name, [])
-            logger.info(f"Deactivated MCP client: {name}")
-            return tools
-        return []
+    async def _build_tools_and_mcp_clients(
+        self, tool_names: list[str], policy: dict = None
+    ) -> tuple:
+        from BBagent.built_in_tool import TOOL_CREATOR
+        from BBagent.built_in_tool.policy import Policy
+
+        tools = []
+        mcp_clients = {}
+
+        if not tool_names:
+            return tools, mcp_clients
+
+        policy_obj = Policy(**_policy_to_snake(policy)) if policy else None
+
+        for name in tool_names:
+            if name.startswith("mcp:"):
+                mcp_name = name[4:]
+                try:
+                    mcp_tools, client = await self._create_mcp_client_for_agent(mcp_name)
+                    tools.extend(mcp_tools)
+                    mcp_clients[mcp_name] = client
+                except Exception as e:
+                    logger.warning(f"Failed to connect MCP '{mcp_name}' for agent: {e}")
+            elif name in TOOL_CREATOR:
+                builder = TOOL_CREATOR[name]
+                if asyncio.iscoroutinefunction(builder):
+                    tool = await builder(policy_obj)
+                else:
+                    tool = builder(policy_obj)
+                tools.append(tool)
+            elif f"built_in.{name}" in TOOL_CREATOR:
+                builder = TOOL_CREATOR[f"built_in.{name}"]
+                if asyncio.iscoroutinefunction(builder):
+                    tool = await builder(policy_obj)
+                else:
+                    tool = builder(policy_obj)
+                tools.append(tool)
+            else:
+                logger.warning(f"Unknown tool source '{name}', skipping")
+
+        return tools, mcp_clients
 
 
 # 全局单例

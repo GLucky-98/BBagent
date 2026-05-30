@@ -15,9 +15,7 @@ function NewPromptForm({ onClose }: { onClose: () => void }) {
     addPrompt({
       id: crypto.randomUUID(),
       name,
-      description: "",
       content,
-      source: "imported",
     });
     onClose();
   };
@@ -64,9 +62,6 @@ function PromptList({ onNew }: { onNew: () => void }) {
     }
   };
 
-  const builtIn = prompts.filter((p) => p.source === "built-in");
-  const imported = prompts.filter((p) => p.source === "imported");
-
   return (
     <div className="w-[300px] h-full bg-white border-r border-[--color-border] flex flex-col">
       <div className="p-3 border-b border-[--color-border] space-y-1.5">
@@ -98,20 +93,11 @@ function PromptList({ onNew }: { onNew: () => void }) {
           </div>
         ) : (
           <div className="space-y-1">
-            {builtIn.length > 0 && <div className="px-2 py-1 text-xs font-medium text-[--color-muted-foreground]">Built-in</div>}
-            {builtIn.map((prompt) => (
+            {prompts.map((prompt) => (
               <button key={prompt.id} onClick={() => setSelectedPromptId(prompt.id)}
                 className={cn("w-full flex items-start gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-[--color-secondary]", selectedPromptId === prompt.id && ACTIVE_CLASS)}>
                 <div className="w-6 h-6 rounded-lg bg-[--color-primary]/10 text-[--color-primary] flex items-center justify-center shrink-0"><FileText size={12} /></div>
-                <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{prompt.name}</p><p className="text-xs text-[--color-muted-foreground] mt-0.5 line-clamp-2">{prompt.description}</p></div>
-              </button>
-            ))}
-            {imported.length > 0 && <div className="px-2 py-1 text-xs font-medium text-[--color-muted-foreground] mt-2">Imported</div>}
-            {imported.map((prompt) => (
-              <button key={prompt.id} onClick={() => setSelectedPromptId(prompt.id)}
-                className={cn("w-full flex items-start gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-[--color-secondary]", selectedPromptId === prompt.id && ACTIVE_CLASS)}>
-                <div className="w-6 h-6 rounded-lg bg-[--color-primary]/10 text-[--color-primary] flex items-center justify-center shrink-0"><FileText size={12} /></div>
-                <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{prompt.name}</p><p className="text-xs text-[--color-muted-foreground] mt-0.5 line-clamp-2">{prompt.description}</p></div>
+                <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{prompt.name}</p></div>
               </button>
             ))}
           </div>
@@ -147,7 +133,7 @@ function PromptDetailPanel({ showNew, onCloseNew }: { showNew: boolean; onCloseN
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-[--color-primary]/10 text-[--color-primary] flex items-center justify-center"><FileText size={16} /></div>
-            <div><h2 className="font-semibold text-sm">{selectedPrompt.name}</h2><p className="text-xs text-[--color-muted-foreground]">{selectedPrompt.source}</p></div>
+            <div><h2 className="font-semibold text-sm">{selectedPrompt.name}</h2></div>
           </div>
           <button onClick={handleCopy}
             className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[--color-border] text-xs transition-all", copied ? "bg-emerald-100 text-emerald-600" : "bg-[--color-secondary] hover:bg-[--color-secondary]/80")}>
@@ -155,8 +141,7 @@ function PromptDetailPanel({ showNew, onCloseNew }: { showNew: boolean; onCloseN
           </button>
         </div>
       </header>
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <div><h3 className="text-xs font-medium mb-1">Description</h3><div className="bg-white rounded border border-[--color-border] p-2"><p className="text-xs">{selectedPrompt.description}</p></div></div>
+      <div className="flex-1 overflow-y-auto p-4">
         <div><h3 className="text-xs font-medium mb-1">Content</h3><div className="bg-white rounded border border-[--color-border] p-2"><pre className="text-xs whitespace-pre-wrap font-mono">{selectedPrompt.content}</pre></div></div>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Settings2, Trash2 } from "lucide-react";
+import { Settings2, Trash2, Play, Square } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { cn } from "../../lib/utils";
 import { useAppStore } from "../../store";
@@ -21,7 +21,12 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
   const activeAgentName = useAppStore((s) => s.activeAgentName);
   const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
   const removeAgent = useAppStore((s) => s.removeAgent);
+  const agentState = useAppStore((s) => s.agentStates[agent.name] || agent.state || "ready");
+  const startAgent = useAppStore((s) => s.startAgent);
+  const stopAgent = useAppStore((s) => s.stopAgent);
   const isTeam = agent.type === "team";
+  const isRunning = agentState === "running" || agentState === "waiting";
+  const isError = agentState === "error";
 
   const displayName = useMemo(() => {
     if (!isTeam) return agent.name;
@@ -35,12 +40,29 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
     removeAgent(agent.name, deleteFiles);
   };
 
+  const handleToggleState = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRunning) {
+      await stopAgent(agent.name);
+    } else {
+      await startAgent(agent.name);
+    }
+  };
+
+  const stateDotClass = cn(
+    "w-2 h-2 rounded-full shrink-0",
+    isRunning && !isError && "bg-green-500",
+    isRunning && !isError && agentState === "running" && "animate-pulse",
+    !isRunning && !isError && "bg-gray-400",
+    isError && "bg-red-500"
+  );
+
   return (
     <>
       <DropdownMenu.Root open={isTeam && dropdownOpen} onOpenChange={setDropdownOpen}>
         <div
           className={cn(
-            "flex items-center gap-1 px-3 py-1.5 h-full cursor-pointer border-b-2 transition-colors select-none min-w-0 max-w-[200px]",
+            "flex items-center gap-1 px-3 py-1.5 h-full cursor-pointer border-b-2 transition-colors select-none min-w-0 max-w-[240px]",
             !isActive && "bg-transparent text-[--color-muted-foreground] border-transparent hover:bg-[--color-secondary]/50"
           )}
           style={isActive ? {
@@ -52,6 +74,14 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
         >
+          <button
+            onClick={handleToggleState}
+            className="flex items-center justify-center w-5 h-5 rounded hover:bg-[--color-muted] shrink-0"
+            title={isRunning ? "Stop agent" : "Start agent"}
+          >
+            {isRunning ? <Square size={10} /> : <Play size={10} />}
+          </button>
+          <div className={stateDotClass} />
           {isTeam ? (
             <DropdownMenu.Trigger asChild>
               <span className="text-sm font-medium truncate flex-1">

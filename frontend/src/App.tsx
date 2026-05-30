@@ -3,6 +3,7 @@ import { TopNav } from "./components/layout/TopNav";
 import { OnboardingView } from "./components/onboarding/OnboardingView";
 import { WorkspaceView } from "./components/workspace/WorkspaceView";
 import { AgentConfigDialog } from "./components/agents/AgentConfigDialog";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useAppStore } from "./store";
 
 function App() {
@@ -17,17 +18,19 @@ function App() {
   }, [loadAll]);
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden min-w-[900px] min-h-[600px]">
-      <TopNav />
-      {isOnboarding ? <OnboardingView /> : <WorkspaceView />}
-      <AgentConfigDialog
-        open={configDialog.open}
-        onClose={closeConfigDialog}
-        mode={configDialog.mode}
-        type={configDialog.type}
-        agentName={configDialog.agentName}
-      />
-    </div>
+    <ErrorBoundary>
+      <div className="flex flex-col h-screen w-screen overflow-hidden min-w-[900px] min-h-[600px]">
+        <TopNav />
+        {isOnboarding ? <OnboardingView /> : <WorkspaceView />}
+        <AgentConfigDialog
+          open={configDialog.open}
+          onClose={closeConfigDialog}
+          mode={configDialog.mode}
+          type={configDialog.type}
+          agentName={configDialog.agentName}
+        />
+      </div>
+    </ErrorBoundary>
   );
 }
 

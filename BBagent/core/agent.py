@@ -34,13 +34,15 @@ class AgentConfig:
     model: Model
     base_dir: Path | str = Path.cwd()
     system_prompt: str = ""
-    name: str = 'Agent_' + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '_' + uuid().hex[:8]
+    name: str = ""
     session: Session = None
     tools: List[Tool] = None
     skills: List[Skill] = None
     hook: AgentHook = None
 
-    def __post_init__(self): 
+    def __post_init__(self):
+        if not self.name:
+            self.name = 'Agent_' + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '_' + uuid().hex[:8]
         if self.tools is None:
             self.tools = []
         if self.skills is None:

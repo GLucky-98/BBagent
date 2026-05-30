@@ -1,79 +1,88 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Folder,
   File as FileIcon,
   Search,
   ChevronRight,
   RefreshCw,
+  Loader2,
 } from "lucide-react";
 import { useAppStore } from "../../store";
-import { cn } from "../../lib/utils";
+import { api } from "../../lib/api";
+import { cn, getMimeType } from "../../lib/utils";
 import type { FileNode } from "../../types";
-
-const mockEntries: FileNode[] = [
-  {
-    name: "App",
-    path: "/workspace/src/App",
-    type: "directory",
-    children: [],
-  },
-  {
-    name: "hooks",
-    path: "/workspace/src/hooks",
-    type: "directory",
-    children: [],
-  },
-  {
-    name: "Button.tsx",
-    path: "/workspace/src/Button.tsx",
-    type: "file",
-    extension: ".tsx",
-  },
-  {
-    name: "Modal.tsx",
-    path: "/workspace/src/Modal.tsx",
-    type: "file",
-    extension: ".tsx",
-  },
-  {
-    name: "index.ts",
-    path: "/workspace/src/index.ts",
-    type: "file",
-    extension: ".ts",
-  },
-  {
-    name: "types.ts",
-    path: "/workspace/src/types.ts",
-    type: "file",
-    extension: ".ts",
-  },
-];
-
-function getMimeTypeFromName(fileName: string): string {
-  const ext = fileName.substring(fileName.lastIndexOf(".")).toLowerCase();
-  const map: Record<string, string> = {
-    ".ts": "text/typescript",
-    ".tsx": "text/typescript",
-    ".js": "text/javascript",
-    ".jsx": "text/javascript",
-    ".py": "text/x-python",
-    ".json": "application/json",
-    ".yaml": "text/yaml",
-    ".yml": "text/yaml",
-    ".md": "text/markdown",
-    ".css": "text/css",
-    ".html": "text/html",
-    ".txt": "text/plain",
-  };
-  return map[ext] ?? "text/plain";
-}
 
 export function WorkingDirView() {
   const workingDirPath = useAppStore((s) => s.workingDirPath);
   const openFilePreview = useAppStore((s) => s.openFilePreview);
   const [filter, setFilter] = useState("");
+  const [entries, setEntries] = useState<FileNode[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const filtered = mockEntries.filter((entry) =>
+  useEffect(() => {
+    if (!workingDirPath) return;
+    let ignore = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(true);
+    api
+      .getFileTree(workingDirPath)
+      .then((tree: FileNode) => {
+        if (ignore) return;
+        setEntries(tree.children || []);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (ignore) return;
+        setEntries([]);
+        setLoading(false);
+      });
+    return () => { ignore = true; };
+  }, [workingDirPath]);
+
+  const handleRefresh = () => {
+    if (!workingDirPath) return;
+    setLoading(true);
+    api
+      .getFileTree(workingDirPath)
+      .then((tree: FileNode) => {
+        setEntries(tree.children || []);
+      })
+      .catch(() => {
+        setEntries([]);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  };
+
+  const handleOpenFile = async (entry: FileNode) => {
+    const mimeType = getMimeType(entry.name);
+    openFilePreview({
+      path: entry.path,
+      name: entry.name,
+      content: null,
+      mimeType,
+    });
+    try {
+      const data = await api.readFile(entry.path);
+      openFilePreview({
+        path: entry.path,
+        name: entry.name,
+        content: data.content ?? data,
+        mimeType,
+      });
+    } catch (err) {
+      openFilePreview({
+        path: entry.path,
+        name: entry.name,
+        content: null,
+        mimeType,
+        error: err instanceof Error ? err.message : "Failed to read file",
+      });
+    }
+  };
+
+  const filtered = entries.filter((entry) =>
     entry.name.toLowerCase().includes(filter.toLowerCase())
   );
 
@@ -84,8 +93,8 @@ export function WorkingDirView() {
         <span className="text-xs text-[--color-muted-foreground] truncate flex-1">
           {workingDirPath || "Not set"}
         </span>
-        <button className="p-0.5 rounded hover:bg-[--color-secondary] text-[--color-muted-foreground]">
-          <RefreshCw className="w-3 h-3" />
+        <button className="p-0.5 rounded hover:bg-[--color-secondary] text-[--color-muted-foreground]" onClick={handleRefresh}>
+          <RefreshCw className={cn("w-3 h-3", loading && "animate-spin")} />
         </button>
       </div>
 
@@ -101,41 +110,49 @@ export function WorkingDirView() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {filtered.map((entry) => (
-          <div
-            key={entry.path}
-            className={cn(
-              "flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[--color-secondary]/50 text-sm select-none"
-            )}
-            onClick={() => {
-              if (entry.type === "file") {
-                const mimeType = getMimeTypeFromName(entry.name);
-                openFilePreview({
-                  path: entry.path,
-                  name: entry.name,
-                  content: `// Preview of ${entry.name}\n// File content would be loaded from server`,
-                  mimeType,
-                });
-              }
-            }}
-          >
-            {entry.type === "directory" ? (
-              <>
-                <Folder className="w-4 h-4 text-amber-500 shrink-0" />
-                <span className="truncate flex-1">{entry.name}</span>
-                <ChevronRight className="w-3.5 h-3.5 text-[--color-muted-foreground]" />
-              </>
-            ) : (
-              <>
-                <FileIcon className="w-4 h-4 text-[--color-muted-foreground] shrink-0" />
-                <span className="truncate flex-1">{entry.name}</span>
-                <span className="text-xs text-[--color-muted-foreground]">
-                  {entry.extension}
-                </span>
-              </>
-            )}
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-5 h-5 animate-spin text-[--color-muted-foreground]" />
           </div>
-        ))}
+        ) : !workingDirPath ? (
+          <div className="px-3 py-8 text-center text-xs text-[--color-muted-foreground]">
+            No working directory set
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="px-3 py-8 text-center text-xs text-[--color-muted-foreground]">
+            {filter ? "No matching entries" : "Empty directory"}
+          </div>
+        ) : (
+          filtered.map((entry) => (
+            <div
+              key={entry.path}
+              className={cn(
+                "flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-[--color-secondary]/50 text-sm select-none"
+              )}
+              onClick={() => {
+                if (entry.type === "file") {
+                  handleOpenFile(entry);
+                }
+              }}
+            >
+              {entry.type === "directory" ? (
+                <>
+                  <Folder className="w-4 h-4 text-amber-500 shrink-0" />
+                  <span className="truncate flex-1">{entry.name}</span>
+                  <ChevronRight className="w-3.5 h-3.5 text-[--color-muted-foreground]" />
+                </>
+              ) : (
+                <>
+                  <FileIcon className="w-4 h-4 text-[--color-muted-foreground] shrink-0" />
+                  <span className="truncate flex-1">{entry.name}</span>
+                  <span className="text-xs text-[--color-muted-foreground]">
+                    {entry.extension}
+                  </span>
+                </>
+              )}
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

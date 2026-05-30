@@ -25,8 +25,7 @@ export const api = {
   createMcp: (data: unknown) => request("/mcps", { method: "POST", body: JSON.stringify(data) }),
   updateMcp: (name: string, data: unknown) => request(`/mcps/${name}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteMcp: (name: string) => request(`/mcps/${name}`, { method: "DELETE" }),
-  activateMcp: (name: string) => request(`/mcps/${name}/activate`, { method: "POST" }),
-  deactivateMcp: (name: string) => request(`/mcps/${name}/deactivate`, { method: "POST" }),
+  discoverMcp: (name: string) => request(`/mcps/${name}/discover`, { method: "POST" }),
   importMcps: (path: string) => request("/mcps/import", { method: "POST", body: JSON.stringify({ path }) }),
 
   // Prompts
@@ -47,7 +46,14 @@ export const api = {
   updateAgent: (name: string, data: unknown) => request(`/agents/${name}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteAgent: (name: string, deleteFiles?: boolean) =>
     request(`/agents/${name}${deleteFiles ? '?delete_files=true' : ''}`, { method: "DELETE" }),
-  newSession: (name: string) => request(`/agents/${name}/new_session`, { method: "POST" }),
+  startAgent: (name: string) => request(`/agents/${name}/start`, { method: "POST" }),
+  stopAgent: (name: string) => request(`/agents/${name}/stop`, { method: "POST" }),
+  getAgentState: (name: string) => request(`/agents/${name}/state`),
+  listSessions: (name: string) => request(`/agents/${name}/sessions`),
+  switchSession: (name: string, sessionId: string) =>
+    request(`/agents/${name}/sessions/${sessionId}/switch`, { method: "POST" }),
+  newSession: (name: string) => request(`/agents/${name}/sessions/new`, { method: "POST" }),
+  getAgentMessages: (name: string) => request(`/agents/${name}/messages`),
 
   // Teams
   listTeams: () => request("/teams"),
@@ -69,8 +75,12 @@ export const api = {
   saveState: (data: unknown) => request("/state", { method: "POST", body: JSON.stringify(data) }),
 };
 
-// WebSocket
 export function createChatWs(agentName: string): WebSocket {
   const wsBase = API_BASE.replace(/^http/, "ws");
   return new WebSocket(`${wsBase}/ws/chat/${agentName}`);
+}
+
+export function createTeamChatWs(teamName: string): WebSocket {
+  const wsBase = API_BASE.replace(/^http/, "ws");
+  return new WebSocket(`${wsBase}/ws/team/${teamName}`);
 }

@@ -21,9 +21,6 @@ function SkillList() {
     }
   };
 
-  const defaults = skills.filter((s) => s.source === "default");
-  const imported = skills.filter((s) => s.source === "imported");
-
   return (
     <div className="w-[300px] h-full bg-white border-r border-[--color-border] flex flex-col">
       <div className="p-3 border-b border-[--color-border]">
@@ -51,16 +48,7 @@ function SkillList() {
           </div>
         ) : (
           <div className="space-y-1">
-            {defaults.length > 0 && <div className="px-2 py-1 text-xs font-medium text-[--color-muted-foreground]">Default</div>}
-            {defaults.map((skill) => (
-              <button key={skill.name} onClick={() => setSelectedSkillId(skill.name)}
-                className={cn("w-full flex items-start gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-[--color-secondary]", selectedSkillId === skill.name && "bg-[--color-primary]/10 text-[--color-primary] font-semibold shadow-[inset_4px_0_0_0_#10b981]")}>
-                <div className="w-6 h-6 rounded-lg bg-[--color-primary]/10 text-[--color-primary] flex items-center justify-center shrink-0"><Sparkles size={12} /></div>
-                <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{skill.name}</p><p className="text-xs text-[--color-muted-foreground] mt-0.5 line-clamp-2">{skill.description}</p></div>
-              </button>
-            ))}
-            {imported.length > 0 && <div className="px-2 py-1 text-xs font-medium text-[--color-muted-foreground] mt-2">Imported</div>}
-            {imported.map((skill) => (
+            {skills.map((skill) => (
               <button key={skill.name} onClick={() => setSelectedSkillId(skill.name)}
                 className={cn("w-full flex items-start gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-[--color-secondary]", selectedSkillId === skill.name && "bg-[--color-primary]/10 text-[--color-primary] font-semibold shadow-[inset_4px_0_0_0_#10b981]")}>
                 <div className="w-6 h-6 rounded-lg bg-[--color-primary]/10 text-[--color-primary] flex items-center justify-center shrink-0"><Sparkles size={12} /></div>

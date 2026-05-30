@@ -37,12 +37,16 @@ function TypeSelection({ onSelect }: { onSelect: (t: "agent" | "team") => void }
 function SingleAgentForm({
   initialData,
   onSave,
+  saving,
+  saveError,
 }: {
   initialData?: {
     name: string; modelId: string;
     systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean;
   };
-  onSave: (data: { name: string; modelId: string; systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean; policy: Record<string, unknown> }) => void;
+  onSave: (data: { name: string; modelId: string; systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean; policy: Record<string, unknown> }) => void | Promise<void>;
+  saving?: boolean;
+  saveError?: string | null;
 }) {
   const models = useAppStore((s) => s.models);
   const tools = useAppStore((s) => s.tools);
@@ -102,11 +106,12 @@ function SingleAgentForm({
         <div>
           <h2 className="text-lg font-semibold mb-1">{initialData ? "Edit Agent" : "Configure Agent"}</h2>
           <p className="text-sm text-[--color-muted-foreground]">{initialData ? "Update agent configuration" : "Fill in the agent configuration details"}</p>
+          {saveError && <p className="text-sm text-red-500 mt-1">{saveError}</p>}
         </div>
         <button onClick={() => onSave({ ...form, policy })}
-          disabled={!form.modelId}
+          disabled={!form.modelId || saving}
           className="px-8 py-2.5 rounded-lg border border-[--color-primary] bg-[--color-primary] text-[--color-primary-foreground] text-sm hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shrink-0 shadow-sm">
-          {initialData ? "Save Changes" : "Create Agent"}
+          {saving ? "Saving..." : initialData ? "Save Changes" : "Create Agent"}
         </button>
       </div>
 
@@ -562,6 +567,8 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentName }: Agen
   }, [open, type]);
 
   const existingAgent = agentName ? agents.find((a) => a.name === agentName) : null;
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!open) return null;
 
@@ -577,20 +584,30 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentName }: Agen
     );
   }
 
-  const handleSingleSave = (data: { name: string; modelId: string; systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean; policy: Record<string, unknown> }) => {
-    const agentData = {
-      type: "single" as const,
-      basePath: "",
-      messages: [],
-      workingDir: typeof data.policy === "object" && data.policy !== null ? String((data.policy as Record<string, unknown>).cwd || "") : "",
-      policy: typeof data.policy === "object" && data.policy !== null ? data.policy as Record<string, unknown> : { cwd: "", allowedDirs: "", bashAllowNetwork: true, bashMaxOutputLines: 1000 },
-    };
-    if (mode === "edit" && existingAgent) {
-      updateAgent(existingAgent.name, { ...data, ...agentData });
-    } else {
-      addAgent({ ...data, ...agentData });
+  const handleSingleSave = async (data: { name: string; modelId: string; systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean; policy: Record<string, unknown> }) => {
+    setError(null);
+    setSaving(true);
+    try {
+      const agentData = {
+        type: "single" as const,
+        basePath: "",
+        messages: [],
+        workingDir: typeof data.policy === "object" && data.policy !== null ? String((data.policy as Record<string, unknown>).cwd || "") : "",
+        policy: typeof data.policy === "object" && data.policy !== null ? data.policy as Record<string, unknown> : { cwd: "", allowedDirs: "", bashAllowNetwork: true, bashMaxOutputLines: 1000 },
+      };
+      if (mode === "edit" && existingAgent) {
+        await updateAgent(existingAgent.name, { ...data, ...agentData });
+      } else {
+        await addAgent({ ...data, ...agentData });
+      }
+      onClose();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      console.error("Failed to save agent:", e);
+    } finally {
+      setSaving(false);
     }
-    onClose();
   };
 
   const handleTeamSave = (data: { name: string; teamDescription: string; members: Agent[]; contacts: Record<string, Record<string, string>> }) => {
@@ -631,7 +648,10 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentName }: Agen
               name: existingAgent.name, modelId: existingAgent.modelId,
               systemPrompt: existingAgent.systemPrompt, toolNames: existingAgent.toolNames, skillNames: existingAgent.skillNames, hookEnabled: existingAgent.hookEnabled,
             } : undefined}
-            onSave={handleSingleSave} />
+            onSave={handleSingleSave}
+            saving={saving}
+            saveError={error}
+          />
         )}
         {effectiveType === "team" && (
           <TeamForm

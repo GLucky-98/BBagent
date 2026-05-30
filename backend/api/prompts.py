@@ -60,9 +60,7 @@ async def import_prompts(req: ImportRequest):
             cfg = PromptConfig(
                 id=str(uuid.uuid4()),
                 name=item.stem,
-                description=f"Imported from {item.name}",
                 content=content,
-                source="imported",
             )
             if state_manager.get_prompt(cfg.id):
                 continue

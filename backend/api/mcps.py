@@ -1,5 +1,4 @@
 import json
-import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -25,13 +24,13 @@ async def list_mcps():
 async def create_mcp(config: MCPServerConfig):
     if state_manager.get_mcp(config.name):
         raise HTTPException(status_code=400, detail=f"MCP server '{config.name}' already exists")
-    state_manager.add_mcp(config)
+    await state_manager.add_mcp(config)
     return config.model_dump(mode="json")
 
 
 @router.put("/{name}")
 async def update_mcp(name: str, updates: dict):
-    updated = state_manager.update_mcp(name, updates)
+    updated = await state_manager.update_mcp(name, updates)
     if not updated:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return updated.model_dump(mode="json")
@@ -44,22 +43,13 @@ async def delete_mcp(name: str):
     return {"success": True}
 
 
-@router.post("/{name}/activate")
-async def activate_mcp(name: str):
+@router.post("/{name}/discover")
+async def discover_mcp(name: str):
     try:
-        tools = await state_manager.activate_mcp(name)
-        return {"success": True, "tools": len(tools)}
+        tools = await state_manager._discover_mcp_tools(name)
+        return {"success": True, "tools": [t.model_dump(mode="json") for t in tools]}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/{name}/deactivate")
-async def deactivate_mcp(name: str):
-    try:
-        await state_manager.deactivate_mcp(name)
-        return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -92,11 +82,10 @@ async def import_mcps(req: ImportRequest):
                     command=entry.get("command", ""),
                     args=entry.get("args", []),
                     env=entry.get("env", {}),
-                    source="imported",
                 )
                 if state_manager.get_mcp(cfg.name):
                     continue
-                state_manager.add_mcp(cfg)
+                await state_manager.add_mcp(cfg)
                 imported.append(cfg.name)
         except Exception:
             continue

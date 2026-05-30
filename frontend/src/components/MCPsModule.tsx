@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Server, Plug, Unplug, Loader2, Plus, FolderOpen, X } from "lucide-react";
+import { Server, Plus, FolderOpen, X } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 import type { MCPServer } from "../types";
@@ -20,7 +20,7 @@ function NewServerForm({ onClose }: { onClose: () => void }) {
         if (k) acc[k.trim()] = v.join("=").trim();
         return acc;
       }, {}),
-      isConnected: false, tools: [], source: "imported",
+      tools: [],
     };
     addMcpServer(server);
     onClose();
@@ -77,9 +77,6 @@ function MCPList({ onNew }: { onNew: () => void }) {
     }
   };
 
-  const defaults = mcpServers.filter((s) => s.source === "default");
-  const imported = mcpServers.filter((s) => s.source === "imported");
-
   return (
     <div className="w-[300px] h-full bg-white border-r border-[--color-border] flex flex-col">
       <div className="p-3 border-b border-[--color-border] space-y-1.5">
@@ -111,18 +108,10 @@ function MCPList({ onNew }: { onNew: () => void }) {
           </div>
         ) : (
           <div className="space-y-1">
-            {defaults.length > 0 && <div className="px-2 py-1 text-xs font-medium text-[--color-muted-foreground]">Default</div>}
-            {defaults.map((server) => (
+            {mcpServers.map((server) => (
               <button key={server.name} onClick={() => setSelectedMcpId(server.name)}
                 className={cn("w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-[--color-secondary]", selectedMcpId === server.name && ACTIVE_CLASS)}>
-                <div className={cn("w-2 h-2 rounded-full shrink-0", server.isConnected ? "bg-emerald-500" : "bg-red-500")} /><Server size={14} className="shrink-0" /><span className="flex-1 text-sm font-medium truncate">{server.name}</span>
-              </button>
-            ))}
-            {imported.length > 0 && <div className="px-2 py-1 text-xs font-medium text-[--color-muted-foreground] mt-2">Imported</div>}
-            {imported.map((server) => (
-              <button key={server.name} onClick={() => setSelectedMcpId(server.name)}
-                className={cn("w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-[--color-secondary]", selectedMcpId === server.name && ACTIVE_CLASS)}>
-                <div className={cn("w-2 h-2 rounded-full shrink-0", server.isConnected ? "bg-emerald-500" : "bg-red-500")} /><Server size={14} className="shrink-0" /><span className="flex-1 text-sm font-medium truncate">{server.name}</span>
+                <Server size={14} className="shrink-0" /><span className="flex-1 text-sm font-medium truncate">{server.name}</span>
               </button>
             ))}
           </div>
@@ -135,8 +124,6 @@ function MCPList({ onNew }: { onNew: () => void }) {
 function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseForms: () => void }) {
   const mcpServers = useAppStore((s) => s.mcpServers);
   const selectedMcpId = useAppStore((s) => s.selectedMcpId);
-  const updateMcpConnection = useAppStore((s) => s.updateMcpConnection);
-  const [isConnecting, setIsConnecting] = useState(false);
 
   if (showNew) return <NewServerForm onClose={onCloseForms} />;
 
@@ -150,28 +137,12 @@ function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseFo
     );
   }
 
-  const handleConnect = () => { setIsConnecting(true); setTimeout(() => { updateMcpConnection(selectedServer.name, true); setIsConnecting(false); }, 1500); };
-  const handleDisconnect = () => updateMcpConnection(selectedServer.name, false);
-
   return (
     <div className="flex-1 h-full flex flex-col bg-[--color-background]">
       <header className="px-4 py-3 bg-white border-b border-[--color-border]">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-[--color-primary]/10 text-[--color-primary] flex items-center justify-center"><Server size={16} /></div>
-            <div>
-              <h2 className="font-semibold text-sm">{selectedServer.name}</h2>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <div className={cn("w-1.5 h-1.5 rounded-full", selectedServer.isConnected ? "bg-emerald-500" : "bg-red-500")} />
-                <span className="text-xs text-[--color-muted-foreground]">{selectedServer.isConnected ? "Connected" : "Disconnected"}</span>
-              </div>
-            </div>
-          </div>
-          <button onClick={selectedServer.isConnected ? handleDisconnect : handleConnect} disabled={isConnecting}
-            className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[--color-border] text-xs", selectedServer.isConnected ? "bg-red-100 text-red-600 hover:bg-red-200" : "bg-emerald-100 text-emerald-600 hover:bg-emerald-200", isConnecting && "opacity-50 cursor-not-allowed")}>
-            {isConnecting ? <Loader2 size={14} className="animate-spin" /> : selectedServer.isConnected ? <Unplug size={14} /> : <Plug size={14} />}
-            <span>{isConnecting ? "Connecting..." : selectedServer.isConnected ? "Disconnect" : "Connect"}</span>
-          </button>
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-[--color-primary]/10 text-[--color-primary] flex items-center justify-center"><Server size={16} /></div>
+          <h2 className="font-semibold text-sm">{selectedServer.name}</h2>
         </div>
       </header>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -189,8 +160,17 @@ function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseFo
         </div>
         <div>
           <h3 className="text-xs font-medium mb-2">Tools</h3>
-          <div className="bg-white rounded-lg border border-[--color-border] p-4 text-center text-xs text-[--color-muted-foreground]">
-            {selectedServer.isConnected ? "Tools loaded dynamically after connection" : "Connect to load available tools"}
+          <div className="bg-white rounded-lg border border-[--color-border] p-3 space-y-2">
+            {selectedServer.tools.length === 0 ? (
+              <p className="text-xs text-[--color-muted-foreground] text-center">No tools loaded</p>
+            ) : (
+              selectedServer.tools.map((tool) => (
+                <div key={tool.id} className="text-xs">
+                  <div className="font-medium">{tool.name}</div>
+                  {tool.description && <div className="text-[--color-muted-foreground] mt-0.5">{tool.description}</div>}
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -200,14 +180,11 @@ function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseFo
 
 export function MCPsModule() {
   const [showNew, setShowNew] = useState(false);
-  const closeForms = () => setShowNew(false);
 
   return (
     <div className="flex h-full">
-      <MCPList
-        onNew={() => setShowNew(true)}
-      />
-      <MCPDetailPanel showNew={showNew} onCloseForms={closeForms} />
+      <MCPList onNew={() => setShowNew(true)} />
+      <MCPDetailPanel showNew={showNew} onCloseForms={() => setShowNew(false)} />
     </div>
   );
 }

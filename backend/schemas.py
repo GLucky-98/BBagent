@@ -31,7 +31,6 @@ class SkillConfig(BaseModel):
     path: str
     body: str = ""
     metadata: dict = Field(default_factory=dict)
-    source: Literal["default", "imported"] = "default"
 
 
 class MCPServerConfig(BaseModel):
@@ -39,17 +38,13 @@ class MCPServerConfig(BaseModel):
     command: str
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
-    isConnected: bool = False
     tools: list[ToolConfig] = Field(default_factory=list)
-    source: Literal["default", "imported"] = "default"
 
 
 class PromptConfig(BaseModel):
     id: str
     name: str
-    description: str = ""
     content: str
-    source: Literal["built-in", "folder", "imported"] = "built-in"
 
 
 class MessageItem(BaseModel):
@@ -64,8 +59,6 @@ class AgentSummary(BaseModel):
     type: Literal["single", "team"] = "single"
     modelId: str
     state: str = "Ready"
-    toolCount: int = 0
-    skillCount: int = 0
     hookEnabled: bool = False
 
 

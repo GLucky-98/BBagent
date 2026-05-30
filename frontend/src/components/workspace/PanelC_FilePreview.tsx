@@ -1,6 +1,33 @@
-import { X, File } from "lucide-react";
+import { forwardRef } from "react";
+import { X, File, Loader2, AlertCircle } from "lucide-react";
 import { Highlight, themes } from "prism-react-renderer";
+import ReactMarkdown from "react-markdown";
 import { useAppStore } from "../../store";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000/api";
+
+function getFileUrl(path: string): string {
+  return `${API_BASE}/files/raw?path=${encodeURIComponent(path)}`;
+}
+
+function LoadingViewer() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-[--color-muted-foreground] p-8 gap-3">
+      <Loader2 className="w-8 h-8 animate-spin" />
+      <span className="text-sm">Loading file...</span>
+    </div>
+  );
+}
+
+function ErrorViewer({ message }: { message: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-[--color-muted-foreground] p-8 gap-3">
+      <AlertCircle className="w-10 h-10 text-red-400" />
+      <p className="text-sm font-medium text-red-500">Failed to load file</p>
+      <p className="text-xs text-center max-w-[280px]">{message}</p>
+    </div>
+  );
+}
 
 function CodeViewer({
   content,
@@ -58,25 +85,34 @@ function CodeViewer({
 
 function MarkdownViewer({ content }: { content: string }) {
   return (
-    <div className="p-4 text-sm leading-relaxed text-[--color-foreground] whitespace-pre-wrap">
-      {content}
+    <div className="p-4 text-sm leading-relaxed text-[--color-foreground] prose prose-sm max-w-none overflow-auto">
+      <ReactMarkdown>{content}</ReactMarkdown>
     </div>
   );
 }
 
-function ImageViewer({
-  src,
-}: {
-  src: string;
-}) {
+function ImageViewer({ path, name }: { path: string; name: string }) {
   return (
     <div className="flex items-center justify-center h-full p-4 bg-[--color-muted]/20">
       <img
-        src={src}
-        alt="Preview"
+        src={getFileUrl(path)}
+        alt={name}
         className="max-w-full max-h-full object-contain rounded-md"
+        onError={(e) => {
+          (e.target as HTMLImageElement).style.display = "none";
+        }}
       />
     </div>
+  );
+}
+
+function PdfViewer({ path, name }: { path: string; name: string }) {
+  return (
+    <iframe
+      src={getFileUrl(path)}
+      title={name}
+      className="w-full h-full border-0"
+    />
   );
 }
 
@@ -97,25 +133,28 @@ function UnsupportedViewer({ fileName }: { fileName: string }) {
 function renderPreview(
   mimeType: string,
   content: string | null,
+  error: string | undefined,
+  path: string,
   name: string
 ) {
-  if (!content) {
-    return <UnsupportedViewer fileName={name} />;
+  if (error) {
+    return <ErrorViewer message={error} />;
+  }
+
+  if (content === null) {
+    return <LoadingViewer />;
   }
 
   if (mimeType.startsWith("image/")) {
-    return <ImageViewer src={content} />;
-  }
-
-  if (
-    mimeType === "text/markdown" ||
-    mimeType.endsWith("/markdown")
-  ) {
-    return <MarkdownViewer content={content} />;
+    return <ImageViewer path={path} name={name} />;
   }
 
   if (mimeType === "application/pdf") {
-    return <UnsupportedViewer fileName={name} />;
+    return <PdfViewer path={path} name={name} />;
+  }
+
+  if (mimeType === "text/markdown") {
+    return <MarkdownViewer content={content} />;
   }
 
   if (mimeType.startsWith("text/") || mimeType === "application/json") {
@@ -125,14 +164,23 @@ function renderPreview(
   return <UnsupportedViewer fileName={name} />;
 }
 
-export function PanelC_FilePreview() {
-  const previewFile = useAppStore((s) => s.previewFile);
-  const closeFilePreview = useAppStore((s) => s.closeFilePreview);
+interface Props {
+  width: number;
+}
 
-  if (!previewFile) return null;
+export const PanelC_FilePreview = forwardRef<HTMLDivElement, Props>(
+  ({ width }, ref) => {
+    const previewFile = useAppStore((s) => s.previewFile);
+    const closeFilePreview = useAppStore((s) => s.closeFilePreview);
 
-  return (
-    <div className="w-[360px] shrink-0 border-l border-[--color-border] bg-white flex flex-col overflow-hidden">
+    if (!previewFile) return null;
+
+    return (
+      <div
+        ref={ref}
+        className="shrink-0 border-l border-[--color-border] bg-white flex flex-col overflow-hidden"
+        style={{ width }}
+      >
       <div className="flex items-center justify-between px-3 py-2 border-b border-[--color-border] shrink-0">
         <span className="text-sm font-medium truncate flex-1">
           {previewFile.name}
@@ -149,9 +197,13 @@ export function PanelC_FilePreview() {
         {renderPreview(
           previewFile.mimeType,
           previewFile.content,
+          previewFile.error,
+          previewFile.path,
           previewFile.name
         )}
       </div>
     </div>
   );
-}
+});
+
+PanelC_FilePreview.displayName = "PanelC_FilePreview";

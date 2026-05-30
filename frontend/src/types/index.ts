@@ -43,7 +43,6 @@ export interface Skill {
     allowedTools?: string[];
     metadata?: Record<string, unknown>;
   };
-  source: "default" | "imported";
 }
 
 export interface MCPServer {
@@ -51,17 +50,13 @@ export interface MCPServer {
   command: string;
   args: string[];
   env: Record<string, string>;
-  isConnected: boolean;
   tools: Tool[];
-  source: "default" | "imported";
 }
 
 export interface Prompt {
   id: string;
   name: string;
-  description: string;
   content: string;
-  source: "built-in" | "folder" | "imported";
 }
 
 export interface Message {
@@ -69,6 +64,20 @@ export interface Message {
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: number;
+  sourceAgent?: string;
+  chunkType?: "text" | "thinking" | "tool_use" | "tool_result" | "error";
+  thinking?: string;
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  toolResult?: string;
+  messageId?: string;
+}
+
+export interface SessionInfo {
+  id: string;
+  timestamp: string;
+  turnCount: number;
+  isActive: boolean;
 }
 
 export interface Agent {
@@ -87,6 +96,9 @@ export interface Agent {
   teamPrompt?: string;
   messages: Message[];
   policy: AgentPolicy;
+  state: "ready" | "waiting" | "running" | "error";
+  sessions: SessionInfo[];
+  currentSessionId: string;
 }
 
 export interface AgentPolicy {

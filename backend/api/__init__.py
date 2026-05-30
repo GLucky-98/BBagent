@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from . import models, mcps, prompts, skills, agents, teams, chat, files, state
+from . import models, mcps, prompts, skills, agents, teams, chat, files, state, team_ws
 
 api_router = APIRouter()
 api_router.include_router(models.router, prefix="/models", tags=["models"])
@@ -10,5 +10,6 @@ api_router.include_router(skills.router, prefix="/skills", tags=["skills"])
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(teams.router, prefix="/teams", tags=["teams"])
 api_router.include_router(chat.router, prefix="/ws", tags=["chat"])
+api_router.include_router(team_ws.router, prefix="/ws", tags=["team_chat"])
 api_router.include_router(files.router, prefix="/files", tags=["files"])
 api_router.include_router(state.router, prefix="/state", tags=["state"])
