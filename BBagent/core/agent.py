@@ -39,6 +39,7 @@ class AgentConfig:
     tools: List[Tool] = None
     skills: List[Skill] = None
     hook: AgentHook = None
+    policy: dict = None
 
     def __post_init__(self):
         if not self.name:
@@ -71,6 +72,7 @@ class Agent:
         self.system_prompt = agent_config.system_prompt
         if not self.system_prompt_path.exists():
             self.system_prompt_path.write_text(agent_config.system_prompt, encoding='utf-8')
+        self.policy = agent_config.policy or {}
         self.session_dir = self.base_dir / 'session'
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -158,16 +160,23 @@ class Agent:
             yaml.dump(config_dict, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
     def to_config_dict(self) -> dict:
+        tools_list = []
+        for t in self.tools.values():
+            if getattr(t, '_hook_managed', False) or getattr(t, '_team_managed', False):
+                continue
+            tool_dict = t.to_config_dict()
+            # Strip policy from per-tool config — serialized at agent level
+            if "config" in tool_dict and isinstance(tool_dict["config"], dict):
+                tool_dict["config"] = {k: v for k, v in tool_dict["config"].items() if k != "policy"}
+            tools_list.append(tool_dict)
+
         return {
             "version": 1,
             "name": self.name,
             "system_prompt": self.system_prompt,
             "model": self.model.to_config_dict(),
-            "tools": [
-                t.to_config_dict() for t in self.tools.values()
-                if not getattr(t, '_hook_managed', False)
-                and not getattr(t, '_team_managed', False)
-            ],
+            "policy": self.policy,
+            "tools": tools_list,
             "skills": [s.to_config_dict() for s in self.skills.values()],
             "hooks": self.hook.to_config_dict() if self.hook else [],
             "session": {
@@ -246,6 +255,17 @@ class Agent:
                 except Exception:
                     pass
 
+        # Read policy: prefer top-level; fall back to first tool's config.policy
+        # for backward compatibility with agent_config.yaml files created before
+        # the policy-deduplication refactor.
+        policy = config_dict.get("policy", None)
+        if not policy:
+            for tool_cfg in config_dict.get("tools", []):
+                tool_policy = tool_cfg.get("config", {}).get("policy", None)
+                if tool_policy:
+                    policy = tool_policy
+                    break
+
         config = AgentConfig(
             model=model,
             base_dir=agent_base_dir,
@@ -254,6 +274,7 @@ class Agent:
             session=session,
             tools=tools,
             skills=skills,
+            policy=policy,
         )
         agent = cls(config)
 
@@ -312,20 +333,23 @@ class Agent:
 
         session_id = src.stem
         src_dir = src.parent
-        jsonl_src = src_dir / f'{session_id}.jsonl'
-        md_src = src_dir / f'{session_id}.md'
-
         dst_dir = self.session_dir / session_id
         dst_dir.mkdir(parents=True, exist_ok=True)
 
-        for f in [jsonl_src, md_src]:
-            if f.exists():
-                dst = dst_dir / f.name
-                if dst.exists():
-                    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    deprecated = dst_dir / f'{f.stem}_deprecated_{timestamp}{f.suffix}'
-                    shutil.move(str(dst), str(deprecated))
-                shutil.copy2(f, dst)
+        # Only copy files when importing from an external location.
+        # If the session is already in this agent's session_dir, skip the
+        # copy to avoid moving the source file away from under itself.
+        if src_dir.resolve() != dst_dir.resolve():
+            jsonl_src = src_dir / f'{session_id}.jsonl'
+            md_src = src_dir / f'{session_id}.md'
+            for f in [jsonl_src, md_src]:
+                if f.exists():
+                    dst = dst_dir / f.name
+                    if dst.exists():
+                        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                        deprecated = dst_dir / f'{f.stem}_deprecated_{timestamp}{f.suffix}'
+                        shutil.move(str(dst), str(deprecated))
+                    shutil.copy2(f, dst)
 
         self.session = Session.load(session_id, dst_dir)
         
@@ -467,10 +491,13 @@ Your available skills are:
                 
                 await self.hook.trigger(HookType.BEFORE_STREAM)
                 if self.hook.should_break():
+                    self.logger.info("Agent interrupted before stream")
+                    yield {'type': 'interrupted', 'content': 'Agent interrupted'}
                     break
                 model_input = self.construct_model_input()
                 async for chunk in self.model.async_stream_invoke(model_input): 
                     if self.hook.should_break():
+                        self.logger.info("Agent interrupted during stream")
                         interrupted = True
                         break
                     
@@ -506,13 +533,20 @@ Your available skills are:
                         break
                 
                 if interrupted:
+                    self.logger.info("Agent tool loop interrupted after stream")
+                    yield {'type': 'interrupted', 'content': 'Agent interrupted'}
                     break
                 
                 if stop_reason == 'tool_use':
+                    self.logger.info(
+                        "Agent tool loop continuing for tool execution",
+                        context={"tool_count": len(tool_tasks)}
+                    )
                     tool_results = await asyncio.gather(*tool_tasks)
                     yield {'type': 'tool_results', 'content': tool_results}
                     self.session.add_message(tool_results)
                 elif stop_reason == 'end_turn':
+                    self.logger.info("Agent tool loop ended with end_turn")
                     break
                 else:
                     self.logger.error(
@@ -547,7 +581,11 @@ Your available skills are:
                 async for chunk in self.stream_tool_loop():
                             yield chunk
             except Exception as e:
-                raise e
+                self.logger.error(
+                    f"Agent run failed: {e}",
+                    exc_info=True,
+                )
+                raise
             finally:
                 self.save()
                 self.state = AgentState.Ready
@@ -575,12 +613,35 @@ Your available skills are:
             self._running = True
             self.state = AgentState.Waiting
 
-            await self.input.start(self._event_queue)
+            try:
+                await self.input.start(self._event_queue)
+            except Exception as e:
+                self.logger.error(
+                    f"Failed to start input channel: {e}",
+                    exc_info=True,
+                )
+                self._running = False
+                self.state = AgentState.Error
+                try:
+                    self.save()
+                except Exception:
+                    pass
+                return
 
+            _exit_reason = "unknown"
             try:
                 while self._running:
-                    event = await self._event_queue.get()
+                    try:
+                        event = await self._event_queue.get()
+                    except Exception as e:
+                        self.logger.error(
+                            f"Failed to get event from queue: {e}",
+                            exc_info=True,
+                        )
+                        _exit_reason = "queue_error"
+                        break
                     if event is _SENTINEL:
+                        _exit_reason = "stopped"
                         break
                     self.state = AgentState.Running
                     try:
@@ -598,6 +659,8 @@ Your available skills are:
                         self.state = AgentState.Error
                     if self._running:
                         self.state = AgentState.Waiting
+                else:
+                    _exit_reason = "not_running"
             finally:
                 await self.input.stop()
                 self._event_queue = asyncio.Queue()
@@ -607,7 +670,10 @@ Your available skills are:
                     self.save()
                 except Exception as e:
                     self.logger.warning(f"Failed to save agent state on stop: {e}")
-                self.logger.info("Agent event loop stopped")
+                self.logger.info(
+                    "Agent event loop stopped",
+                    context={"exit_reason": _exit_reason}
+                )
 
     async def interrupt(self):
         self.hook.context.break_loop()
@@ -620,6 +686,8 @@ Your available skills are:
             self._event_queue.put_nowait(_SENTINEL)
 
     async def _handle_event(self, event: AgentEvent):
+        # Clear any stale BREAK flag left by interrupt() called while idle.
+        self.hook.context.reset_control()
         self.logger.set_trace_id(event.correlation_id)
         with self.logger.span("event_handle"):
             self.logger.info(

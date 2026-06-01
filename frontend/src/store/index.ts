@@ -8,7 +8,6 @@ import type {
   MCPServer,
   Prompt,
   SettingsTab,
-  AgentPolicy,
   SessionInfo,
 } from "../types";
 import { api } from "../lib/api";
@@ -19,10 +18,8 @@ export interface AppState {
   activeTeamMemberName: string | null;
   setActiveAgentName: (name: string | null) => void;
   selectTeamMember: (teamName: string, memberName: string | null) => void;
-  addAgent: (agent: Agent) => void;
-  addTeam: (team: Agent) => void;
-  updateAgent: (name: string, updates: Partial<Agent>) => void;
-  updateTeam: (name: string, updates: Partial<Agent>) => void;
+  updateAgent: (name: string, updates: Partial<Agent>) => Promise<void>;
+  updateTeam: (name: string, updates: Partial<Agent>) => Promise<void>;
   removeAgent: (name: string, deleteFiles?: boolean) => Promise<void>;
   addMessage: (agentName: string, message: Message) => void;
 
@@ -50,6 +47,8 @@ export interface AppState {
   setBaseDirPath: (path: string) => void;
   basedirExpandedPaths: Set<string>;
   toggleBasedirExpand: (path: string) => void;
+  workingDirExpandedPaths: Set<string>;
+  toggleWorkingDirExpand: (path: string) => void;
 
   previewFile: {
     path: string;
@@ -252,16 +251,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  addAgent: (agent) => set((state) => {
-    if (state.agents.some((a) => a.name === agent.name)) return state;
-    return { agents: [...state.agents, agent], activeAgentName: agent.name, workingDirPath: agent.policy?.cwd || "", baseDirPath: agent.basePath };
-  }),
-  addTeam: (team) => set((state) => {
-    if (state.agents.some((a) => a.name === team.name)) return state;
-    return { agents: [...state.agents, team], activeAgentName: team.name, workingDirPath: team.policy?.cwd || "", baseDirPath: team.basePath };
-  }),
-  updateAgent: (name, updates) => set((state) => ({ agents: state.agents.map((a) => (a.name === name ? { ...a, ...updates } : a)) })),
-  updateTeam: (name, updates) => set((state) => ({ agents: state.agents.map((a) => (a.name === name ? { ...a, ...updates } : a)) })),
+  updateAgent: async (name, updates) => {
+    const result = await api.updateAgent(name, updates);
+    set((state) => ({
+      agents: state.agents.map((a) => (a.name === name ? { ...a, ...result, messages: a.messages } : a)),
+      workingDirPath: state.activeAgentName === name && result.policy?.cwd ? result.policy.cwd : state.workingDirPath,
+    }));
+  },
+  updateTeam: async (name, updates) => {
+    const result = await api.updateTeam(name, updates);
+    set((state) => ({
+      agents: state.agents.map((a) => (a.name === name ? { ...a, ...result, messages: a.messages } : a)),
+      workingDirPath: state.activeAgentName === name && result.policy?.cwd ? result.policy.cwd : state.workingDirPath,
+    }));
+  },
   removeAgent: async (name, deleteFiles) => {
     const agent = get().agents.find((a) => a.name === name);
     if (!agent) return;
@@ -296,6 +299,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newSet = new Set(state.basedirExpandedPaths);
       newSet.has(path) ? newSet.delete(path) : newSet.add(path);
       return { basedirExpandedPaths: newSet };
+    }),
+
+  workingDirExpandedPaths: new Set<string>(),
+  toggleWorkingDirExpand: (path) =>
+    set((state) => {
+      const newSet = new Set(state.workingDirExpandedPaths);
+      newSet.has(path) ? newSet.delete(path) : newSet.add(path);
+      return { workingDirExpandedPaths: newSet };
     }),
 
   previewFile: null,

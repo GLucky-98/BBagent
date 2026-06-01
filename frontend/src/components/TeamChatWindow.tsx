@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Bot, User, X } from "lucide-react";
+import { Send, Bot, User } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 import type { Message } from "../types";

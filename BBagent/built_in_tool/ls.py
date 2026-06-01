@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.tool import Tool
-from .policy import Policy, resolve_and_check_path
+from .policy import Policy
 
 
 class LsOperations:
@@ -64,10 +64,8 @@ def create_ls_tool(
             if path is None:
                 resolved_path = cwd
             else:
-                resolved, err = resolve_and_check_path(path, policy)
-                if err:
-                    return f"Error: {err}"
-                resolved_path = resolved
+                p = Path(path)
+                resolved_path = str(p if p.is_absolute() else (Path(policy.cwd) / p).resolve())
         else:
             if path is None:
                 resolved_path = cwd

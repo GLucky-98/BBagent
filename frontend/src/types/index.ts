@@ -57,6 +57,7 @@ export interface Prompt {
   id: string;
   name: string;
   content: string;
+  description?: string;
 }
 
 export interface Message {
@@ -103,17 +104,11 @@ export interface Agent {
 
 export interface AgentPolicy {
   cwd: string;
-  allowedDirs: string;
-  bashAllowNetwork: boolean;
   bashMaxOutputLines: number;
-  blockedPaths: string;
-  blockedExtensions: string;
   maxReadSize: number;
   maxReadLines: number;
   maxWriteSize: number;
   writeCreateDirectories: boolean;
-  bashAllowedCommands: string;
-  bashBlockedCommands: string;
   bashDefaultTimeout: number;
 }
 

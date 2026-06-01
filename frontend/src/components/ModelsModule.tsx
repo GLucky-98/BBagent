@@ -153,7 +153,7 @@ function ModelList({ onNew }: { onNew: () => void }) {
   );
 }
 
-function ModelTestPanel({ showForm, editModel, onCloseForm, onNew, onEdit }: {
+function ModelTestPanel({ showForm, editModel, onCloseForm, onNew: _onNew, onEdit }: {
   showForm: boolean; editModel?: Model; onCloseForm: () => void;
   onNew: () => void; onEdit: (id: string) => void;
 }) {

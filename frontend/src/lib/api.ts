@@ -69,15 +69,16 @@ export const api = {
   readFile: (path: string) => request(`/files/read?path=${encodeURIComponent(path)}`),
   writeFile: (path: string, content: string) => request("/files/write", { method: "POST", body: JSON.stringify({ path, content }) }),
   listDirs: (path: string) => request(`/files/dirs?path=${encodeURIComponent(path)}`),
+  openPath: (path: string) => request("/files/open", { method: "POST", body: JSON.stringify({ path }) }),
 
   // UI State
   getState: () => request("/state"),
   saveState: (data: unknown) => request("/state", { method: "POST", body: JSON.stringify(data) }),
 };
 
-export function createChatWs(agentName: string): WebSocket {
+export function createChatWs(): WebSocket {
   const wsBase = API_BASE.replace(/^http/, "ws");
-  return new WebSocket(`${wsBase}/ws/chat/${agentName}`);
+  return new WebSocket(`${wsBase}/ws/chat`);
 }
 
 export function createTeamChatWs(teamName: string): WebSocket {

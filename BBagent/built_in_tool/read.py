@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.tool import Tool
-from .policy import Policy, resolve_and_check_path
+from .policy import Policy
 
 
-DEFAULT_MAX_BYTES = 500_000
-DEFAULT_MAX_LINES = 10_000
+DEFAULT_MAX_BYTES = 200_000
+DEFAULT_MAX_LINES = 3_000
 
 
 def create_read_tool(
@@ -42,10 +42,8 @@ def create_read_tool(
             return "Error: path is required"
 
         if policy is not None:
-            resolved, err = resolve_and_check_path(path, policy)
-            if err:
-                return f"Error: {err}"
-            resolved_path = resolved
+            p = Path(path)
+            resolved_path = str(p if p.is_absolute() else (Path(policy.cwd) / p).resolve())
         else:
             if os.path.isabs(path):
                 resolved_path = path

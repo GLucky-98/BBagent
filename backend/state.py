@@ -30,16 +30,10 @@ from backend.errors import (
 
 # camelCase (frontend) -> snake_case (core Policy)
 _POLICY_FIELD_MAP = {
-    "allowedDirs": "allowed_dirs",
-    "blockedPaths": "blocked_paths",
-    "blockedExtensions": "blocked_extensions",
     "maxReadSize": "max_read_size",
     "maxReadLines": "max_read_lines",
     "maxWriteSize": "max_write_size",
     "writeCreateDirectories": "write_create_directories",
-    "bashAllowedCommands": "bash_allowed_commands",
-    "bashBlockedCommands": "bash_blocked_commands",
-    "bashAllowNetwork": "bash_allow_network",
     "bashMaxOutputLines": "bash_max_output_lines",
     "bashDefaultTimeout": "bash_default_timeout",
 }
@@ -47,6 +41,18 @@ _POLICY_FIELD_MAP = {
 
 def _policy_to_snake(policy: dict) -> dict:
     return {_POLICY_FIELD_MAP.get(k, k): v for k, v in policy.items()}
+
+
+# Reverse: snake_case -> camelCase for frontend consumption
+_POLICY_FIELD_MAP_REV = {v: k for k, v in _POLICY_FIELD_MAP.items()}
+
+
+def _policy_to_camel(policy: dict) -> dict:
+    """Convert a Policy dict from snake_case (core) to camelCase (frontend)."""
+    if not policy:
+        return {}
+    return {_POLICY_FIELD_MAP_REV.get(k, k): v for k, v in policy.items()}
+
 
 logger = get_backend_logger("state")
 
@@ -256,14 +262,44 @@ class StateManager:
             model_data = config_dict.get("model", {})
             if isinstance(model_data, dict):
                 model_id = model_data.get("model_id", "")
-        self._agent_model_ids[name] = model_id
+        # Fallback: match by provider + model name against registered models
+        if not model_id:
+            model_data = config_dict.get("model", {})
+            if isinstance(model_data, dict):
+                provider = model_data.get("provider", "")
+                model_name = model_data.get("model", "")
+                for m in self.models:
+                    if m.provider == provider and m.modelName == model_name:
+                        model_id = m.id
+                        break
+        if model_id:
+            self._agent_model_ids[name] = model_id
+        else:
+            self._agent_model_ids[name] = ""
+
+        # Extract policy before stripping tools (backward compat with old YAML
+        # that stored policy inside each tool's config rather than at top level)
+        policy = config_dict.get("policy", None)
+        if not policy:
+            for tool_cfg in config_dict.get("tools", []):
+                tool_policy = tool_cfg.get("config", {}).get("policy", None)
+                if tool_policy:
+                    policy = tool_policy
+                    break
 
         deferred_keys = {"tools", "skills", "hooks", "timers"}
         stripped = {k: v for k, v in config_dict.items() if k not in deferred_keys}
+        if policy:
+            stripped["policy"] = policy
 
         try:
             agent = asyncio.run(Agent.from_config_dict(stripped, base_dir=agent_dir))
+            # Sync working_dir from policy cwd
+            if agent.policy and agent.policy.get("cwd"):
+                agent.working_dir = agent.policy["cwd"]
             self.agents[name] = agent
+            if model_id:
+                self._save_agent_model_id(name, model_id)
             agent.logger.set_console_level(logging.CRITICAL + 1)
             self._agent_dispatchers[name] = AgentOutputDispatcher()
             logger.info("Loaded agent '%s' from '%s'", name, agent_dir.name)
@@ -581,10 +617,23 @@ class StateManager:
             return None
 
         if agent.tools:
-            tool_names = list(agent.tools.keys())
+            tool_names = []
+            for t in agent.tools.values():
+                src = getattr(t, "source", "")
+                if src.startswith("built_in."):
+                    tool_names.append(src[len("built_in."):])
+                elif src:
+                    tool_names.append(src)
         else:
-            builtin = [t.get("name", t.get("source", ""))
-                       for t in self._agent_tool_metas.get(name, [])]
+            builtin = []
+            for t in self._agent_tool_metas.get(name, []):
+                src = t.get("source", "")
+                # Normalize to short source name (strip "built_in." prefix)
+                # to match frontend tool identifiers from GET /api/tools
+                if src.startswith("built_in."):
+                    builtin.append(src[len("built_in."):])
+                elif src:
+                    builtin.append(src)
             mcp = [t.get("tool_name", t.get("name", ""))
                    for t in self._agent_mcp_metas.get(name, [])]
             tool_names = [n for n in (*builtin, *mcp) if n]
@@ -603,8 +652,8 @@ class StateManager:
             skillNames=skill_names,
             hookEnabled=bool(agent.hook and agent.hook._enabled),
             basePath=str(agent.base_dir),
-            workingDir=getattr(agent, "working_dir", ""),
-            policy=getattr(agent, "policy", {}) or {},
+            workingDir=(getattr(agent, "policy", {}) or {}).get("cwd", ""),
+            policy=_policy_to_camel(getattr(agent, "policy", {}) or {}),
         )
 
     async def create_agent(self, config: AgentConfig) -> Agent:
@@ -647,10 +696,12 @@ class StateManager:
             actual_name = agent.name
 
             policy_snake = _policy_to_snake(config.policy) if config.policy else {}
-            policy_config = {"policy": policy_snake} if policy_snake else {}
+            if policy_snake and not policy_snake.get("cwd"):
+                policy_snake["cwd"] = str(agent.base_dir)
+            agent.policy = policy_snake
 
             builtin_metas = [
-                {"source": tn, "config": policy_config}
+                {"source": tn, "config": {}}
                 for tn in config.toolNames if not tn.startswith("mcp:")
             ]
             mcp_metas = [
@@ -719,10 +770,23 @@ class StateManager:
         agent = self.agents[name]
         policy_raw = getattr(agent, "policy", {}) or {}
         from BBagent.built_in_tool.policy import Policy
-        policy_obj = Policy(**_policy_to_snake(policy_raw)) if policy_raw else None
+        if policy_raw:
+            policy_snake = _policy_to_snake(policy_raw)
+            if not policy_snake.get("cwd"):
+                policy_snake["cwd"] = str(agent.base_dir)
+            policy_obj = Policy(**policy_snake)
+        else:
+            policy_obj = None
 
         tool_metas = self._agent_tool_metas.get(name, [])
         mcp_metas = self._agent_mcp_metas.get(name, [])
+
+        # Normalize cwd in stored tool metas for existing agents
+        # that were created before cwd normalization was introduced
+        for cfg in tool_metas:
+            policy_in_cfg = cfg.get("config", {}).get("policy", {})
+            if policy_in_cfg and not policy_in_cfg.get("cwd"):
+                policy_in_cfg["cwd"] = str(agent.base_dir)
 
         builtin_tasks = [
             asyncio.to_thread(self._build_one_builtin_tool, cfg, policy_obj)
@@ -931,7 +995,15 @@ class StateManager:
             from BBagent.built_in_tool import TOOL_CREATOR
             from BBagent.built_in_tool.policy import Policy
 
-            policy_obj = Policy(**_policy_to_snake(updates["policy"])) if updates["policy"] else None
+            policy_raw = updates["policy"]
+            if policy_raw:
+                policy_snake = _policy_to_snake(policy_raw)
+                if not policy_snake.get("cwd"):
+                    policy_snake["cwd"] = str(agent.base_dir)
+                agent.policy = policy_snake
+                policy_obj = Policy(**policy_snake)
+            else:
+                policy_obj = None
             for tool_name, tool in list(agent.tools.items()):
                 source = getattr(tool, 'source', None)
                 if not source or source not in TOOL_CREATOR:
@@ -945,17 +1017,14 @@ class StateManager:
                 agent.tools[new_tool.name] = new_tool
 
         if "toolNames" in updates:
-            policy_snake = {}
-            for t in agent.tools.values():
-                cfg = getattr(t, "config", {})
-                if cfg.get("policy"):
-                    policy_snake = cfg["policy"]
-                    break
+            policy_snake = getattr(agent, "policy", {}) or {}
             if not policy_snake and "policy" in updates:
                 policy_snake = _policy_to_snake(updates["policy"])
+            if policy_snake and not policy_snake.get("cwd"):
+                policy_snake["cwd"] = str(agent.base_dir)
 
             builtin_metas = [
-                {"source": tn, "config": {"policy": policy_snake} if policy_snake else {}}
+                {"source": tn, "config": {}}
                 for tn in updates["toolNames"] if not tn.startswith("mcp:")
             ]
             mcp_metas = [
@@ -977,7 +1046,7 @@ class StateManager:
             if new_tool_names:
                 logger.info("Agent '%s': adding tools %s", name, new_tool_names)
                 new_tools, mcp_clients = await self._build_tools_and_mcp_clients(
-                    new_tool_names, updates.get("policy")
+                    new_tool_names, updates.get("policy"), default_cwd=str(agent.base_dir)
                 )
                 agent.add_tools(new_tools)
                 if mcp_clients:
@@ -1104,38 +1173,88 @@ class StateManager:
         for turn in agent.session.turns:
             for msg in turn.messages:
                 msg_dict = msg.to_dict()
-                entry = {
-                    "role": msg_dict.get("role", ""),
-                    "content": "",
-                    "source_agent": name,
-                    "timestamp": msg_dict.get("timestamp", 0),
-                }
+                ts = msg_dict.get("timestamp", 0)
+
+                # thinking: emit as separate system entry BEFORE model text
+                # (matches WS format: {type:"thinking", content:"..."})
+                thinking = msg_dict.get("thinking", "")
+                if thinking:
+                    result.append({
+                        "role": "system",
+                        "content": thinking,
+                        "chunkType": "thinking",
+                        "source_agent": name,
+                        "timestamp": ts,
+                    })
 
                 content = msg_dict.get("content", "")
-                if isinstance(content, str):
-                    entry["content"] = content
+                # Tool messages are handled separately below with chunkType.
+                if msg_dict.get("role") == "tool":
+                    pass
+                elif isinstance(content, str):
+                    if content.strip():
+                        result.append({
+                            "role": msg_dict.get("role", ""),
+                            "content": content,
+                            "source_agent": name,
+                            "timestamp": ts,
+                        })
                 elif isinstance(content, list):
+                    # Anthropic-style content blocks — emit one entry per block
                     for block in content:
                         bt = block.get("type", "")
                         if bt == "text":
-                            entry["content"] += block.get("text", "")
-                        elif bt == "tooluse":
-                            entry["chunkType"] = "tool_use"
-                            entry["toolName"] = block.get("name", "")
-                            entry["toolInput"] = block.get("input", {})
+                            text = block.get("text", "")
+                            if text.strip():
+                                result.append({
+                                    "role": msg_dict.get("role", ""),
+                                    "content": text,
+                                    "source_agent": name,
+                                    "timestamp": ts,
+                                })
+                        elif bt in ("tool_use", "tooluse"):
+                            tool_input = block.get("input", {})
+                            result.append({
+                                "role": "system",
+                                "chunkType": "tool_use",
+                                "toolName": block.get("name", ""),
+                                "toolInput": tool_input,
+                                "content": json.dumps(
+                                    tool_input, indent=2, ensure_ascii=False,
+                                ),
+                                "source_agent": name,
+                                "timestamp": ts,
+                            })
 
-                if msg_dict.get("role") == "model":
-                    thinking = msg_dict.get("thinking", "")
-                    if thinking:
-                        entry["thinking"] = thinking
+                # Tool calls stored in ModelMessage.tool_calls (separate from content)
+                for tc in msg_dict.get("tool_calls", []):
+                    tc_input = tc.get("input", {})
+                    result.append({
+                        "role": "system",
+                        "chunkType": "tool_use",
+                        "toolName": tc.get("name", ""),
+                        "toolInput": tc_input,
+                        "content": json.dumps(
+                            tc_input, indent=2, ensure_ascii=False,
+                        ),
+                        "source_agent": name,
+                        "timestamp": ts,
+                    })
 
+                # Tool result messages (role == "tool")
                 if msg_dict.get("role") == "tool":
-                    entry["role"] = "system"
-                    entry["chunkType"] = "tool_result"
-                    entry["toolName"] = msg_dict.get("name", "")
-                    entry["content"] = f"[{msg_dict.get('name', '')}]\n{str(msg_dict.get('content', ''))[:500]}"
+                    result.append({
+                        "role": "system",
+                        "chunkType": "tool_result",
+                        "toolName": msg_dict.get("name", ""),
+                        "content": (
+                            f"[{msg_dict.get('name', '')}]\n"
+                            f"{str(msg_dict.get('content', ''))[:500]}"
+                        ),
+                        "source_agent": name,
+                        "timestamp": ts,
+                    })
 
-                result.append(entry)
         return result
 
     def get_agent_dispatcher(self, name: str) -> AgentOutputDispatcher | None:
@@ -1253,7 +1372,7 @@ class StateManager:
         return tools, client
 
     async def _build_tools_and_mcp_clients(
-        self, tool_names: list[str], policy: dict = None
+        self, tool_names: list[str], policy: dict = None, default_cwd: str = None
     ) -> tuple:
         from BBagent.built_in_tool import TOOL_CREATOR
         from BBagent.built_in_tool.policy import Policy
@@ -1264,7 +1383,13 @@ class StateManager:
         if not tool_names:
             return tools, mcp_clients
 
-        policy_obj = Policy(**_policy_to_snake(policy)) if policy else None
+        if policy:
+            policy_snake = _policy_to_snake(policy)
+            if not policy_snake.get("cwd") and default_cwd:
+                policy_snake["cwd"] = default_cwd
+            policy_obj = Policy(**policy_snake)
+        else:
+            policy_obj = None
 
         for name in tool_names:
             if name.startswith("mcp:"):

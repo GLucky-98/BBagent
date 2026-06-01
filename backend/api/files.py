@@ -1,5 +1,7 @@
 import mimetypes
 import os
+import platform
+import subprocess
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
@@ -102,3 +104,21 @@ async def write_file(payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(payload["content"], encoding="utf-8")
     return {"success": True}
+
+
+@router.post("/open")
+async def open_file_dir(payload: dict):
+    path = Path(payload["path"]).expanduser().resolve()
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            subprocess.run(["open", str(path)], check=True)
+        elif system == "Linux":
+            subprocess.run(["xdg-open", str(path)], check=True)
+        elif system == "Windows":
+            os.startfile(str(path))
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to open path: {e}")

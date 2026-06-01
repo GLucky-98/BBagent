@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ChevronRight, Folder, FolderOpen, File as FileIcon, Loader2 } from "lucide-react";
+import { ChevronRight, Folder, FolderOpen, File as FileIcon, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useAppStore } from "../../store";
 import { api } from "../../lib/api";
 import { cn, getMimeType } from "../../lib/utils";
@@ -108,6 +108,7 @@ export function BasedirTree() {
   const toggleExpand = useAppStore((s) => s.toggleBasedirExpand);
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const agent = agents.find((a) => a.name === activeAgentName);
   const basePath = agent?.basePath;
@@ -132,12 +133,41 @@ export function BasedirTree() {
     return () => { ignore = true; };
   }, [basePath]);
 
+  const handleCopy = async () => {
+    if (!basePath) return;
+    try {
+      await navigator.clipboard.writeText(basePath);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback: ignore clipboard errors
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-(--color-muted-foreground) border-b border-(--color-border) shrink-0">
-        <span className="text-[10px] text-(--color-muted-foreground) uppercase tracking-wide mr-1">Base Path</span>
-        <FolderOpen className="w-3.5 h-3.5" />
+        <span className="text-[10px] text-(--color-muted-foreground) uppercase tracking-wide mr-1">Base Dir</span>
         <span className="truncate">{basePath || "Not set"}</span>
+        <div className="flex items-center gap-0.5 ml-auto shrink-0">
+          <button
+            className="p-0.5 rounded hover:bg-(--color-secondary) transition-colors"
+            onClick={() => basePath && api.openPath(basePath)}
+            title="Open in Finder"
+          >
+            <ExternalLink className="w-3 h-3" />
+          </button>
+          <button
+            className={cn(
+              "p-0.5 rounded hover:bg-(--color-secondary) transition-colors",
+              copied && "text-emerald-500"
+            )}
+            onClick={handleCopy}
+            title="Copy path"
+          >
+            <Copy className="w-3 h-3" />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto py-1">

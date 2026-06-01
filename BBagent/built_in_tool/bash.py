@@ -8,7 +8,7 @@ from dataclasses import asdict
 from typing import Optional
 
 from ..core.tool import Tool
-from .policy import Policy, check_bash_command
+from .policy import Policy
 
 
 DEFAULT_TIMEOUT = 60
@@ -70,11 +70,6 @@ async def create_bash_tool(
         default_timeout = DEFAULT_TIMEOUT
 
     async def bash_func(command: str, timeout: Optional[int] = None) -> str:
-        if policy is not None:
-            allowed, err = check_bash_command(command, policy)
-            if not allowed:
-                return f"Error: {err}"
-
         if not os.path.exists(cwd):
             return f"Error: Working directory does not exist: {cwd}"
 

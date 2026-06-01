@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { X, Bot, Users, Search, FileText } from "lucide-react";
 import { useAppStore } from "../../store";
 import { cn } from "../../lib/utils";
-import type { Agent } from "../../types";
+import type { Agent, AgentPolicy } from "../../types";
 import { FolderPicker } from "../FolderPicker";
 
 interface AgentConfigDialogProps {
@@ -43,6 +43,7 @@ function SingleAgentForm({
   initialData?: {
     name: string; modelId: string;
     systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean;
+    policy?: AgentPolicy;
   };
   onSave: (data: { name: string; modelId: string; systemPrompt: string; toolNames: string[]; skillNames: string[]; hookEnabled: boolean; policy: Record<string, unknown> }) => void | Promise<void>;
   saving?: boolean;
@@ -66,19 +67,13 @@ function SingleAgentForm({
   });
 
   const [policy, setPolicy] = useState({
-    cwd: "",
-    allowedDirs: "",
-    blockedPaths: "",
-    blockedExtensions: "",
-    maxReadSize: 500000,
-    maxReadLines: 10000,
-    maxWriteSize: 5242880,
-    writeCreateDirectories: true,
-    bashAllowedCommands: "",
-    bashBlockedCommands: "",
-    bashAllowNetwork: true,
-    bashMaxOutputLines: 1000,
-    bashDefaultTimeout: 60,
+    cwd: initialData?.policy?.cwd ?? "",
+    maxReadSize: initialData?.policy?.maxReadSize ?? 200000,
+    maxReadLines: initialData?.policy?.maxReadLines ?? 3000,
+    maxWriteSize: initialData?.policy?.maxWriteSize ?? 5242880,
+    writeCreateDirectories: initialData?.policy?.writeCreateDirectories ?? true,
+    bashMaxOutputLines: initialData?.policy?.bashMaxOutputLines ?? 1000,
+    bashDefaultTimeout: initialData?.policy?.bashDefaultTimeout ?? 60,
   });
 
   const builtInTools = tools.filter((t) => !t.isMcp);
@@ -260,11 +255,6 @@ function SingleAgentForm({
                   placeholder="/workspace/agent"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-medium mb-1">Allowed Directories (comma-separated)</label>
-                <input type="text" value={policy.allowedDirs} onChange={(e) => setPolicy({ ...policy, allowedDirs: e.target.value })}
-                  placeholder="e.g. /workspace,/tmp/output" className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
-              </div>
               <div className={cn(!hasFileTools && "opacity-40 pointer-events-none")}>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -292,16 +282,6 @@ function SingleAgentForm({
                     </label>
                   </div>
                 </div>
-                <div className="mt-3">
-                  <label className="block text-xs font-medium mb-1">Blocked Paths (comma-separated)</label>
-                  <input type="text" value={policy.blockedPaths} onChange={(e) => setPolicy({ ...policy, blockedPaths: e.target.value })}
-                    placeholder="e.g. /etc/passwd,*.env" className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
-                </div>
-                <div className="mt-3">
-                  <label className="block text-xs font-medium mb-1">Blocked Extensions (comma-separated)</label>
-                  <input type="text" value={policy.blockedExtensions} onChange={(e) => setPolicy({ ...policy, blockedExtensions: e.target.value })}
-                    placeholder="e.g. .exe,.dll,.so" className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
-                </div>
               </div>
               <div className={cn(!hasBashTool && "opacity-40 pointer-events-none")}>
                 <div className="mt-3">
@@ -317,26 +297,6 @@ function SingleAgentForm({
                         className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                     </div>
                   </div>
-                </div>
-                <div className="mt-3">
-                  <label className="block text-xs font-medium mb-1">Allowed Commands (comma-separated)</label>
-                  <input type="text" value={policy.bashAllowedCommands} onChange={(e) => setPolicy({ ...policy, bashAllowedCommands: e.target.value })}
-                    placeholder="e.g. git,python,npm" className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
-                </div>
-                <div className="mt-3">
-                  <label className="block text-xs font-medium mb-1">Blocked Commands (comma-separated)</label>
-                  <input type="text" value={policy.bashBlockedCommands} onChange={(e) => setPolicy({ ...policy, bashBlockedCommands: e.target.value })}
-                    placeholder="e.g. rm,shutdown" className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
-                </div>
-                <div className="flex items-center justify-between mt-3">
-                  <div>
-                    <span className="text-xs font-medium">Allow Network Commands</span>
-                    <p className="text-[10px] text-(--color-muted-foreground) mt-0.5">Allow bash tools to execute network commands (curl, ssh, etc.)</p>
-                  </div>
-                  <button type="button" onClick={() => setPolicy({ ...policy, bashAllowNetwork: !policy.bashAllowNetwork })}
-                    className={cn("relative w-9 h-5 rounded-full transition-colors shrink-0", policy.bashAllowNetwork ? "bg-emerald-500" : "bg-gray-300")}>
-                    <div className={cn("absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform", policy.bashAllowNetwork ? "translate-x-[18px]" : "translate-x-0.5")} />
-                  </button>
                 </div>
               </div>
             </div>
@@ -374,7 +334,7 @@ function TeamForm({
     } else {
       setMemberForm({ name: "", modelId: models[0]?.id ?? "", role: "", systemPrompt: "", toolNames: [], skillNames: [], hookEnabled: true });
     }
-    setEditingMemberIdx(idx ?? null);
+    setEditingMemberIdx(idx ?? members.length);
   };
 
   const saveMember = () => {
@@ -389,7 +349,7 @@ function TeamForm({
       skillNames: memberForm.skillNames,
       hookEnabled: memberForm.hookEnabled,
       messages: [],
-      policy: { cwd: "", allowedDirs: "", bashAllowNetwork: true, bashMaxOutputLines: 1000, blockedPaths: "", blockedExtensions: "", maxReadSize: 500000, maxReadLines: 10000, maxWriteSize: 5242880, writeCreateDirectories: true, bashAllowedCommands: "", bashBlockedCommands: "", bashDefaultTimeout: 60 },
+      policy: { cwd: "", bashMaxOutputLines: 1000, maxReadSize: 200000, maxReadLines: 3000, maxWriteSize: 5242880, writeCreateDirectories: true, bashDefaultTimeout: 60 },
     };
     const updated = editingMemberIdx != null
       ? members.map((m, i) => (i === editingMemberIdx ? newMember : m))
@@ -593,7 +553,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentName }: Agen
         basePath: "",
         messages: [],
         workingDir: typeof data.policy === "object" && data.policy !== null ? String((data.policy as Record<string, unknown>).cwd || "") : "",
-        policy: typeof data.policy === "object" && data.policy !== null ? data.policy as Record<string, unknown> : { cwd: "", allowedDirs: "", bashAllowNetwork: true, bashMaxOutputLines: 1000 },
+        policy: typeof data.policy === "object" && data.policy !== null ? data.policy as Record<string, unknown> : { cwd: "", bashMaxOutputLines: 1000 },
       };
       if (mode === "edit" && existingAgent) {
         await updateAgent(existingAgent.name, { ...data, ...agentData });
@@ -625,7 +585,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentName }: Agen
       teamMembers: data.members,
       contacts: data.contacts,
       messages: [],
-      policy: { cwd: "", allowedDirs: "", bashAllowNetwork: true, bashMaxOutputLines: 1000, blockedPaths: "", blockedExtensions: "", maxReadSize: 500000, maxReadLines: 10000, maxWriteSize: 5242880, writeCreateDirectories: true, bashAllowedCommands: "", bashBlockedCommands: "", bashDefaultTimeout: 60 },
+      policy: { cwd: "", bashMaxOutputLines: 1000, maxReadSize: 200000, maxReadLines: 3000, maxWriteSize: 5242880, writeCreateDirectories: true, bashDefaultTimeout: 60 },
     };
     if (mode === "edit" && existingAgent) {
       updateTeam(existingAgent.name, team);
@@ -646,7 +606,9 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentName }: Agen
           <SingleAgentForm
             initialData={existingAgent && existingAgent.type === "single" ? {
               name: existingAgent.name, modelId: existingAgent.modelId,
-              systemPrompt: existingAgent.systemPrompt, toolNames: existingAgent.toolNames, skillNames: existingAgent.skillNames, hookEnabled: existingAgent.hookEnabled,
+              systemPrompt: existingAgent.systemPrompt, toolNames: existingAgent.toolNames,
+              skillNames: existingAgent.skillNames, hookEnabled: existingAgent.hookEnabled,
+              policy: existingAgent.policy,
             } : undefined}
             onSave={handleSingleSave}
             saving={saving}
