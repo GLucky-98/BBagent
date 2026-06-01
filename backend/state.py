@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import yaml
+
 from BBagent.core.agent import Agent, AgentConfig as CoreAgentConfig, AgentState
 from BBagent.core.team import AgentTeam, TeamConfig as CoreTeamConfig
 from BBagent.core.model import Model
@@ -77,6 +79,13 @@ class StateManager:
         self._agent_dispatchers: Dict[str, AgentOutputDispatcher] = {}
         self._agent_tasks: Dict[str, asyncio.Task] = {}
         self._agent_model_ids: Dict[str, str] = {}
+
+        self._agent_started: set[str] = set()
+        self._agent_tool_metas: dict[str, list[dict]] = {}
+        self._agent_mcp_metas: dict[str, list[dict]] = {}
+        self._agent_skill_metas: dict[str, list[dict]] = {}
+        self._agent_hook_metas: dict[str, list[dict]] = {}
+        self._agent_timer_metas: dict[str, list[dict]] = {}
 
         self._ensure_data_dir()
         self._loaded = False
@@ -207,49 +216,87 @@ class StateManager:
         agents_dir = DATA_DIR / "agents"
         if not agents_dir.exists():
             return
-        loaded = 0
-        failed = 0
-        for agent_dir in agents_dir.iterdir():
-            if not agent_dir.is_dir():
-                continue
-            config_path = agent_dir / "agent_config.yaml"
-            if not config_path.exists():
-                continue
-            try:
-                agent = await Agent.load(agent_dir)
-                self.agents[agent.name] = agent
-                agent.logger.set_console_level(logging.CRITICAL + 1)
-                self._agent_dispatchers[agent.name] = AgentOutputDispatcher()
-                try:
-                    with open(config_path, 'r', encoding='utf-8') as f:
-                        raw = yaml.safe_load(f) or {}
-                    model_id = raw.get("model_id", "")
-                    if model_id:
-                        self._agent_model_ids[agent.name] = model_id
-                except Exception:
-                    pass
-                loaded += 1
-                logger.info(f"Loaded agent '{agent.name}' from {agent_dir.name}")
-            except Exception as e:
+        dirs = sorted(
+            d for d in agents_dir.iterdir()
+            if d.is_dir() and (d / "agent_config.yaml").exists()
+        )
+        if not dirs:
+            return
+
+        results = await asyncio.gather(
+            *[asyncio.to_thread(self._load_one_agent, d) for d in dirs],
+            return_exceptions=True,
+        )
+        loaded, failed = 0, 0
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
                 failed += 1
-                logger.error("Failed to load agent from %s: %s", agent_dir.name, e, exc_info=True)
-        logger.info("Agent loading complete: %d loaded, %d failed", loaded, failed)
+                logger.error("Failed to load agent from '%s': %s",
+                             dirs[i].name, result, exc_info=True)
+            else:
+                loaded += 1
+        logger.info("Agent loading: %d loaded, %d failed", loaded, failed)
+
+    def _load_one_agent(self, agent_dir: Path):
+        config_path = agent_dir / "agent_config.yaml"
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config_dict = yaml.safe_load(f) or {}
+
+        name = config_dict.get("name", agent_dir.name)
+
+        tool_cfgs = config_dict.get("tools", [])
+        self._agent_tool_metas[name] = [t for t in tool_cfgs if t.get("source") != "mcp"]
+        self._agent_mcp_metas[name] = [t for t in tool_cfgs if t.get("source") == "mcp"]
+        self._agent_skill_metas[name] = config_dict.get("skills", [])
+        self._agent_hook_metas[name] = config_dict.get("hooks", [])
+        self._agent_timer_metas[name] = config_dict.get("timers", [])
+
+        model_id = config_dict.get("model_id", "")
+        if not model_id:
+            model_data = config_dict.get("model", {})
+            if isinstance(model_data, dict):
+                model_id = model_data.get("model_id", "")
+        self._agent_model_ids[name] = model_id
+
+        deferred_keys = {"tools", "skills", "hooks", "timers"}
+        stripped = {k: v for k, v in config_dict.items() if k not in deferred_keys}
+
+        try:
+            agent = asyncio.run(Agent.from_config_dict(stripped, base_dir=agent_dir))
+            self.agents[name] = agent
+            agent.logger.set_console_level(logging.CRITICAL + 1)
+            self._agent_dispatchers[name] = AgentOutputDispatcher()
+            logger.info("Loaded agent '%s' from '%s'", name, agent_dir.name)
+        except Exception:
+            for cache in (self._agent_tool_metas, self._agent_mcp_metas,
+                          self._agent_skill_metas, self._agent_hook_metas,
+                          self._agent_timer_metas):
+                cache.pop(name, None)
+            self._agent_model_ids.pop(name, None)
+            raise
 
     async def _load_teams(self):
         teams_dir = DATA_DIR / "teams"
         if not teams_dir.exists():
             return
-        for team_dir in teams_dir.iterdir():
-            if not team_dir.is_dir():
-                continue
-            config_path = team_dir / "team_config.yaml"
-            if not config_path.exists():
-                continue
-            try:
-                team = await AgentTeam.load(team_dir)
-                self.teams[team.name] = team
-            except Exception as e:
-                logger.warning(f"Failed to load team from {team_dir}: {e}")
+        dirs = sorted(
+            d for d in teams_dir.iterdir()
+            if d.is_dir() and (d / "team_config.yaml").exists()
+        )
+        if not dirs:
+            return
+
+        results = await asyncio.gather(
+            *[self._load_one_team(d) for d in dirs],
+            return_exceptions=True,
+        )
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.warning("Failed to load team from '%s': %s", dirs[i].name, result)
+
+    async def _load_one_team(self, team_dir: Path):
+        team = await AgentTeam.load(team_dir)
+        self.teams[team.name] = team
 
     def _load_ui_state(self):
         path = self._store_path()
@@ -532,12 +579,28 @@ class StateManager:
         agent = self.agents.get(name)
         if not agent:
             return None
+
+        if agent.tools:
+            tool_names = list(agent.tools.keys())
+        else:
+            builtin = [t.get("name", t.get("source", ""))
+                       for t in self._agent_tool_metas.get(name, [])]
+            mcp = [t.get("tool_name", t.get("name", ""))
+                   for t in self._agent_mcp_metas.get(name, [])]
+            tool_names = [n for n in (*builtin, *mcp) if n]
+
+        if agent.skills:
+            skill_names = list(agent.skills.keys())
+        else:
+            skill_names = [s.get("name", "")
+                           for s in self._agent_skill_metas.get(name, [])]
+
         return AgentConfig(
             name=agent.name,
             modelId=self._agent_model_ids.get(name, ""),
             systemPrompt=agent.system_prompt,
-            toolNames=list(agent.tools.keys()),
-            skillNames=list(agent.skills.keys()),
+            toolNames=tool_names,
+            skillNames=skill_names,
             hookEnabled=bool(agent.hook and agent.hook._enabled),
             basePath=str(agent.base_dir),
             workingDir=getattr(agent, "working_dir", ""),
@@ -562,22 +625,10 @@ class StateManager:
         })
 
         with log_operation(logger, "create_agent", agent_name=config.name):
-            tools, mcp_clients = await self._build_tools_and_mcp_clients(
-                config.toolNames, config.policy
-            )
-
-            skills = []
-            for skill_name in config.skillNames:
-                skill = self.skills.get(skill_name)
-                if skill:
-                    skills.append(skill)
-
             core_kwargs = {
                 "model": model,
                 "base_dir": DATA_DIR / "agents",
                 "system_prompt": config.systemPrompt,
-                "tools": tools,
-                "skills": skills,
             }
             if config.name and config.name.strip():
                 core_kwargs["name"] = config.name.strip()
@@ -585,10 +636,6 @@ class StateManager:
             try:
                 core_config = CoreAgentConfig(**core_kwargs)
                 agent = Agent(core_config)
-
-                if mcp_clients:
-                    agent.register_mcp_clients(mcp_clients)
-
                 agent.save()
             except Exception:
                 agent_dir = DATA_DIR / "agents" / core_kwargs.get("name", "")
@@ -597,12 +644,39 @@ class StateManager:
                     shutil.rmtree(agent_dir, ignore_errors=True)
                 raise
 
-            self.agents[agent.name] = agent
+            actual_name = agent.name
+
+            policy_snake = _policy_to_snake(config.policy) if config.policy else {}
+            policy_config = {"policy": policy_snake} if policy_snake else {}
+
+            builtin_metas = [
+                {"source": tn, "config": policy_config}
+                for tn in config.toolNames if not tn.startswith("mcp:")
+            ]
+            mcp_metas = [
+                {
+                    "source": "mcp",
+                    "config": {
+                        "mcp_server_name": tn[4:],
+                        "tool_name": tn[4:],
+                    },
+                }
+                for tn in config.toolNames if tn.startswith("mcp:")
+            ]
+            skill_metas = [{"name": sn, "path": ""} for sn in config.skillNames]
+
+            self._agent_tool_metas[actual_name] = builtin_metas
+            self._agent_mcp_metas[actual_name] = mcp_metas
+            self._agent_skill_metas[actual_name] = skill_metas
+            self._agent_hook_metas[actual_name] = []
+            self._agent_timer_metas[actual_name] = []
+            self._agent_model_ids[actual_name] = config.modelId
+
+            self.agents[actual_name] = agent
             agent.logger.set_console_level(logging.CRITICAL + 1)
-            self._agent_dispatchers[agent.name] = AgentOutputDispatcher()
-            self._agent_model_ids[agent.name] = config.modelId
-            self._save_agent_model_id(agent.name, config.modelId)
-            await self.start_agent(agent.name)
+            self._agent_dispatchers[actual_name] = AgentOutputDispatcher()
+            self._save_agent_model_id(actual_name, config.modelId)
+            await self.start_agent(actual_name)
             return agent
 
     async def start_agent(self, name: str):
@@ -613,6 +687,10 @@ class StateManager:
         if agent._running:
             logger.info("Agent '%s' already running, skipped", name)
             return
+
+        if name not in self._agent_started:
+            await self._lazy_init_agent(name)
+            self._agent_started.add(name)
 
         dispatcher = self._agent_dispatchers.get(name)
         if not dispatcher:
@@ -632,6 +710,120 @@ class StateManager:
         with log_operation(logger, "start_agent", agent_name=name):
             task = asyncio.create_task(_run())
             self._agent_tasks[name] = task
+            await asyncio.sleep(0)
+
+    # ------------------------------------------------------------------
+    # Lazy agent initialization (deferred from load time to start time)
+    # ------------------------------------------------------------------
+    async def _lazy_init_agent(self, name: str):
+        agent = self.agents[name]
+        policy_raw = getattr(agent, "policy", {}) or {}
+        from BBagent.built_in_tool.policy import Policy
+        policy_obj = Policy(**_policy_to_snake(policy_raw)) if policy_raw else None
+
+        tool_metas = self._agent_tool_metas.get(name, [])
+        mcp_metas = self._agent_mcp_metas.get(name, [])
+
+        builtin_tasks = [
+            asyncio.to_thread(self._build_one_builtin_tool, cfg, policy_obj)
+            for cfg in tool_metas
+        ]
+        mcp_tasks = [
+            self._build_one_mcp(cfg) for cfg in mcp_metas
+        ]
+
+        all_results = await asyncio.gather(
+            *(builtin_tasks + mcp_tasks), return_exceptions=True,
+        )
+
+        tools, mcp_clients = [], {}
+        for result in all_results:
+            if isinstance(result, Exception):
+                logger.warning("Tool build failed for agent '%s': %s", name, result)
+                continue
+            t, mcp_map = result
+            if isinstance(t, list):
+                tools.extend(t)
+            elif t is not None:
+                tools.append(t)
+            mcp_clients.update(mcp_map)
+
+        if tools:
+            agent.add_tools(tools)
+        if mcp_clients:
+            agent.register_mcp_clients(mcp_clients)
+
+        for skill_cfg in self._agent_skill_metas.get(name, []):
+            skill_name = skill_cfg.get("name", "")
+            skill = self.skills.get(skill_name)
+            if skill:
+                agent.add_skills([skill])
+
+        from BBagent.built_in_hook import HOOK_CREATOR
+        for hc in self._agent_hook_metas.get(name, []):
+            source = hc.get("source")
+            hook_config = hc.get("config", {})
+            if source and source in HOOK_CREATOR:
+                HOOK_CREATOR[source](agent, hook_config)
+
+        for tc in self._agent_timer_metas.get(name, []):
+            agent.input.every(
+                seconds=tc.get("seconds", 60),
+                name=tc.get("name", ""),
+                hint=tc.get("hint", ""),
+            )
+
+    def _build_one_builtin_tool(self, cfg: dict, policy_obj) -> tuple:
+        from BBagent.built_in_tool import TOOL_CREATOR
+        source = cfg.get("source", "")
+        tool_cfg_data = cfg.get("config", {})
+
+        builder = TOOL_CREATOR.get(source)
+        if builder is None:
+            builder = TOOL_CREATOR.get(f"built_in.{source}")
+        if builder is None:
+            raise ValueError(f"Unknown tool source: {source}")
+
+        policy_sources = {"bash", "read", "write", "edit", "ls", "find", "grep",
+                          "built_in.bash", "built_in.read", "built_in.write",
+                          "built_in.edit", "built_in.ls", "built_in.find", "built_in.grep"}
+        arg = policy_obj if (source in policy_sources and policy_obj is not None) else tool_cfg_data
+
+        if asyncio.iscoroutinefunction(builder):
+            tool = asyncio.run(builder(arg))
+        else:
+            tool = builder(arg)
+        return (tool, {})
+
+    async def _build_one_mcp(self, cfg: dict) -> tuple:
+        config_data = cfg.get("config", {})
+        server_name = config_data.get("mcp_server_name", "")
+        tool_name = config_data.get("tool_name", "")
+        if not server_name or not tool_name:
+            raise ValueError(f"Invalid MCP config: missing server_name or tool_name")
+
+        mcp_cfg = self.get_mcp(server_name)
+        if not mcp_cfg:
+            raise ValueError(f"MCP server '{server_name}' not found in registry")
+
+        core_cfg = CoreMCPServerConfig(
+            name=mcp_cfg.name, command=mcp_cfg.command,
+            args=mcp_cfg.args, env=mcp_cfg.env,
+        )
+        client = MCPClient(core_cfg)
+        try:
+            await asyncio.wait_for(client.start(), timeout=15.0)
+            await asyncio.wait_for(client.initialize(), timeout=15.0)
+            all_tools = await client.create_tools()
+        except asyncio.TimeoutError:
+            await client.close()
+            raise TimeoutError(f"MCP server '{server_name}' connection timed out")
+        except Exception:
+            await client.close()
+            raise
+
+        matched = [t for t in all_tools if getattr(t, '_mcp_tool_name', '') == tool_name]
+        return (matched, {server_name: client})
 
     async def stop_agent(self, name: str):
         agent = self.agents.get(name)
@@ -689,6 +881,12 @@ class StateManager:
             del self.agents[name]
             self._agent_dispatchers.pop(name, None)
             self._agent_model_ids.pop(name, None)
+            self._agent_started.discard(name)
+            self._agent_tool_metas.pop(name, None)
+            self._agent_mcp_metas.pop(name, None)
+            self._agent_skill_metas.pop(name, None)
+            self._agent_hook_metas.pop(name, None)
+            self._agent_timer_metas.pop(name, None)
 
             agent_dir = DATA_DIR / "agents" / name
             if agent_dir.exists():
@@ -747,6 +945,33 @@ class StateManager:
                 agent.tools[new_tool.name] = new_tool
 
         if "toolNames" in updates:
+            policy_snake = {}
+            for t in agent.tools.values():
+                cfg = getattr(t, "config", {})
+                if cfg.get("policy"):
+                    policy_snake = cfg["policy"]
+                    break
+            if not policy_snake and "policy" in updates:
+                policy_snake = _policy_to_snake(updates["policy"])
+
+            builtin_metas = [
+                {"source": tn, "config": {"policy": policy_snake} if policy_snake else {}}
+                for tn in updates["toolNames"] if not tn.startswith("mcp:")
+            ]
+            mcp_metas = [
+                {
+                    "source": "mcp",
+                    "config": {
+                        "mcp_server_name": tn[4:],
+                        "tool_name": tn[4:],
+                    },
+                }
+                for tn in updates["toolNames"] if tn.startswith("mcp:")
+            ]
+            self._agent_tool_metas[name] = builtin_metas
+            self._agent_mcp_metas[name] = mcp_metas
+            self._agent_started.discard(name)
+
             existing_names = set(agent.tools.keys())
             new_tool_names = [n for n in updates["toolNames"] if n not in existing_names]
             if new_tool_names:
@@ -759,6 +984,9 @@ class StateManager:
                     agent.register_mcp_clients(mcp_clients)
 
         if "skillNames" in updates:
+            self._agent_skill_metas[name] = [{"name": sn, "path": ""} for sn in updates["skillNames"]]
+            self._agent_started.discard(name)
+
             existing_names = set(agent.skills.keys())
             new_skill_names = [n for n in updates["skillNames"] if n not in existing_names]
             new_skills = [self.skills[n] for n in new_skill_names if n in self.skills]

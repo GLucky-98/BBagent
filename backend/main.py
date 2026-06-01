@@ -20,13 +20,7 @@ logger = get_backend_logger("main")
 async def lifespan(app: FastAPI):
     await state_manager.load_all()
     loaded = len(state_manager.agents)
-    logger.info("Starting BBagent API with %d agent(s) loaded", loaded)
-    await state_manager.start_all_agents()
-    running = sum(
-        1 for name in state_manager.agents
-        if state_manager.get_agent_state(name).get("state") not in ("unknown", "ready")
-    )
-    logger.info("Startup complete — %d/%d agent(s) running", running, loaded)
+    logger.info("BBagent API started — %d agent(s) loaded (ready)", loaded)
     yield
     logger.info("BBagent API shutting down")
 
