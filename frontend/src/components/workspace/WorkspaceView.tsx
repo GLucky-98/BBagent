@@ -38,13 +38,13 @@ export function WorkspaceView() {
 
   if (!activeAgentName) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-[--color-muted]/30">
+      <div className="flex-1 flex items-center justify-center bg-(--color-muted)/30">
         <div className="text-center">
-          <Bot className="w-16 h-16 text-[--color-muted-foreground]/30 mx-auto mb-4" />
-          <p className="text-lg font-medium text-[--color-muted-foreground]">
+          <Bot className="w-16 h-16 text-(--color-muted-foreground)/30 mx-auto mb-4" />
+          <p className="text-lg font-medium text-(--color-muted-foreground)">
             Select an agent to start chatting
           </p>
-          <p className="text-sm text-[--color-muted-foreground]/60 mt-1">
+          <p className="text-sm text-(--color-muted-foreground)/60 mt-1">
             Choose an agent from the tabs above, or create a new one
           </p>
         </div>

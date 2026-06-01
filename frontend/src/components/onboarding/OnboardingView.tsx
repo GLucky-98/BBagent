@@ -71,14 +71,14 @@ export function OnboardingView() {
   const steps = useOnboardingSteps();
 
   return (
-    <div className="flex-1 flex items-center justify-center bg-[--color-muted]/30">
-      <div className="w-[520px] bg-white rounded-xl shadow-lg border border-[--color-border] p-8">
+    <div className="flex-1 flex items-center justify-center bg-(--color-muted)/30">
+      <div className="w-[520px] bg-white rounded-xl shadow-lg border border-(--color-border) p-8">
         <div className="text-center mb-8">
-          <Bot className="w-12 h-12 text-[--color-primary] mx-auto mb-3" />
-          <h1 className="text-xl font-semibold text-[--color-foreground]">
+          <Bot className="w-12 h-12 text-(--color-primary) mx-auto mb-3" />
+          <h1 className="text-xl font-semibold text-(--color-foreground)">
             Welcome to BBagent
           </h1>
-          <p className="text-sm text-[--color-muted-foreground] mt-1">
+          <p className="text-sm text-(--color-muted-foreground) mt-1">
             Complete the following steps to get started
           </p>
         </div>
@@ -105,7 +105,7 @@ export function OnboardingView() {
           })}
         </div>
 
-        <p className="text-xs text-[--color-muted-foreground]/60 text-center mt-6">
+        <p className="text-xs text-(--color-muted-foreground)/60 text-center mt-6">
           Tip: At minimum, you need one Model and one Agent to get started
         </p>
       </div>

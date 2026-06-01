@@ -180,7 +180,7 @@ class Agent:
         }
 
     @classmethod
-    def from_config_dict(cls, config_dict: dict, *,
+    async def from_config_dict(cls, config_dict: dict, *,
                          extra_tool_builders: dict = None,
                          extra_hook_builders: dict = None,
                          base_dir: str | Path = None) -> 'Agent':
@@ -209,8 +209,7 @@ class Agent:
 
         if mcp_cfgs:
             from .mcp import restore_mcp_tools
-            loop = asyncio.get_event_loop()
-            mcp_tools, mcp_clients = loop.run_until_complete(restore_mcp_tools(mcp_cfgs))
+            mcp_tools, mcp_clients = await restore_mcp_tools(mcp_cfgs)
             tools.extend(mcp_tools)
 
         for tool_cfg in other_cfgs:
@@ -220,8 +219,7 @@ class Agent:
             if source and source in all_builders:
                 builder = all_builders[source]
                 if asyncio.iscoroutinefunction(builder):
-                    loop = asyncio.get_event_loop()
-                    tool = loop.run_until_complete(builder(tool_cfg_data))
+                    tool = await builder(tool_cfg_data)
                 else:
                     tool = builder(tool_cfg_data)
                 tools.append(tool)
@@ -286,7 +284,7 @@ class Agent:
         return agent
 
     @classmethod
-    def load(cls, base_dir: str | Path, *,
+    async def load(cls, base_dir: str | Path, *,
              extra_tool_builders: dict = None,
              extra_hook_builders: dict = None) -> 'Agent':
         base_path = Path(base_dir)
@@ -297,7 +295,7 @@ class Agent:
         with open(config_path, 'r', encoding='utf-8') as f:
             config_dict = yaml.safe_load(f)
 
-        return cls.from_config_dict(
+        return await cls.from_config_dict(
             config_dict,
             extra_tool_builders=extra_tool_builders,
             extra_hook_builders=extra_hook_builders,
@@ -587,8 +585,17 @@ Your available skills are:
                     self.state = AgentState.Running
                     try:
                         await self._handle_event(event)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self.logger.error(
+                            f"Unhandled error in event loop: {e}",
+                            exc_info=True,
+                        )
+                        try:
+                            await self._emit({'type': 'error', 'content': str(e)})
+                            await self._emit({'type': 'agent_state', 'state': 'error'})
+                        except Exception:
+                            pass
+                        self.state = AgentState.Error
                     if self._running:
                         self.state = AgentState.Waiting
             finally:

@@ -36,23 +36,23 @@ export function SettingsPopover({
   onClose,
 }: SettingsPopoverProps) {
   return (
-    <div className="w-[800px] h-[80vh] bg-white rounded-xl shadow-2xl border border-[--color-border] flex flex-col overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[--color-border] shrink-0">
+    <div className="w-[800px] h-[80vh] bg-white rounded-xl shadow-2xl border border-(--color-border) flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-(--color-border) shrink-0">
         <div className="flex items-center gap-2">
-          <Settings2 className="w-4 h-4 text-[--color-muted-foreground]" />
-          <span className="text-sm font-semibold text-[--color-foreground]">
+          <Settings2 className="w-4 h-4 text-(--color-muted-foreground)" />
+          <span className="text-sm font-semibold text-(--color-foreground)">
             Settings
           </span>
         </div>
         <button
           onClick={onClose}
-          className="p-1 rounded-md hover:bg-[--color-secondary] transition-colors"
+          className="p-1 rounded-md hover:bg-(--color-secondary) transition-colors"
         >
-          <X className="w-4 h-4 text-[--color-muted-foreground]" />
+          <X className="w-4 h-4 text-(--color-muted-foreground)" />
         </button>
       </div>
 
-      <div className="flex border-b border-[--color-border] px-4 shrink-0">
+      <div className="flex border-b border-(--color-border) px-4 shrink-0">
         {SETTINGS_TABS.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
@@ -61,7 +61,7 @@ export function SettingsPopover({
               onClick={() => onTabChange(tab.id)}
               className={cn(
                 "px-4 py-2 text-sm border-b-2 transition-colors rounded-t-md",
-                !isActive && "text-[--color-muted-foreground] hover:text-[--color-foreground] hover:bg-[--color-secondary]/50"
+                !isActive && "text-(--color-muted-foreground) hover:text-(--color-foreground) hover:bg-(--color-secondary)/50"
               )}
               style={{
                 ...(isActive ? tabActiveStyle : tabInactiveStyle),

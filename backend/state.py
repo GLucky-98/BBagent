@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -75,9 +76,10 @@ class StateManager:
 
         self._agent_dispatchers: Dict[str, AgentOutputDispatcher] = {}
         self._agent_tasks: Dict[str, asyncio.Task] = {}
+        self._agent_model_ids: Dict[str, str] = {}
 
         self._ensure_data_dir()
-        self.load_all()
+        self._loaded = False
 
     # ------------------------------------------------------------------
     # 路径 helpers
@@ -109,14 +111,17 @@ class StateManager:
     # ------------------------------------------------------------------
     # 加载
     # ------------------------------------------------------------------
-    def load_all(self):
+    async def load_all(self):
+        if self._loaded:
+            return
         self._load_models()
         self._load_mcps()
         self._load_prompts()
         self._load_skills()
-        self._load_agents()
-        self._load_teams()
+        await self._load_agents()
+        await self._load_teams()
         self._load_ui_state()
+        self._loaded = True
         logger.info("StateManager loaded all data")
 
     def _load_models(self):
@@ -198,7 +203,7 @@ class StateManager:
             except Exception as e:
                 logger.warning(f"Failed to load skills from {d}: {e}")
 
-    def _load_agents(self):
+    async def _load_agents(self):
         agents_dir = DATA_DIR / "agents"
         if not agents_dir.exists():
             return
@@ -211,9 +216,18 @@ class StateManager:
             if not config_path.exists():
                 continue
             try:
-                agent = Agent.load(agent_dir)
+                agent = await Agent.load(agent_dir)
                 self.agents[agent.name] = agent
+                agent.logger.set_console_level(logging.CRITICAL + 1)
                 self._agent_dispatchers[agent.name] = AgentOutputDispatcher()
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        raw = yaml.safe_load(f) or {}
+                    model_id = raw.get("model_id", "")
+                    if model_id:
+                        self._agent_model_ids[agent.name] = model_id
+                except Exception:
+                    pass
                 loaded += 1
                 logger.info(f"Loaded agent '{agent.name}' from {agent_dir.name}")
             except Exception as e:
@@ -221,7 +235,7 @@ class StateManager:
                 logger.error("Failed to load agent from %s: %s", agent_dir.name, e, exc_info=True)
         logger.info("Agent loading complete: %d loaded, %d failed", loaded, failed)
 
-    def _load_teams(self):
+    async def _load_teams(self):
         teams_dir = DATA_DIR / "teams"
         if not teams_dir.exists():
             return
@@ -232,7 +246,7 @@ class StateManager:
             if not config_path.exists():
                 continue
             try:
-                team = AgentTeam.load(team_dir)
+                team = await AgentTeam.load(team_dir)
                 self.teams[team.name] = team
             except Exception as e:
                 logger.warning(f"Failed to load team from {team_dir}: {e}")
@@ -520,7 +534,7 @@ class StateManager:
             return None
         return AgentConfig(
             name=agent.name,
-            modelId=agent.model.to_config_dict().get("provider", ""),
+            modelId=self._agent_model_ids.get(name, ""),
             systemPrompt=agent.system_prompt,
             toolNames=list(agent.tools.keys()),
             skillNames=list(agent.skills.keys()),
@@ -568,15 +582,26 @@ class StateManager:
             if config.name and config.name.strip():
                 core_kwargs["name"] = config.name.strip()
 
-            core_config = CoreAgentConfig(**core_kwargs)
-            agent = Agent(core_config)
+            try:
+                core_config = CoreAgentConfig(**core_kwargs)
+                agent = Agent(core_config)
 
-            if mcp_clients:
-                agent.register_mcp_clients(mcp_clients)
+                if mcp_clients:
+                    agent.register_mcp_clients(mcp_clients)
 
-            agent.save()
+                agent.save()
+            except Exception:
+                agent_dir = DATA_DIR / "agents" / core_kwargs.get("name", "")
+                if agent_dir and agent_dir.exists():
+                    import shutil
+                    shutil.rmtree(agent_dir, ignore_errors=True)
+                raise
+
             self.agents[agent.name] = agent
+            agent.logger.set_console_level(logging.CRITICAL + 1)
             self._agent_dispatchers[agent.name] = AgentOutputDispatcher()
+            self._agent_model_ids[agent.name] = config.modelId
+            self._save_agent_model_id(agent.name, config.modelId)
             await self.start_agent(agent.name)
             return agent
 
@@ -646,18 +671,24 @@ class StateManager:
         if total > 0:
             logger.info("Auto-start: %d/%d started, %d failed", started, total, failed)
 
-    def delete_agent(self, name: str) -> bool:
+    async def delete_agent(self, name: str) -> bool:
         agent = self.agents.get(name)
         if not agent:
             raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{name}' not found")
 
         with log_operation(logger, "delete_agent", agent_name=name):
+            try:
+                await self.stop_agent(name)
+            except Exception as e:
+                logger.warning("Error stopping agent '%s' before delete: %s", name, e)
+
             task = self._agent_tasks.pop(name, None)
             if task and not task.done():
                 task.cancel()
 
             del self.agents[name]
             self._agent_dispatchers.pop(name, None)
+            self._agent_model_ids.pop(name, None)
 
             agent_dir = DATA_DIR / "agents" / name
             if agent_dir.exists():
@@ -693,6 +724,8 @@ class StateManager:
                 })
                 agent.change_model(model)
                 logger.info("Agent '%s': model changed to '%s'", name, updates["modelId"])
+                self._agent_model_ids[name] = updates["modelId"]
+                self._save_agent_model_id(name, updates["modelId"])
             else:
                 logger.warning("Agent '%s': model '%s' not found, keeping current", name, updates["modelId"])
 
@@ -738,14 +771,34 @@ class StateManager:
         return agent
 
     # ------------------------------------------------------------------
+    # Agent model_id persistence
+    # ------------------------------------------------------------------
+    def _save_agent_model_id(self, name: str, model_id: str):
+        agent = self.agents.get(name)
+        if not agent:
+            return
+        config_path = agent.base_dir / "agent_config.yaml"
+        if not config_path.exists():
+            return
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                raw = yaml.safe_load(f) or {}
+            raw["model_id"] = model_id
+            with open(config_path, 'w', encoding='utf-8') as f:
+                yaml.dump(raw, f, default_flow_style=False, allow_unicode=True)
+        except Exception as e:
+            logger.warning("Failed to save model_id for agent '%s': %s", name, e)
+
+    # ------------------------------------------------------------------
     # Session management
     # ------------------------------------------------------------------
     def get_agent_state(self, name: str) -> dict:
         agent = self.agents.get(name)
         if not agent:
             return {"state": "unknown", "session_id": ""}
+        raw_state = str(agent.state) if agent.state else "Ready"
         return {
-            "state": str(agent.state) if agent.state else AgentState.Ready,
+            "state": raw_state.lower(),
             "session_id": agent.session.id if agent.session else "",
         }
 

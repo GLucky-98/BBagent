@@ -24,11 +24,11 @@ export function AppIcon() {
         onClick={handleToggle}
         className={cn(
           "flex items-center justify-center w-12 h-12 shrink-0",
-          "hover:bg-[--color-secondary] rounded-md transition-colors",
-          isSettingsOpen && "bg-[--color-secondary]"
+          "hover:bg-(--color-secondary) rounded-md transition-colors",
+          isSettingsOpen && "bg-(--color-secondary)"
         )}
       >
-        <Bot className="w-6 h-6 text-[--color-primary]" />
+        <Bot className="w-6 h-6 text-(--color-primary)" />
       </button>
 
       {isSettingsOpen && (

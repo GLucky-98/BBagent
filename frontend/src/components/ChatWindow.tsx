@@ -15,7 +15,7 @@ function MessageBubble({ message }: { message: Message }) {
   if (isSystem) {
     return (
       <div className="flex justify-center mb-4">
-        <span className="text-xs text-[--color-muted-foreground] bg-[--color-muted] px-3 py-1 rounded-full">
+        <span className="text-xs text-(--color-muted-foreground) bg-(--color-muted) px-3 py-1 rounded-full">
           {message.content}
         </span>
       </div>
@@ -53,12 +53,12 @@ function MessageBubble({ message }: { message: Message }) {
 
   return (
     <div className={cn("flex gap-3 mb-4", isUser ? "flex-row-reverse" : "flex-row")}>
-      <div className={cn("w-8 h-8 rounded-full flex items-center justify-center shrink-0", isUser ? "bg-[--color-primary] text-[--color-primary-foreground]" : "bg-[--color-secondary]")}>
+      <div className={cn("w-8 h-8 rounded-full flex items-center justify-center shrink-0", isUser ? "bg-(--color-primary) text-(--color-primary-foreground)" : "bg-(--color-secondary)")}>
         {isUser ? <User size={16} /> : <Bot size={16} />}
       </div>
-      <div className={cn("max-w-[70%] rounded-2xl px-4 py-2.5", isUser ? "bg-[--color-primary] text-[--color-primary-foreground] rounded-tr-sm" : "bg-[--color-secondary] rounded-tl-sm")}>
+      <div className={cn("max-w-[70%] rounded-2xl px-4 py-2.5", isUser ? "bg-(--color-primary) text-(--color-primary-foreground) rounded-tr-sm" : "bg-(--color-secondary) rounded-tl-sm")}>
         <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-        <span className={cn("text-[10px] mt-1 block", isUser ? "text-[--color-primary-foreground]/60" : "text-[--color-muted-foreground]")}>
+        <span className={cn("text-[10px] mt-1 block", isUser ? "text-(--color-primary-foreground)/60" : "text-(--color-muted-foreground)")}>
           {new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
       </div>
@@ -268,7 +268,7 @@ export function ChatWindow() {
 
   if (!selectedAgent) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-[--color-background] text-[--color-muted-foreground]">
+      <div className="flex-1 flex flex-col items-center justify-center bg-(--color-background) text-(--color-muted-foreground)">
         <Bot size={48} className="mb-4 opacity-30" />
         <p className="text-lg font-medium">No agent selected</p>
         <p className="text-sm mt-1">Select an agent to start chatting</p>
@@ -277,15 +277,15 @@ export function ChatWindow() {
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-[--color-background]">
-      <header className="px-6 py-4 bg-white border-b border-[--color-border]">
+    <div className="flex-1 flex flex-col min-h-0 bg-(--color-background)">
+      <header className="px-6 py-4 bg-white border-b border-(--color-border)">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-[--color-primary]/10 flex items-center justify-center">
-            <Bot size={20} className="text-[--color-primary]" />
+          <div className="w-10 h-10 rounded-full bg-(--color-primary)/10 flex items-center justify-center">
+            <Bot size={20} className="text-(--color-primary)" />
           </div>
           <div className="flex-1">
-            <h2 className="font-semibold text-[--color-foreground]">{selectedAgent.name}</h2>
-            <p className="text-xs text-[--color-muted-foreground]">
+            <h2 className="font-semibold text-(--color-foreground)">{selectedAgent.name}</h2>
+            <p className="text-xs text-(--color-muted-foreground)">
               {selectedAgent.type === "team" ? "Agent Team" : "Single Agent"}{agentModel ? ` \u2022 ${agentModel.name}` : ""}
               <span className={cn(
                 "ml-2 inline-block w-1.5 h-1.5 rounded-full",
@@ -301,7 +301,7 @@ export function ChatWindow() {
           <div className="relative" ref={sessionDropdownRef}>
             <button
               onClick={() => { setSessionDropdownOpen(!sessionDropdownOpen); }}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border border-[--color-border] hover:bg-[--color-secondary] transition-colors"
+              className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border border-(--color-border) hover:bg-(--color-secondary) transition-colors"
             >
               <span className="max-w-[120px] truncate">
                 {currentSessionId ? currentSessionId.substring(0, 19) : "No session"}
@@ -309,7 +309,7 @@ export function ChatWindow() {
               <ChevronDown size={12} />
             </button>
             {sessionDropdownOpen && (
-              <div className="absolute right-0 top-full mt-1 w-64 bg-white rounded-lg shadow-lg border border-[--color-border] z-50 max-h-60 overflow-y-auto">
+              <div className="absolute right-0 top-full mt-1 w-64 bg-white rounded-lg shadow-lg border border-(--color-border) z-50 max-h-60 overflow-y-auto">
                 {agentSessions.map((s: SessionInfo) => (
                   <button
                     key={s.id}
@@ -318,26 +318,26 @@ export function ChatWindow() {
                       setSessionDropdownOpen(false);
                     }}
                     className={cn(
-                      "w-full text-left px-3 py-2 text-xs hover:bg-[--color-secondary] transition-colors",
-                      s.isActive && "bg-[--color-primary]/10 text-[--color-primary]"
+                      "w-full text-left px-3 py-2 text-xs hover:bg-(--color-secondary) transition-colors",
+                      s.isActive && "bg-(--color-primary)/10 text-(--color-primary)"
                     )}
                   >
                     <div className="font-medium truncate">{s.id.substring(0, 19)}</div>
-                    <div className="text-[--color-muted-foreground]">
+                    <div className="text-(--color-muted-foreground)">
                       {s.turnCount} turns {s.isActive && "(active)"}
                     </div>
                   </button>
                 ))}
                 {agentSessions.length === 0 && (
-                  <div className="px-3 py-2 text-xs text-[--color-muted-foreground]">No sessions found</div>
+                  <div className="px-3 py-2 text-xs text-(--color-muted-foreground)">No sessions found</div>
                 )}
-                <div className="border-t border-[--color-border]">
+                <div className="border-t border-(--color-border)">
                   <button
                     onClick={() => {
                       createNewSession(selectedAgent.name);
                       setSessionDropdownOpen(false);
                     }}
-                    className="w-full text-left px-3 py-2 text-xs text-[--color-primary] hover:bg-[--color-secondary] flex items-center gap-1"
+                    className="w-full text-left px-3 py-2 text-xs text-(--color-primary) hover:bg-(--color-secondary) flex items-center gap-1"
                   >
                     <Plus size={12} />
                     New Session
@@ -350,8 +350,8 @@ export function ChatWindow() {
       </header>
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {(!selectedAgent.messages || selectedAgent.messages.length === 0) ? (
-          <div className="h-full flex flex-col items-center justify-center text-[--color-muted-foreground]">
-            <div className="w-16 h-16 rounded-full bg-[--color-secondary] flex items-center justify-center mb-4"><Bot size={28} /></div>
+          <div className="h-full flex flex-col items-center justify-center text-(--color-muted-foreground)">
+            <div className="w-16 h-16 rounded-full bg-(--color-secondary) flex items-center justify-center mb-4"><Bot size={28} /></div>
             <p className="text-sm">Start a conversation</p>
             <p className="text-xs mt-1">Send a message to begin</p>
           </div>
@@ -390,21 +390,21 @@ export function ChatWindow() {
           </div>
         </div>
       ) : (
-        <div className="p-4 bg-white border-t border-[--color-border]">
+        <div className="p-4 bg-white border-t border-(--color-border)">
           <div className="flex items-end gap-3">
             <div className="flex-1 relative">
               <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Type a message..." rows={1}
-                className={cn("w-full px-4 py-3 rounded-xl border border-[--color-border]", "bg-[--color-background] resize-none", "focus:outline-none focus:ring-2 focus:ring-[--color-ring] focus:border-transparent", "placeholder:text-[--color-muted-foreground]")}
+                className={cn("w-full px-4 py-3 rounded-xl border border-(--color-border)", "bg-(--color-background) resize-none", "focus:outline-none focus:ring-2 focus:ring-(--color-ring) focus:border-transparent", "placeholder:text-(--color-muted-foreground)")}
                 style={{ minHeight: "48px", maxHeight: "120px" }} />
             </div>
             {isStreaming ? (
               <button onClick={handleInterrupt}
-                className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-[--color-border] bg-red-500 text-white transition-all duration-200 hover:opacity-90">
+                className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-(--color-border) bg-red-500 text-white transition-all duration-200 hover:opacity-90">
                 <X size={18} />
               </button>
             ) : (
               <button onClick={handleSend} disabled={!input.trim()}
-                className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-[--color-border]", "bg-[--color-primary] text-[--color-primary-foreground]", "transition-all duration-200", "hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed")}>
+                className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-(--color-border)", "bg-(--color-primary) text-(--color-primary-foreground)", "transition-all duration-200", "hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed")}>
                 <Send size={18} />
               </button>
             )}

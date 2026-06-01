@@ -27,7 +27,7 @@ function TreeNode({
       <>
         <div
           className={cn(
-            "flex items-center gap-1 px-2 py-1 cursor-pointer hover:bg-[--color-secondary]/50 text-sm select-none"
+            "flex items-center gap-1 px-2 py-1 cursor-pointer hover:bg-(--color-secondary)/50 text-sm select-none"
           )}
           style={{ paddingLeft: indent + 8 }}
           onClick={() => {
@@ -64,7 +64,7 @@ function TreeNode({
   return (
     <div
       className={cn(
-        "flex items-center gap-1 px-2 py-1 cursor-pointer hover:bg-[--color-secondary]/50 text-sm select-none"
+        "flex items-center gap-1 px-2 py-1 cursor-pointer hover:bg-(--color-secondary)/50 text-sm select-none"
       )}
       style={{ paddingLeft: indent + 8 }}
       onClick={async () => {
@@ -95,7 +95,7 @@ function TreeNode({
       }}
     >
       <span className="w-3.5 h-3.5 shrink-0" />
-      <FileIcon className="w-4 h-4 text-[--color-muted-foreground] shrink-0" />
+      <FileIcon className="w-4 h-4 text-(--color-muted-foreground) shrink-0" />
       <span className="truncate">{node.name}</span>
     </div>
   );
@@ -134,8 +134,8 @@ export function BasedirTree() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[--color-muted-foreground] border-b border-[--color-border] shrink-0">
-        <span className="text-[10px] text-[--color-muted-foreground] uppercase tracking-wide mr-1">Base Path</span>
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-(--color-muted-foreground) border-b border-(--color-border) shrink-0">
+        <span className="text-[10px] text-(--color-muted-foreground) uppercase tracking-wide mr-1">Base Path</span>
         <FolderOpen className="w-3.5 h-3.5" />
         <span className="truncate">{basePath || "Not set"}</span>
       </div>
@@ -143,14 +143,14 @@ export function BasedirTree() {
       <div className="flex-1 overflow-y-auto py-1">
         {loading ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-5 h-5 animate-spin text-[--color-muted-foreground]" />
+            <Loader2 className="w-5 h-5 animate-spin text-(--color-muted-foreground)" />
           </div>
         ) : !basePath ? (
-          <div className="px-3 py-8 text-center text-xs text-[--color-muted-foreground]">
+          <div className="px-3 py-8 text-center text-xs text-(--color-muted-foreground)">
             No agent selected
           </div>
         ) : !fileTree ? (
-          <div className="px-3 py-8 text-center text-xs text-[--color-muted-foreground]">
+          <div className="px-3 py-8 text-center text-xs text-(--color-muted-foreground)">
             Unable to load file tree
           </div>
         ) : (

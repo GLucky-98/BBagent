@@ -18,7 +18,7 @@ export const PanelA_FilePanel = forwardRef<HTMLDivElement, Props>(
       return (
         <div
           ref={ref}
-          className="shrink-0 border-r border-[--color-border] bg-white flex items-center justify-center text-sm text-[--color-muted-foreground]"
+          className="shrink-0 border-r border-(--color-border) bg-white flex items-center justify-center text-sm text-(--color-muted-foreground)"
           style={{ width }}
         >
           Select an agent
@@ -29,7 +29,7 @@ export const PanelA_FilePanel = forwardRef<HTMLDivElement, Props>(
     return (
       <div
         ref={ref}
-        className="shrink-0 border-r border-[--color-border] bg-white flex flex-col overflow-hidden"
+        className="shrink-0 border-r border-(--color-border) bg-white flex flex-col overflow-hidden"
         style={{ width }}
       >
         <div ref={innerRef} className="flex flex-col flex-1 min-h-0">

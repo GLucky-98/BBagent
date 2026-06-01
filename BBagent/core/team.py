@@ -197,7 +197,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             agent.save()
 
     @classmethod
-    def load(cls, base_dir: str | Path, *,
+    async def load(cls, base_dir: str | Path, *,
              extra_tool_builders: dict = None) -> 'AgentTeam':
         base_path = Path(base_dir)
         config_path = base_path / "team_config.yaml"
@@ -218,7 +218,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         for agent_name, agent_cfg in agents_config.items():
             config_path_str = agent_cfg.get("config_path")
             if config_path_str and Path(config_path_str).exists():
-                agent = Agent.load(
+                agent = await Agent.load(
                     Path(config_path_str).parent,
                     extra_tool_builders=extra_tool_builders,
                 )

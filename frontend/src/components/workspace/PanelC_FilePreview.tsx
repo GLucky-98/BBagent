@@ -12,7 +12,7 @@ function getFileUrl(path: string): string {
 
 function LoadingViewer() {
   return (
-    <div className="flex flex-col items-center justify-center h-full text-[--color-muted-foreground] p-8 gap-3">
+    <div className="flex flex-col items-center justify-center h-full text-(--color-muted-foreground) p-8 gap-3">
       <Loader2 className="w-8 h-8 animate-spin" />
       <span className="text-sm">Loading file...</span>
     </div>
@@ -21,7 +21,7 @@ function LoadingViewer() {
 
 function ErrorViewer({ message }: { message: string }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full text-[--color-muted-foreground] p-8 gap-3">
+    <div className="flex flex-col items-center justify-center h-full text-(--color-muted-foreground) p-8 gap-3">
       <AlertCircle className="w-10 h-10 text-red-400" />
       <p className="text-sm font-medium text-red-500">Failed to load file</p>
       <p className="text-xs text-center max-w-[280px]">{message}</p>
@@ -58,7 +58,7 @@ function CodeViewer({
   return (
     <Highlight theme={themes.github} code={content} language={lang}>
       {({ tokens, getLineProps, getTokenProps }) => (
-        <pre className="p-4 text-xs font-mono leading-relaxed overflow-auto bg-[--color-background]">
+        <pre className="p-4 text-xs font-mono leading-relaxed overflow-auto bg-(--color-background)">
           <code>
             {tokens.map((line, i) => (
               <div
@@ -66,7 +66,7 @@ function CodeViewer({
                 {...getLineProps({ line })}
                 className="table-row"
               >
-                <span className="table-cell text-right pr-4 text-[--color-muted-foreground]/40 select-none w-12">
+                <span className="table-cell text-right pr-4 text-(--color-muted-foreground)/40 select-none w-12">
                   {i + 1}
                 </span>
                 <span className="table-cell">
@@ -85,7 +85,7 @@ function CodeViewer({
 
 function MarkdownViewer({ content }: { content: string }) {
   return (
-    <div className="p-4 text-sm leading-relaxed text-[--color-foreground] prose prose-sm max-w-none overflow-auto">
+    <div className="p-4 text-sm leading-relaxed text-(--color-foreground) prose prose-sm max-w-none overflow-auto">
       <ReactMarkdown>{content}</ReactMarkdown>
     </div>
   );
@@ -93,7 +93,7 @@ function MarkdownViewer({ content }: { content: string }) {
 
 function ImageViewer({ path, name }: { path: string; name: string }) {
   return (
-    <div className="flex items-center justify-center h-full p-4 bg-[--color-muted]/20">
+    <div className="flex items-center justify-center h-full p-4 bg-(--color-muted)/20">
       <img
         src={getFileUrl(path)}
         alt={name}
@@ -118,10 +118,10 @@ function PdfViewer({ path, name }: { path: string; name: string }) {
 
 function UnsupportedViewer({ fileName }: { fileName: string }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full text-[--color-muted-foreground] p-8">
-      <File className="w-12 h-12 mb-3 text-[--color-muted-foreground]/30" />
+    <div className="flex flex-col items-center justify-center h-full text-(--color-muted-foreground) p-8">
+      <File className="w-12 h-12 mb-3 text-(--color-muted-foreground)/30" />
       <p className="text-sm font-medium">Preview not available</p>
-      <p className="text-xs text-[--color-muted-foreground]/60 mt-1 text-center">
+      <p className="text-xs text-(--color-muted-foreground)/60 mt-1 text-center">
         &quot;{fileName}&quot; cannot be previewed in the browser.
         <br />
         Open in an external editor to view its contents.
@@ -178,16 +178,16 @@ export const PanelC_FilePreview = forwardRef<HTMLDivElement, Props>(
     return (
       <div
         ref={ref}
-        className="shrink-0 border-l border-[--color-border] bg-white flex flex-col overflow-hidden"
+        className="shrink-0 border-l border-(--color-border) bg-white flex flex-col overflow-hidden"
         style={{ width }}
       >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[--color-border] shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-(--color-border) shrink-0">
         <span className="text-sm font-medium truncate flex-1">
           {previewFile.name}
         </span>
         <button
           onClick={closeFilePreview}
-          className="p-1 rounded hover:bg-[--color-secondary] text-[--color-muted-foreground] shrink-0"
+          className="p-1 rounded hover:bg-(--color-secondary) text-(--color-muted-foreground) shrink-0"
         >
           <X className="w-4 h-4" />
         </button>

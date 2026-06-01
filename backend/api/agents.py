@@ -44,7 +44,7 @@ async def create_agent(config: AgentConfig):
                             f"Agent '{config.name}' already exists")
     agent = await state_manager.create_agent(config)
     data = state_manager.get_agent_config(agent.name).model_dump(mode="json")
-    data["state"] = "Waiting"
+    data["state"] = "waiting"
     data["currentSessionId"] = agent.session.id
     data["messages"] = []
     return data
@@ -70,7 +70,7 @@ async def delete_agent(name: str, delete_files: bool = Query(default=False)):
         if agent:
             base_path = getattr(agent, "base_dir", None)
 
-    state_manager.delete_agent(name)
+    await state_manager.delete_agent(name)
 
     if delete_files and base_path:
         bp = Path(str(base_path)).expanduser().resolve()

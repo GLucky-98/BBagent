@@ -18,6 +18,7 @@ logger = get_backend_logger("main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await state_manager.load_all()
     loaded = len(state_manager.agents)
     logger.info("Starting BBagent API with %d agent(s) loaded", loaded)
     await state_manager.start_all_agents()

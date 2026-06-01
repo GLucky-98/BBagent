@@ -47,10 +47,10 @@ export function Splitter({
 
   return (
     <div
-      className="h-1 bg-[--color-border] hover:bg-[--color-primary]/50 cursor-row-resize shrink-0 transition-colors relative group"
+      className="h-1 bg-(--color-border) hover:bg-(--color-primary)/50 cursor-row-resize shrink-0 transition-colors relative group"
       onMouseDown={handleMouseDown}
     >
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-1 rounded-full bg-[--color-muted-foreground]/30 group-hover:bg-[--color-primary]/60 transition-colors" />
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-1 rounded-full bg-(--color-muted-foreground)/30 group-hover:bg-(--color-primary)/60 transition-colors" />
     </div>
   );
 }
@@ -123,10 +123,10 @@ export function PanelSplitter({
 
   return (
     <div
-      className="w-1 bg-[--color-border] hover:bg-[--color-primary]/50 cursor-col-resize shrink-0 transition-colors relative group"
+      className="w-1 bg-(--color-border) hover:bg-(--color-primary)/50 cursor-col-resize shrink-0 transition-colors relative group"
       onMouseDown={handleMouseDown}
     >
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-8 rounded-full bg-[--color-muted-foreground]/30 group-hover:bg-[--color-primary]/60 transition-colors" />
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-8 rounded-full bg-(--color-muted-foreground)/30 group-hover:bg-(--color-primary)/60 transition-colors" />
     </div>
   );
 }

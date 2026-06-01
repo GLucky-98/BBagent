@@ -17,17 +17,17 @@ function TypeSelection({ onSelect }: { onSelect: (t: "agent" | "team") => void }
   return (
     <div className="p-6">
       <h2 className="text-lg font-semibold mb-1">Create New Agent</h2>
-      <p className="text-sm text-[--color-muted-foreground] mb-6">Choose the type of agent to create</p>
+      <p className="text-sm text-(--color-muted-foreground) mb-6">Choose the type of agent to create</p>
       <div className="grid grid-cols-2 gap-4">
         <button onClick={() => onSelect("agent")}
-          className="p-6 rounded-xl border-2 border-[--color-border] hover:border-[--color-primary] hover:bg-[--color-primary]/5 transition-all flex flex-col items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-[--color-primary]/10 flex items-center justify-center"><Bot size={24} className="text-[--color-primary]" /></div>
-          <div className="text-center"><p className="font-medium">Single Agent</p><p className="text-xs text-[--color-muted-foreground] mt-1">Create a standalone agent</p></div>
+          className="p-6 rounded-xl border-2 border-(--color-border) hover:border-(--color-primary) hover:bg-(--color-primary)/5 transition-all flex flex-col items-center gap-3">
+          <div className="w-12 h-12 rounded-full bg-(--color-primary)/10 flex items-center justify-center"><Bot size={24} className="text-(--color-primary)" /></div>
+          <div className="text-center"><p className="font-medium">Single Agent</p><p className="text-xs text-(--color-muted-foreground) mt-1">Create a standalone agent</p></div>
         </button>
         <button onClick={() => onSelect("team")}
-          className="p-6 rounded-xl border-2 border-[--color-border] hover:border-[--color-primary] hover:bg-[--color-primary]/5 transition-all flex flex-col items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-[--color-primary]/10 flex items-center justify-center"><Users size={24} className="text-[--color-primary]" /></div>
-          <div className="text-center"><p className="font-medium">Agent Team</p><p className="text-xs text-[--color-muted-foreground] mt-1">Create a team of agents</p></div>
+          className="p-6 rounded-xl border-2 border-(--color-border) hover:border-(--color-primary) hover:bg-(--color-primary)/5 transition-all flex flex-col items-center gap-3">
+          <div className="w-12 h-12 rounded-full bg-(--color-primary)/10 flex items-center justify-center"><Users size={24} className="text-(--color-primary)" /></div>
+          <div className="text-center"><p className="font-medium">Agent Team</p><p className="text-xs text-(--color-muted-foreground) mt-1">Create a team of agents</p></div>
         </button>
       </div>
     </div>
@@ -105,12 +105,12 @@ function SingleAgentForm({
       <div className="shrink-0 flex items-start justify-between mb-4 pr-10">
         <div>
           <h2 className="text-lg font-semibold mb-1">{initialData ? "Edit Agent" : "Configure Agent"}</h2>
-          <p className="text-sm text-[--color-muted-foreground]">{initialData ? "Update agent configuration" : "Fill in the agent configuration details"}</p>
+          <p className="text-sm text-(--color-muted-foreground)">{initialData ? "Update agent configuration" : "Fill in the agent configuration details"}</p>
           {saveError && <p className="text-sm text-red-500 mt-1">{saveError}</p>}
         </div>
         <button onClick={() => onSave({ ...form, policy })}
           disabled={!form.modelId || saving}
-          className="px-8 py-2.5 rounded-lg border border-[--color-primary] bg-[--color-primary] text-[--color-primary-foreground] text-sm hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shrink-0 shadow-sm">
+          className="px-8 py-2.5 rounded-lg border border-(--color-primary) bg-(--color-primary) text-(--color-primary-foreground) text-sm hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shrink-0 shadow-sm">
           {saving ? "Saving..." : initialData ? "Save Changes" : "Create Agent"}
         </button>
       </div>
@@ -120,13 +120,13 @@ function SingleAgentForm({
           <div>
             <label className="block text-sm font-medium mb-1.5">Name</label>
             <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="My Agent (leave empty for auto-generated)" className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring]" />
+              placeholder="My Agent (leave empty for auto-generated)" className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring)" />
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-1.5">Model</label>
             <select value={form.modelId} onChange={(e) => setForm({ ...form, modelId: e.target.value })}
-              className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring]">
+              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring)">
               <option value="">Select a model</option>
               {models.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.provider})</option>)}
             </select>
@@ -136,36 +136,36 @@ function SingleAgentForm({
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-sm font-medium">System Prompt</label>
               <button onClick={() => { setShowPromptPicker(!showPromptPicker); setPromptFilter(""); }}
-                className="flex items-center gap-1 text-xs text-[--color-primary] hover:underline">
+                className="flex items-center gap-1 text-xs text-(--color-primary) hover:underline">
                 <FileText className="w-3 h-3" />
                 {showPromptPicker ? "Hide Prompt Library" : "From Prompt Library"}
               </button>
             </div>
             {showPromptPicker && (
-              <div className="mb-2 border border-[--color-border] rounded-lg overflow-hidden">
-                <div className="flex items-center gap-1 px-3 py-2 border-b border-[--color-border] bg-[--color-muted]/20">
-                  <Search className="w-3 h-3 text-[--color-muted-foreground] shrink-0" />
+              <div className="mb-2 border border-(--color-border) rounded-lg overflow-hidden">
+                <div className="flex items-center gap-1 px-3 py-2 border-b border-(--color-border) bg-(--color-muted)/20">
+                  <Search className="w-3 h-3 text-(--color-muted-foreground) shrink-0" />
                   <input type="text" value={promptFilter} onChange={(e) => setPromptFilter(e.target.value)}
                     placeholder="Search by prompt title..." className="flex-1 text-xs bg-transparent outline-none" />
                   <button
                     type="button"
                     onClick={() => { setShowAllPrompts(!showAllPrompts); setPromptFilter(""); }}
-                    className="text-[10px] px-1.5 py-0.5 rounded border border-[--color-border] hover:bg-[--color-secondary] shrink-0"
+                    className="text-[10px] px-1.5 py-0.5 rounded border border-(--color-border) hover:bg-(--color-secondary) shrink-0"
                   >
                     {showAllPrompts ? "Search" : "Browse All"}
                   </button>
                 </div>
                 <div className="max-h-[120px] overflow-y-auto">
                   {prompts.length === 0 ? (
-                    <div className="px-3 py-4 text-center text-xs text-[--color-muted-foreground]">No prompts available</div>
+                    <div className="px-3 py-4 text-center text-xs text-(--color-muted-foreground)">No prompts available</div>
                   ) : filteredPrompts.length === 0 ? (
-                    <div className="px-3 py-4 text-center text-xs text-[--color-muted-foreground]">No matching prompts found</div>
+                    <div className="px-3 py-4 text-center text-xs text-(--color-muted-foreground)">No matching prompts found</div>
                   ) : (
                     filteredPrompts.map((p) => (
                       <button key={p.id} onClick={() => { setForm({ ...form, systemPrompt: p.content }); setShowPromptPicker(false); }}
-                        className="w-full text-left px-3 py-2 hover:bg-[--color-secondary] text-sm">
+                        className="w-full text-left px-3 py-2 hover:bg-(--color-secondary) text-sm">
                         <span className="font-medium">{p.name}</span>
-                        <span className="text-xs text-[--color-muted-foreground] ml-2">{p.description}</span>
+                        <span className="text-xs text-(--color-muted-foreground) ml-2">{p.description}</span>
                       </button>
                     ))
                   )}
@@ -174,17 +174,17 @@ function SingleAgentForm({
             )}
             <textarea value={form.systemPrompt} onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
               placeholder="You are a helpful assistant..." rows={4}
-              className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring] resize-none" />
+              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring) resize-none" />
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-1.5">Skills</label>
-            <div className="border border-[--color-border] rounded-lg max-h-[150px] overflow-y-auto p-3 space-y-1">
+            <div className="border border-(--color-border) rounded-lg max-h-[150px] overflow-y-auto p-3 space-y-1">
               {skills.map((s) => (
                 <label key={s.name} className="flex items-center justify-between text-sm cursor-pointer">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="truncate">{s.name}</span>
-                    <span className="text-xs text-[--color-muted-foreground] shrink-0">{s.metadata.version && `v${s.metadata.version}`}</span>
+                    <span className="text-xs text-(--color-muted-foreground) shrink-0">{s.metadata.version && `v${s.metadata.version}`}</span>
                   </div>
                   <input type="checkbox" checked={form.skillNames.includes(s.name)}
                     onChange={(e) => setForm({ ...form, skillNames: e.target.checked ? [...form.skillNames, s.name] : form.skillNames.filter((n) => n !== s.name) })}
@@ -198,7 +198,7 @@ function SingleAgentForm({
             <label className="flex items-center justify-between">
               <div>
                 <span className="text-sm font-medium">Built-in Hook</span>
-                <p className="text-xs text-[--color-muted-foreground] mt-0.5">Context compression & memory management</p>
+                <p className="text-xs text-(--color-muted-foreground) mt-0.5">Context compression & memory management</p>
               </div>
               <button onClick={() => setForm({ ...form, hookEnabled: !form.hookEnabled })}
                 className={cn(
@@ -218,8 +218,8 @@ function SingleAgentForm({
         <div className="flex flex-col gap-4 overflow-y-auto pr-4 min-h-0">
           <div>
             <label className="block text-sm font-medium mb-1.5">Tools</label>
-            <div className="border border-[--color-border] rounded-lg divide-y divide-[--color-border] max-h-[250px] overflow-y-auto">
-              <div className="px-3 py-2 bg-[--color-muted]/20 text-xs font-medium text-[--color-muted-foreground]">Built-in Tools</div>
+            <div className="border border-(--color-border) rounded-lg divide-y divide-(--color-border) max-h-[250px] overflow-y-auto">
+              <div className="px-3 py-2 bg-(--color-muted)/20 text-xs font-medium text-(--color-muted-foreground)">Built-in Tools</div>
               <div className="px-3 py-2 space-y-1">
                 {builtInTools.map((t) => (
                   <label key={t.id} className="flex items-center justify-between text-sm cursor-pointer">
@@ -232,7 +232,7 @@ function SingleAgentForm({
               </div>
               {Object.entries(mcpToolsByServer).map(([serverName, serverTools]) => (
                 <div key={serverName}>
-                  <div className="px-3 py-2 bg-[--color-muted]/20 text-xs font-medium text-[--color-muted-foreground]">MCP: {serverName}</div>
+                  <div className="px-3 py-2 bg-(--color-muted)/20 text-xs font-medium text-(--color-muted-foreground)">MCP: {serverName}</div>
                   <div className="px-3 py-2 space-y-1">
                     {serverTools.map((t) => (
                       <label key={t.id} className="flex items-center justify-between text-sm cursor-pointer">
@@ -250,8 +250,8 @@ function SingleAgentForm({
 
           <div className={cn(!hasTools && "opacity-50 pointer-events-none")}>
             <label className="block text-sm font-medium mb-1.5">Policy</label>
-            <p className="text-xs text-[--color-muted-foreground] mb-1.5">Directory scope where agent tools are allowed to operate</p>
-            <div className="border border-[--color-border] rounded-lg p-3 space-y-3 bg-[--color-muted]/10">
+            <p className="text-xs text-(--color-muted-foreground) mb-1.5">Directory scope where agent tools are allowed to operate</p>
+            <div className="border border-(--color-border) rounded-lg p-3 space-y-3 bg-(--color-muted)/10">
               <div>
                 <label className="block text-xs font-medium mb-1">Working Directory (cwd)</label>
                 <FolderPicker
@@ -263,26 +263,26 @@ function SingleAgentForm({
               <div>
                 <label className="block text-xs font-medium mb-1">Allowed Directories (comma-separated)</label>
                 <input type="text" value={policy.allowedDirs} onChange={(e) => setPolicy({ ...policy, allowedDirs: e.target.value })}
-                  placeholder="e.g. /workspace,/tmp/output" className="w-full px-2 py-1.5 text-sm rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                  placeholder="e.g. /workspace,/tmp/output" className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
               </div>
               <div className={cn(!hasFileTools && "opacity-40 pointer-events-none")}>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium mb-1">Max Read Size (bytes)</label>
                     <input type="number" value={policy.maxReadSize} onChange={(e) => setPolicy({ ...policy, maxReadSize: Number(e.target.value) })}
-                      className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                      className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium mb-1">Max Read Lines</label>
                     <input type="number" value={policy.maxReadLines} onChange={(e) => setPolicy({ ...policy, maxReadLines: Number(e.target.value) })}
-                      className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                      className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3 mt-3">
                   <div>
                     <label className="block text-xs font-medium mb-1">Max Write Size (bytes)</label>
                     <input type="number" value={policy.maxWriteSize} onChange={(e) => setPolicy({ ...policy, maxWriteSize: Number(e.target.value) })}
-                      className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                      className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                   </div>
                   <div className="flex items-end pb-1.5">
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -295,12 +295,12 @@ function SingleAgentForm({
                 <div className="mt-3">
                   <label className="block text-xs font-medium mb-1">Blocked Paths (comma-separated)</label>
                   <input type="text" value={policy.blockedPaths} onChange={(e) => setPolicy({ ...policy, blockedPaths: e.target.value })}
-                    placeholder="e.g. /etc/passwd,*.env" className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                    placeholder="e.g. /etc/passwd,*.env" className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                 </div>
                 <div className="mt-3">
                   <label className="block text-xs font-medium mb-1">Blocked Extensions (comma-separated)</label>
                   <input type="text" value={policy.blockedExtensions} onChange={(e) => setPolicy({ ...policy, blockedExtensions: e.target.value })}
-                    placeholder="e.g. .exe,.dll,.so" className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                    placeholder="e.g. .exe,.dll,.so" className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                 </div>
               </div>
               <div className={cn(!hasBashTool && "opacity-40 pointer-events-none")}>
@@ -309,29 +309,29 @@ function SingleAgentForm({
                     <div>
                       <label className="block text-xs font-medium mb-1">Max Output Lines</label>
                       <input type="number" value={policy.bashMaxOutputLines} onChange={(e) => setPolicy({ ...policy, bashMaxOutputLines: Number(e.target.value) })}
-                        className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                        className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium mb-1">Timeout (seconds)</label>
                       <input type="number" value={policy.bashDefaultTimeout} onChange={(e) => setPolicy({ ...policy, bashDefaultTimeout: Number(e.target.value) })}
-                        className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                        className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                     </div>
                   </div>
                 </div>
                 <div className="mt-3">
                   <label className="block text-xs font-medium mb-1">Allowed Commands (comma-separated)</label>
                   <input type="text" value={policy.bashAllowedCommands} onChange={(e) => setPolicy({ ...policy, bashAllowedCommands: e.target.value })}
-                    placeholder="e.g. git,python,npm" className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                    placeholder="e.g. git,python,npm" className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                 </div>
                 <div className="mt-3">
                   <label className="block text-xs font-medium mb-1">Blocked Commands (comma-separated)</label>
                   <input type="text" value={policy.bashBlockedCommands} onChange={(e) => setPolicy({ ...policy, bashBlockedCommands: e.target.value })}
-                    placeholder="e.g. rm,shutdown" className="w-full px-2 py-1.5 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                    placeholder="e.g. rm,shutdown" className="w-full px-2 py-1.5 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                 </div>
                 <div className="flex items-center justify-between mt-3">
                   <div>
                     <span className="text-xs font-medium">Allow Network Commands</span>
-                    <p className="text-[10px] text-[--color-muted-foreground] mt-0.5">Allow bash tools to execute network commands (curl, ssh, etc.)</p>
+                    <p className="text-[10px] text-(--color-muted-foreground) mt-0.5">Allow bash tools to execute network commands (curl, ssh, etc.)</p>
                   </div>
                   <button type="button" onClick={() => setPolicy({ ...policy, bashAllowNetwork: !policy.bashAllowNetwork })}
                     className={cn("relative w-9 h-5 rounded-full transition-colors shrink-0", policy.bashAllowNetwork ? "bg-emerald-500" : "bg-gray-300")}>
@@ -418,26 +418,26 @@ function TeamForm({
           <h3 className="text-base font-semibold">{editingMemberIdx < members.length ? "Edit Member" : "Add Member"}</h3>
           <div><label className="block text-sm font-medium mb-1">Name</label>
             <input type="text" value={memberForm.name} onChange={(e) => setMemberForm({ ...memberForm, name: e.target.value })} placeholder="Member name"
-              className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring]" />
+              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring)" />
           </div>
           <div><label className="block text-sm font-medium mb-1">Model</label>
             <select value={memberForm.modelId} onChange={(e) => setMemberForm({ ...memberForm, modelId: e.target.value })}
-              className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring]">
+              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring)">
               {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
           <div><label className="block text-sm font-medium mb-1">Role in Team</label>
             <input type="text" value={memberForm.role} onChange={(e) => setMemberForm({ ...memberForm, role: e.target.value })}
               placeholder="e.g. Lead Developer, Researcher, Code Reviewer"
-              className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring]" />
+              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring)" />
           </div>
           <div><label className="block text-sm font-medium mb-1">System Prompt</label>
             <textarea value={memberForm.systemPrompt} onChange={(e) => setMemberForm({ ...memberForm, systemPrompt: e.target.value })} rows={3}
-              className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring] resize-none" />
+              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring) resize-none" />
           </div>
           <div className="flex gap-2">
-            <button onClick={saveMember} className="flex-1 py-2 rounded-lg border border-[--color-border] bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90 text-sm">Save Member</button>
-            <button onClick={() => setEditingMemberIdx(null)} className="px-4 py-2 rounded-lg border border-[--color-border] hover:bg-[--color-secondary] text-sm">Cancel</button>
+            <button onClick={saveMember} className="flex-1 py-2 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90 text-sm">Save Member</button>
+            <button onClick={() => setEditingMemberIdx(null)} className="px-4 py-2 rounded-lg border border-(--color-border) hover:bg-(--color-secondary) text-sm">Cancel</button>
           </div>
         </div>
       );
@@ -447,17 +447,17 @@ function TeamForm({
       return (
         <div className="p-6 space-y-4">
           <h2 className="text-lg font-semibold mb-1">Configure Team</h2>
-          <p className="text-sm text-[--color-muted-foreground] mb-6">Set up team info and description</p>
+          <p className="text-sm text-(--color-muted-foreground) mb-6">Set up team info and description</p>
           <div><label className="block text-sm font-medium mb-1.5">Team Name</label>
             <input type="text" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="My Agent Team"
-              className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring]" />
+              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring)" />
           </div>
           <div><label className="block text-sm font-medium mb-1.5">Team Description</label>
             <textarea value={teamDesc} onChange={(e) => setTeamDesc(e.target.value)} placeholder="A collaborative team for full-stack development..." rows={4}
-              className="w-full px-3 py-2 rounded-lg border border-[--color-border] bg-white focus:outline-none focus:ring-2 focus:ring-[--color-ring] resize-none" />
+              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring) resize-none" />
           </div>
           <button onClick={() => setStep(1)} disabled={!teamName}
-            className="w-full py-2.5 rounded-lg border border-[--color-border] bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90 disabled:opacity-50">Next: Add Members</button>
+            className="w-full py-2.5 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90 disabled:opacity-50">Next: Add Members</button>
         </div>
       );
     }
@@ -466,31 +466,31 @@ function TeamForm({
       return (
         <div className="p-6">
           <h2 className="text-lg font-semibold mb-1">Team Members</h2>
-          <p className="text-sm text-[--color-muted-foreground] mb-4">Add and configure team members</p>
+          <p className="text-sm text-(--color-muted-foreground) mb-4">Add and configure team members</p>
           <div className="space-y-2 max-h-[300px] overflow-y-auto mb-4">
             {members.map((m, i) => (
-              <div key={m.name} className="flex items-center justify-between p-3 rounded-lg border border-[--color-border] bg-[--color-secondary]/20">
+              <div key={m.name} className="flex items-center justify-between p-3 rounded-lg border border-(--color-border) bg-(--color-secondary)/20">
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{m.name}</p>
-                  <p className="text-xs text-[--color-muted-foreground]">{models.find((mod) => mod.id === m.modelId)?.name ?? "No model"}</p>
+                  <p className="text-xs text-(--color-muted-foreground)">{models.find((mod) => mod.id === m.modelId)?.name ?? "No model"}</p>
                 </div>
                 <div className="flex gap-1 shrink-0">
                   <button onClick={() => openMemberEditor(i)}
-                    className="px-2 py-1 text-xs rounded hover:bg-[--color-secondary] text-[--color-foreground]">Edit</button>
+                    className="px-2 py-1 text-xs rounded hover:bg-(--color-secondary) text-(--color-foreground)">Edit</button>
                   <button onClick={() => removeMember(i)}
-                    className="px-2 py-1 text-xs rounded hover:bg-red-50 text-[--color-danger]">Remove</button>
+                    className="px-2 py-1 text-xs rounded hover:bg-red-50 text-(--color-danger)">Remove</button>
                 </div>
               </div>
             ))}
           </div>
           <button onClick={() => openMemberEditor()}
-            className="w-full py-2.5 rounded-lg border-2 border-dashed border-[--color-border] hover:border-[--color-primary] hover:bg-[--color-primary]/5 transition-all text-sm text-[--color-muted-foreground]">
+            className="w-full py-2.5 rounded-lg border-2 border-dashed border-(--color-border) hover:border-(--color-primary) hover:bg-(--color-primary)/5 transition-all text-sm text-(--color-muted-foreground)">
             + Add Member
           </button>
           <div className="flex gap-2 mt-4">
-            <button onClick={() => setStep(0)} className="flex-1 py-2 rounded-lg border border-[--color-border] hover:bg-[--color-secondary] text-sm">Back</button>
+            <button onClick={() => setStep(0)} className="flex-1 py-2 rounded-lg border border-(--color-border) hover:bg-(--color-secondary) text-sm">Back</button>
             <button onClick={() => setStep(2)} disabled={members.length === 0}
-              className="flex-1 py-2.5 rounded-lg border border-[--color-border] bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90 disabled:opacity-50">Next: Configure Contacts</button>
+              className="flex-1 py-2.5 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90 disabled:opacity-50">Next: Configure Contacts</button>
           </div>
         </div>
       );
@@ -499,10 +499,10 @@ function TeamForm({
     return (
       <div className="p-6">
         <h2 className="text-lg font-semibold mb-1">Configure Contacts</h2>
-        <p className="text-sm text-[--color-muted-foreground] mb-4">Configure which members can see each other</p>
+        <p className="text-sm text-(--color-muted-foreground) mb-4">Configure which members can see each other</p>
         <div className="space-y-4 max-h-[350px] overflow-y-auto">
           {members.map((member) => (
-            <div key={member.name} className="border border-[--color-border] rounded-lg p-3">
+            <div key={member.name} className="border border-(--color-border) rounded-lg p-3">
               <p className="text-sm font-medium mb-2">{member.name}&apos;s contacts</p>
               <div className="space-y-1">
                 {members.filter((m) => m.name !== member.name).map((other) => {
@@ -532,7 +532,7 @@ function TeamForm({
                             setContacts(newContacts);
                           }}
                           placeholder="role..."
-                          className="flex-1 px-2 py-1 text-xs rounded border border-[--color-border] bg-white focus:outline-none focus:ring-1 focus:ring-[--color-ring]" />
+                          className="flex-1 px-2 py-1 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                       )}
                     </div>
                   );
@@ -542,9 +542,9 @@ function TeamForm({
           ))}
         </div>
         <div className="flex gap-2 mt-4">
-          <button onClick={() => setStep(1)} className="flex-1 py-2 rounded-lg border border-[--color-border] hover:bg-[--color-secondary] text-sm">Back</button>
+          <button onClick={() => setStep(1)} className="flex-1 py-2 rounded-lg border border-(--color-border) hover:bg-(--color-secondary) text-sm">Back</button>
           <button onClick={() => onSave({ name: teamName, teamDescription: teamDesc, members, contacts })}
-            className="flex-1 py-2.5 rounded-lg border border-[--color-border] bg-[--color-primary] text-[--color-primary-foreground] hover:opacity-90">Create Team</button>
+            className="flex-1 py-2.5 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90">Create Team</button>
         </div>
       </div>
     );
@@ -577,7 +577,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentName }: Agen
       <div className="fixed inset-0 z-50 flex items-center justify-center">
         <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={onClose} />
         <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden">
-          <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-[--color-secondary] transition-colors z-10"><X size={18} /></button>
+          <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-(--color-secondary) transition-colors z-10"><X size={18} /></button>
           <TypeSelection onSelect={(t) => setLocalType(t)} />
         </div>
       </div>
@@ -641,7 +641,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentName }: Agen
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden">
-        <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-[--color-secondary] transition-colors z-10"><X size={18} /></button>
+        <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-(--color-secondary) transition-colors z-10"><X size={18} /></button>
         {effectiveType === "agent" && (
           <SingleAgentForm
             initialData={existingAgent && existingAgent.type === "single" ? {

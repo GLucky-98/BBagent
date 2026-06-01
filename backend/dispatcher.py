@@ -1,7 +1,8 @@
 import asyncio
-import logging
 
-logger = logging.getLogger("bbagent.dispatcher")
+from backend.logging import get_backend_logger
+
+logger = get_backend_logger("dispatcher")
 
 
 class AgentOutputDispatcher:
