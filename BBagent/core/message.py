@@ -221,6 +221,65 @@ class Turn:
     def add_message(self, msg: Message):
         self.messages.append(msg)
 
+    DEFAULT_MERGE_HEADER = "[Context from an incomplete previous turn - merged into this message]"
+    CURRENT_REQUEST_LABEL = "[Current request]"
+
+    @staticmethod
+    def _role_label(msg: Message) -> str:
+        if isinstance(msg, HumanMessage):
+            return "[User]"
+        if isinstance(msg, ModelMessage):
+            return "[Assistant]"
+        if isinstance(msg, ToolMessage):
+            name = getattr(msg, 'name', '') or ''
+            return f"[Tool({name})]" if name else "[Tool]"
+        return "[Unknown]"
+
+    @staticmethod
+    def _normalize_content(content) -> List[ContentBlock]:
+        if isinstance(content, str):
+            return [TextBlock(text=content)] if content else []
+        return list(content)
+
+    def _message_to_blocks(self, msg: Message) -> List[ContentBlock]:
+        role = self._role_label(msg)
+        result: List[ContentBlock] = []
+
+        content_blocks = self._normalize_content(msg.content)
+        text_emitted = False
+
+        for block in content_blocks:
+            if isinstance(block, TextBlock):
+                if block.text:
+                    result.append(TextBlock(text=f"{role} {block.text}"))
+                    text_emitted = True
+                continue
+            if not text_emitted:
+                result.append(TextBlock(text=role))
+                text_emitted = True
+            result.append(block)
+
+        if isinstance(msg, ModelMessage):
+            for tc in msg.tool_calls:
+                input_str = json.dumps(tc.input, ensure_ascii=False)
+                result.append(TextBlock(text=f"{role} [ToolCall {tc.name}({input_str})]"))
+
+        if not text_emitted and not (isinstance(msg, ModelMessage) and msg.tool_calls):
+            result.append(TextBlock(text=role))
+
+        return result
+
+    def to_merged_blocks(self, header: str = None) -> List[ContentBlock]:
+        if header is None:
+            header = self.DEFAULT_MERGE_HEADER
+        blocks: List[ContentBlock] = [
+            TextBlock(text=header),
+            TextBlock(text=""),
+        ]
+        for msg in self.messages:
+            blocks.extend(self._message_to_blocks(msg))
+        return blocks
+
 
 class Session:
     def __init__(self, dir: str | Path = None, id: str = None, turns: List[Turn] = None):
@@ -274,23 +333,58 @@ class Session:
         session._write_metadata()
         return session
 
-    def fork(self, session_root: str | Path = None) -> 'Session':
+    def fork(self, session_root: str | Path = None, at: int = None) -> 'Session':
+        """基于当前 Session 创建一个独立的副本 Session。
+
+        Args:
+            session_root: fork 副本的根目录；None 时使用默认的 {self.dir}/fork
+            at: 复制到第几个 turn（含）。None 表示复制所有 turn；
+                支持负数索引（-1 表示最后一个 turn）。
+
+        Returns:
+            与原 Session 完全独立的新 Session 实例。
+
+        Raises:
+            IndexError: at 越界或 session 没有任何 turn
+            ValueError: 纯内存 session（dir=None）无法 fork
+        """
+        n = len(self.turns)
+        if at is not None:
+            if n == 0:
+                raise IndexError("Cannot fork at a turn index: session has no turns")
+            if at < 0:
+                at = n + at
+            if at < 0 or at >= n:
+                raise IndexError(f"Turn index {at} out of range, session has {n} turns")
+            end = at + 1
+        else:
+            end = n
+
         fork_dir = Path(session_root) if session_root else (self.dir / 'fork') if self.dir else None
         if not fork_dir:
             raise ValueError("Cannot fork an in-memory session, provide session_root or persist the session first")
 
         new_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        new_id = f'{self.id}_fork_{new_timestamp}_{uuid.uuid4().hex[:8]}'
+        at_suffix = f'_at{at}' if at is not None else ''
+        new_id = f'{self.id}_fork{at_suffix}_{new_timestamp}_{uuid.uuid4().hex[:8]}'
         fork_path = fork_dir / new_id
         fork_path.mkdir(parents=True, exist_ok=True)
 
-        new_turns = [copy.deepcopy(turn) for turn in self.turns]
+        new_turns = [copy.deepcopy(turn) for turn in self.turns[:end]]
 
         new_session = Session(dir=fork_path, id=new_id, turns=new_turns)
-        new_session.window_start = self.window_start
-        new_session.compress_turn_count = self.compress_turn_count
-        new_session.total_input_cost_tokens = self.total_input_cost_tokens
-        new_session.total_output_cost_tokens = self.total_output_cost_tokens
+        new_session.window_start = 0
+        new_session.compress_turn_count = sum(
+            1 for turn in new_turns if turn.is_summarized
+        )
+        new_session.total_input_cost_tokens = sum(
+            msg.input_tokens for turn in new_turns
+            for msg in turn.messages if isinstance(msg, ModelMessage)
+        )
+        new_session.total_output_cost_tokens = sum(
+            msg.output_tokens for turn in new_turns
+            for msg in turn.messages if isinstance(msg, ModelMessage)
+        )
 
         new_session._rebuild_token_counts()
 
@@ -323,10 +417,27 @@ class Session:
         messages = message if isinstance(message, list) else [message]
         for msg in messages:
             if isinstance(msg, HumanMessage):
+                prefix_blocks: List[ContentBlock] = []
+                inherited_tools: List[str] = []
                 if self.turns and not self.turns[-1].is_complete:
+                    old_turn = self.turns[-1]
+                    prefix_blocks = old_turn.to_merged_blocks()
+                    inherited_tools = list(old_turn.ever_used_tools)
                     self.turns.pop()
+
+                new_blocks = Turn._normalize_content(msg.content)
+                if prefix_blocks and new_blocks:
+                    msg.content = prefix_blocks + [
+                        TextBlock(text=Turn.CURRENT_REQUEST_LABEL),
+                    ] + new_blocks
+                elif prefix_blocks:
+                    msg.content = prefix_blocks
+                else:
+                    msg.content = new_blocks
+
                 turn = Turn()
                 turn.start_timestamp = msg.timestamp
+                turn.ever_used_tools = list(dict.fromkeys(inherited_tools))
                 turn.messages.append(msg)
                 self.turns.append(turn)
             elif not self.turns or self.turns[-1].is_complete:
@@ -429,7 +540,6 @@ class Session:
         total = 0
         seen_groups = set()
         seen_keys = set()
-        has_injection = False
 
         for turn in turns:
             if turn.is_summarized:
@@ -439,14 +549,12 @@ class Session:
                         total += estimate_message_tokens(
                             HumanMessage(content=turn.summary)
                         )
-                        has_injection = True
                 for key in turn.key_content:
                     if key not in seen_keys:
                         seen_keys.add(key)
                         total += estimate_message_tokens(
                             HumanMessage(content=key)
                         )
-                        has_injection = True
             else:
                 if turn.is_complete:
                     total += turn.token_count

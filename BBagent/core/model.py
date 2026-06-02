@@ -32,11 +32,34 @@ PROVIDER_REGISTRY: dict[str, type] = {}
 
 
 class Model(ABC):
+    _DEFAULT_TIMEOUT = httpx.Timeout(60.0, read=300.0)
+    _DEFAULT_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30)
+
     def __init__(self, model: str, api_key: str, base_url: str, max_context_tokens: int = 200000):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
         self.max_context_tokens = max_context_tokens
+        self._async_client: httpx.AsyncClient | None = None
+        self._active_requests: int = 0
+
+    @property
+    def async_client(self) -> httpx.AsyncClient:
+        if self._async_client is None or self._async_client.is_closed:
+            self._async_client = httpx.AsyncClient(
+                timeout=self._DEFAULT_TIMEOUT,
+                limits=self._DEFAULT_LIMITS,
+                headers=self.headers,
+            )
+        return self._async_client
+
+    @property
+    def active_requests(self) -> int:
+        return self._active_requests
+
+    async def aclose(self):
+        if self._async_client is not None and not self._async_client.is_closed:
+            await self._async_client.aclose()
 
     @abstractmethod
     def invoke(self, model_input: Model_Input) -> ModelMessage | str:
@@ -51,7 +74,7 @@ class Model(ABC):
         pass
 
     @abstractmethod
-    def payload_construct(self, model_input: Model_Input) -> None:
+    def payload_construct(self, model_input: Model_Input) -> dict:
         pass
 
     @abstractmethod
@@ -144,14 +167,13 @@ class AnthropicModel(Model):
         self._base_payload = dict(self.payload)
 
     def invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
-        
-        self.payload_construct(model_input)
+        payload = self.payload_construct(model_input)
         timeout = httpx.Timeout(60.0, read=300.0)
 
         for attempt in range(max_retries):
             with httpx.Client(timeout=timeout) as client:
                 try:
-                    response = client.post(self.base_url, headers=self.headers, json=self.payload)
+                    response = client.post(self.base_url, headers=self.headers, json=payload)
                     response.raise_for_status()
                     return self.model_response_parse(response.json())
                 except httpx.HTTPStatusError as e:
@@ -168,13 +190,13 @@ class AnthropicModel(Model):
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
     
     async def async_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
-        self.payload_construct(model_input)
-        timeout = httpx.Timeout(60.0, read=300.0)
-
-        for attempt in range(max_retries):
-            async with httpx.AsyncClient(timeout=timeout) as client:
+        payload = self.payload_construct(model_input)
+        client = self.async_client
+        self._active_requests += 1
+        try:
+            for attempt in range(max_retries):
                 try:
-                    response = await client.post(self.base_url, headers=self.headers, json=self.payload)
+                    response = await client.post(self.base_url, json=payload)
                     response.raise_for_status()
                     return self.model_response_parse(response.json())
                 except httpx.HTTPStatusError as e:
@@ -187,19 +209,21 @@ class AnthropicModel(Model):
                         await asyncio.sleep(retry_delay * (2 ** attempt))
                         continue
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
+        finally:
+            self._active_requests -= 1
     
     async def async_stream_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0):
-        self.payload_construct(model_input)
-        payload = {**self.payload, 'stream': True}
-        timeout = httpx.Timeout(60.0, read=300.0)
+        payload = {**self.payload_construct(model_input), 'stream': True}
+        client = self.async_client
+        self._active_requests += 1
 
         accumulated_message = {}
         accumulated_block = []
 
-        for attempt in range(max_retries):
-            async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            for attempt in range(max_retries):
                 try:
-                    async with client.stream('POST', self.base_url, headers=self.headers, json=payload) as response:
+                    async with client.stream('POST', self.base_url, json=payload) as response:
                         response.raise_for_status()
                         async for line in response.aiter_lines():
                             if line.startswith('data: '):
@@ -209,25 +233,20 @@ class AnthropicModel(Model):
                                 try:
                                     event = json.loads(data)
                                     event_type = event.get('type','')
-                                    # ping event
                                     if event_type == 'ping':
                                         continue
-                                    # error event
                                     if event_type == 'error':
                                         error_info = event.get('error', {})
                                         raise Exception(f"Stream error: {error_info.get('type')} - {error_info.get('message')}")
-                                    # message start
                                     if event_type == 'message_start':
                                         accumulated_message.update(event.get('message',{}))
                                         continue
-                                    # block start
                                     if event_type == 'content_block_start':
                                         index = event.get('index',None)
                                         while len(accumulated_block) <= index:
                                             accumulated_block.append(None)
                                         accumulated_block[index] = event.get('content_block',{})
                                         continue
-                                    # block delta
                                     if event_type == 'content_block_delta':
                                         index = event.get('index',None)
                                         delta = event.get('delta',{})
@@ -235,43 +254,35 @@ class AnthropicModel(Model):
                                         block = accumulated_block[index] if index < len(accumulated_block) else None
                                         if block:
                                             if delta_type == 'text_delta':
-                                                # 文本增量：追加到 text 字段
                                                 if block.get('type') == 'text':
                                                     block['text'] = block.get('text', '') + delta.get('text', '')
                                                     yield {'type':'text','content':delta.get('text', '')}
                                             elif delta_type == 'input_json_delta':
-                                                # 工具输入 JSON 增量：累积 partial_json 字符串
                                                 if block.get('type') == 'tool_use':
                                                     block['partial_json'] = block.get('partial_json', '') + delta.get('partial_json', '')
                                                     continue
                                             elif delta_type == 'thinking_delta':
-                                                # 思考内容增量
                                                 if block.get('type') == 'thinking':
                                                     block['thinking'] = block.get('thinking', '') + delta.get('thinking', '')
                                                     yield {'type':'thinking','content':delta.get('thinking', '')}
                                             elif delta_type == 'signature_delta':
-                                                # 签名增量（用于 thinking 块）
                                                 if block.get('type') == 'thinking':
                                                     block['signature'] = delta.get('signature', '')
-                                    # block stop
                                     if event_type == 'content_block_stop':
                                         index = event.get('index',None)
                                         block = accumulated_block[index] if index < len(accumulated_block) else None
-                                        # yield completed tool use block for stream tool invoking
                                         if block.get('type','') == 'tool_use':
                                             block['input'] = json.loads(block['partial_json'])
                                             tool_use = ToolUseBlock(block['id'], block['name'], block['input'])
                                             yield {'type':'completed_tool_use','content':tool_use}
                                         accumulated_message['content'].append(block)
                                         continue
-                                    # message delta
                                     if event_type == 'message_delta':
                                         if 'delta' in event:
                                             accumulated_message.update(event.get('delta',{}))
                                         if 'usage' in event:
                                             accumulated_message['usage'].update(event.get('usage',{}))
                                         continue
-                                    # message stop
                                     if event_type == 'message_stop':
                                         yield {'type':'completed_message','content':self.model_response_parse(accumulated_message)}
                                         return
@@ -286,19 +297,21 @@ class AnthropicModel(Model):
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay * (2 ** attempt))
                         continue
-                    raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e    
+                    raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
+        finally:
+            self._active_requests -= 1
 
-    def payload_construct(self, model_input: Model_Input):
-        self.payload = dict(self._base_payload)
+    def payload_construct(self, model_input: Model_Input) -> dict:
+        payload = dict(self._base_payload)
 
         if model_input.prompt:
-            self.payload['system'] = model_input.prompt
+            payload['system'] = model_input.prompt
 
         if model_input.tools:
-            self.payload['tools'] = [t.schema for t in model_input.tools]
+            payload['tools'] = [t.schema for t in model_input.tools]
 
         if self.thinking:
-            self.payload['thinking'] = self.thinking
+            payload['thinking'] = self.thinking
         
         payload_messages = []
         if model_input.messages:
@@ -316,9 +329,9 @@ class AnthropicModel(Model):
                     else:
                         payload_messages.append({'role':'user', 'content':[{'type':'tool_result','tool_use_id':message.id,'content':str(message.content)}]})
     
-        self.payload['messages'] = payload_messages
+        payload['messages'] = payload_messages
         
-        return
+        return payload
     
     def content_block_parse(self, content_blocks: List[ContentBlock]) -> List[dict]:
         """解析内容块, 其实只负责HumanMessage和ToolMessage里的内容块解析"""
@@ -431,9 +444,9 @@ class OpenAIModel(Model):
         self.payload.update(self.extra_args)
         self._base_payload = dict(self.payload)
 
-    def payload_construct(self, model_input: Model_Input) -> None:
+    def payload_construct(self, model_input: Model_Input) -> dict:
         """根据 Model_Input 构建 OpenAI 请求 payload"""
-        self.payload = dict(self._base_payload)
+        payload = dict(self._base_payload)
         messages = []
 
         # 1. 处理 system prompt（OpenAI 使用 system 角色）
@@ -466,7 +479,7 @@ class OpenAIModel(Model):
                     "content": content
                 })
 
-        self.payload["messages"] = messages
+        payload["messages"] = messages
 
         # 3. 处理工具定义
         if model_input.tools:
@@ -481,10 +494,12 @@ class OpenAIModel(Model):
                         "parameters": tool.input_schema,  # 假定 parameters 已是 JSON Schema dict
                     }
                 })
-            self.payload["tools"] = tools
+            payload["tools"] = tools
             # 默认自动选择工具，可扩展为接收 tool_choice 参数
-            if "tool_choice" not in self.payload:
-                self.payload["tool_choice"] = "auto"
+            if "tool_choice" not in payload:
+                payload["tool_choice"] = "auto"
+
+        return payload
 
     def content_block_parse(self, content: Union[str, List[ContentBlock]]) -> Union[str, List[dict]]:
         """
@@ -607,13 +622,13 @@ class OpenAIModel(Model):
         return blocks
 
     def invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
-        self.payload_construct(model_input)
+        payload = self.payload_construct(model_input)
         timeout = httpx.Timeout(60.0, read=300.0)
 
         for attempt in range(max_retries):
             with httpx.Client(timeout=timeout) as client:
                 try:
-                    response = client.post(self.base_url, headers=self.headers, json=self.payload)
+                    response = client.post(self.base_url, headers=self.headers, json=payload)
                     response.raise_for_status()
                     return self.model_response_parse(response.json())
                 except httpx.HTTPStatusError as e:
@@ -630,13 +645,13 @@ class OpenAIModel(Model):
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
 
     async def async_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
-        self.payload_construct(model_input)
-        timeout = httpx.Timeout(60.0, read=300.0)
-
-        for attempt in range(max_retries):
-            async with httpx.AsyncClient(timeout=timeout) as client:
+        payload = self.payload_construct(model_input)
+        client = self.async_client
+        self._active_requests += 1
+        try:
+            for attempt in range(max_retries):
                 try:
-                    response = await client.post(self.base_url, headers=self.headers, json=self.payload)
+                    response = await client.post(self.base_url, json=payload)
                     response.raise_for_status()
                     return self.model_response_parse(response.json())
                 except httpx.HTTPStatusError as e:
@@ -649,12 +664,14 @@ class OpenAIModel(Model):
                         await asyncio.sleep(retry_delay * (2 ** attempt))
                         continue
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
+        finally:
+            self._active_requests -= 1
 
     async def async_stream_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0):
         """异步流式调用，yield 事件（need_print, completed_tool_use, completed_message）"""
-        self.payload_construct(model_input)
-        payload = {**self.payload, "stream": True, "stream_options": {"include_usage": True}}
-        timeout = httpx.Timeout(60.0, read=300.0)
+        payload = {**self.payload_construct(model_input), "stream": True, "stream_options": {"include_usage": True}}
+        client = self.async_client
+        self._active_requests += 1
 
         accumulated_response = {}
         accumulated_response['usage'] = {}
@@ -668,10 +685,10 @@ class OpenAIModel(Model):
         accumulated_tool_calls = {}
         _stream_finished = False
 
-        for attempt in range(max_retries):
-            async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            for attempt in range(max_retries):
                 try:
-                    async with client.stream("POST", self.base_url, headers=self.headers, json=payload) as response:
+                    async with client.stream("POST", self.base_url, json=payload) as response:
                         response.raise_for_status()
                         async for line in response.aiter_lines():
                             if not line.startswith("data:"):
@@ -767,6 +784,8 @@ class OpenAIModel(Model):
                         await asyncio.sleep(retry_delay * (2 ** attempt))
                         continue
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
+        finally:
+            self._active_requests -= 1
 
 PROVIDER_REGISTRY["anthropic"] = AnthropicModel
 PROVIDER_REGISTRY["openai"] = OpenAIModel

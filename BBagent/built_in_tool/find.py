@@ -2,7 +2,6 @@
 Find tool - Find files by name pattern (glob matching).
 """
 import os
-from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -140,6 +139,5 @@ def create_find_tool(
         name="Glob",
         description="Finds files by name pattern using glob matching.",
         input_schema=input_schema,
-        source="built_in.find",
-        config={"policy": asdict(policy)} if policy else {},
+        source="built_in",
     )

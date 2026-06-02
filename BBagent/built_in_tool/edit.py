@@ -2,7 +2,6 @@
 Edit tool - Edit file contents by replacing specific text.
 """
 import os
-from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -123,6 +122,5 @@ def create_edit_tool(
         name="Edit",
         description="Makes a precise edit to a file. old_string must match the existing content exactly.",
         input_schema=input_schema,
-        source="built_in.edit",
-        config={"policy": asdict(policy)} if policy else {},
+        source="built_in",
     )

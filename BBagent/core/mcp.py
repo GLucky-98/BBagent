@@ -265,17 +265,11 @@ class MCPClient:
 class MCPTool(Tool):
     def __init__(self, mcp_client: MCPClient, config: Dict[str, Any]):
         self.mcp_server_name = mcp_client.name
-        self.mcp_config = mcp_client.config
-        self._mcp_tool_name = config["name"]
+        self.raw_name = config["name"]
         func = self.create_tool_from_config(mcp_client, config)
         super().__init__(
             func,
             source="mcp",
-            config={
-                "mcp_server_name": self.mcp_server_name,
-                "mcp_config": asdict(self.mcp_config),
-                "tool_name": self._mcp_tool_name,
-            }
         )
         
     @staticmethod
@@ -372,40 +366,62 @@ class MCPTool(Tool):
 _config_logger = logging.getLogger("mcp.config")
 
 
-def parse_config_file(file_path: str) -> List[MCPServerConfig]:
-    """解析单个 JSON 配置文件，支持两种格式
+def parse_config_dict(data: dict, default_name: str = "") -> List[MCPServerConfig]:
+    """Parse a JSON dict into MCPServerConfig list.
 
-    格式一（单服务器）：顶层含 name + command 字段
-    格式二（多服务器）：顶层含 mcpServers 字段，key 为 name
+    Supported formats:
+      - Single server: {name, command, args?, env?}
+      - Multi-server:  {mcpServers: {name: {command, args?, env?}, ...}}
+      - List:          {mcpServers: [{name, command, ...}, ...]}
+
+    Args:
+        data: Parsed JSON dict.
+        default_name: Fallback name when an entry lacks one (used by importers).
     """
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        _config_logger.warning(f"Failed to parse {file_path}: {e}")
-        return []
-
     configs: List[MCPServerConfig] = []
 
-    if "mcpServers" in data and isinstance(data["mcpServers"], dict):
-        for name, server_data in data["mcpServers"].items():
-            if not isinstance(server_data, dict) or "command" not in server_data:
-                continue
-            configs.append(MCPServerConfig(
-                name=name,
-                command=server_data.get("command", ""),
-                args=server_data.get("args", []),
-                env=server_data.get("env", {}),
-            ))
+    if "mcpServers" in data:
+        servers = data["mcpServers"]
+        if isinstance(servers, list):
+            for entry in servers:
+                if not isinstance(entry, dict) or "command" not in entry:
+                    continue
+                configs.append(MCPServerConfig(
+                    name=entry.get("name", default_name),
+                    command=entry.get("command", ""),
+                    args=entry.get("args", []),
+                    env=entry.get("env", {}),
+                ))
+        elif isinstance(servers, dict):
+            for name, server_data in servers.items():
+                if not isinstance(server_data, dict) or "command" not in server_data:
+                    continue
+                configs.append(MCPServerConfig(
+                    name=name,
+                    command=server_data.get("command", ""),
+                    args=server_data.get("args", []),
+                    env=server_data.get("env", {}),
+                ))
     elif "name" in data and "command" in data:
         configs.append(MCPServerConfig(
-            name=data.get("name", ""),
+            name=data.get("name", default_name),
             command=data.get("command", ""),
             args=data.get("args", []),
             env=data.get("env", {}),
         ))
 
     return configs
+
+
+def parse_config_file(file_path: str) -> List[MCPServerConfig]:
+    """Parse a single JSON config file. Delegates to parse_config_dict."""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        _config_logger.warning(f"Failed to parse {file_path}: {e}")
+        return []
+    return parse_config_dict(data)
 
 
 def load_configs(config_dir: str) -> Dict[str, MCPServerConfig]:
@@ -431,78 +447,4 @@ def load_configs(config_dir: str) -> Dict[str, MCPServerConfig]:
                 count += 1
     _config_logger.info(f"Loaded {count} MCP server config(s) from {config_dir}")
     return result
-
-
-_restore_logger = logging.getLogger("mcp.restore")
-
-
-async def restore_mcp_tools(tool_configs: List[dict], logger: logging.Logger = None) -> tuple:
-    """从序列化配置恢复 MCPTool 对象
-
-    按 mcp_server_name 分组，每个 server 只创建一个 MCPClient，
-    避免重复建立连接。
-
-    Args:
-        tool_configs: 一组 source="mcp" 的 tool 序列化配置
-        logger: 可选的 logger，用于输出恢复过程日志
-
-    Returns:
-        (tools: List[MCPTool], clients: Dict[str, MCPClient])
-    """
-    from collections import defaultdict
-
-    log = logger or _restore_logger
-
-    server_groups: Dict[str, MCPServerConfig] = {}
-    requested_tools: Dict[str, set] = defaultdict(set)
-
-    for cfg in tool_configs:
-        config_data = cfg.get("config", {})
-        server_name = config_data.get("mcp_server_name")
-        tool_name = config_data.get("tool_name")
-        if not server_name or not tool_name:
-            log.warning(f"Invalid MCP tool config, skipping: {cfg.get('name')}")
-            continue
-        if server_name not in server_groups:
-            server_groups[server_name] = MCPServerConfig(**config_data.get("mcp_config", {}))
-        requested_tools[server_name].add(tool_name)
-
-    tools: List[MCPTool] = []
-    clients: Dict[str, MCPClient] = {}
-
-    for server_name, server_config in server_groups.items():
-        client = None
-        try:
-            client = MCPClient(server_config, logger=logger)
-            await client.start()
-            await client.initialize()
-            all_mcp_tools = await client.create_tools()
-
-            tool_map: Dict[str, MCPTool] = {}
-            for t in all_mcp_tools:
-                tool_map[t._mcp_tool_name] = t
-
-            for requested_name in requested_tools[server_name]:
-                if requested_name in tool_map:
-                    tools.append(tool_map[requested_name])
-                else:
-                    log.warning(
-                        f"Tool '{requested_name}' not found on MCP server '{server_name}'"
-                    )
-
-            clients[server_name] = client
-            log.info(
-                f"Restored {len(requested_tools[server_name])} tool(s) from MCP server '{server_name}'"
-            )
-        except Exception as e:
-            log.warning(
-                f"Failed to restore MCP server '{server_name}': {e}"
-            )
-            try:
-                if client:
-                    await client.close()
-            except Exception:
-                pass
-
-    return tools, clients
 

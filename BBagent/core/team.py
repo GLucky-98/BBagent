@@ -114,9 +114,9 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
                     }
                 },
                 "required": ["to_agent", "message"]
-            }
+            },
+            source="team",
         )
-        send_msg_tool.mark_team_managed()
 
         broadcast_tool = Tool(
             func=broadcast,
@@ -131,9 +131,9 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
                     }
                 },
                 "required": ["message"]
-            }
+            },
+            source="team",
         )
-        broadcast_tool.mark_team_managed()
 
         agent.add_tools([send_msg_tool, broadcast_tool])
 

@@ -41,9 +41,10 @@ def create_add_memory_tool(memory_manager: MemoryManager, session_id_getter, pro
 
         return "No memories provided."
 
-    return Tool(add_memory, 
-                name="add_memory", 
-                description=prompt if prompt else ADD_MEMORY_TOOL_DESCRIPTION)
+    return Tool(add_memory,
+                name="add_memory",
+                description=prompt if prompt else ADD_MEMORY_TOOL_DESCRIPTION,
+                source="hook")
 
 
 DELETE_MEMORY_TOOL_DESCRIPTION = (

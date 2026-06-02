@@ -4,7 +4,6 @@ Bash tool - Execute shell commands.
 import asyncio
 import os
 import subprocess
-from dataclasses import asdict
 from typing import Optional
 
 from ..core.tool import Tool
@@ -131,6 +130,5 @@ async def create_bash_tool(
         name="Bash",
         description="Execute a bash command. Returns the stdout and stderr output.",
         input_schema=input_schema,
-        source="built_in.bash",
-        config={"policy": asdict(policy)} if policy else {},
+        source="built_in",
     )

@@ -2,7 +2,6 @@
 LS tool - List directory contents.
 """
 import os
-from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -134,6 +133,5 @@ def create_ls_tool(
         name="LS",
         description="Lists the contents of a directory.",
         input_schema=input_schema,
-        source="built_in.ls",
-        config={"policy": asdict(policy)} if policy else {},
+        source="built_in",
     )

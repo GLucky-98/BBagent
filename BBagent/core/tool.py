@@ -1,8 +1,10 @@
 import inspect
-from typing import Any, get_type_hints
+from typing import Any, Literal, get_type_hints
 from pydantic import BaseModel, TypeAdapter
 from typing import Callable
 import copy
+
+ToolSource = Literal["built_in", "hook", "mcp", "team"]
 
 # ------------------------------------------------------------
 # pydantic 输入参数类型解析辅助函数
@@ -53,43 +55,26 @@ class Tool():
             async_invoke (异步调用)
     """
     def __init__(self, func:Callable, name:str = None, description:str = None, input_schema:dict = None,
-                 source: str = None, config: dict = None):
-        self.name = name if name else func.__name__ 
+                 source: ToolSource | None = None):
+        self.name = name if name else func.__name__
         self.description = description if description else func.__doc__
         if input_schema:
             self.input_schema = input_schema
         else:
             self.input_schema = self.generate_input_schema_from_func(func)
 
-        self.schema = {
-                "name": self.name,
-                "description": self.description,
-                "input_schema": self.input_schema
-            }
-        
         self.func = func
         self.is_async = inspect.iscoroutinefunction(func)
-        self.source = source
-        self.config = config or {}
-        self._hook_managed = False
-        self._team_managed = False
+        self.source: ToolSource | None = source
 
-    def mark_hook_managed(self):
-        self._hook_managed = True
-
-    def mark_team_managed(self):
-        self._team_managed = True
-
-    def to_config_dict(self) -> dict:
-        base = {
+    @property
+    def schema(self) -> dict:
+        """LLM-facing tool schema: {name, description, input_schema}."""
+        return {
             "name": self.name,
             "description": self.description,
             "input_schema": self.input_schema,
         }
-        if self.source:
-            base["source"] = self.source
-            base["config"] = self.config
-        return base
 
     def invoke(self,input_dict:dict):
         sig = inspect.signature(self.func)

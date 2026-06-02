@@ -38,8 +38,6 @@ class AgentConfig:
     session: Session = None
     tools: List[Tool] = None
     skills: List[Skill] = None
-    hook: AgentHook = None
-    policy: dict = None
 
     def __post_init__(self):
         if not self.name:
@@ -72,7 +70,6 @@ class Agent:
         self.system_prompt = agent_config.system_prompt
         if not self.system_prompt_path.exists():
             self.system_prompt_path.write_text(agent_config.system_prompt, encoding='utf-8')
-        self.policy = agent_config.policy or {}
         self.session_dir = self.base_dir / 'session'
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -93,9 +90,8 @@ class Agent:
         self.team_prompt = ""
         self.teammate_prompt = ""
 
-        self.hook = agent_config.hook if agent_config.hook else AgentHook()
-        if self.hook:
-            self.hook.set_context(self)
+        self.hook = AgentHook()
+        self.hook.set_context(self)
 
         self._event_queue: asyncio.Queue = asyncio.Queue()
         self.input = InputChannel()
@@ -109,15 +105,16 @@ class Agent:
 
         self.state = AgentState.Ready
 
-        self._save_cooldown = 1.0
-        self._last_save_time = 0.0
+        self._dirty = False
 
     def change_name(self, name: str):
         self.name = name
-    
+        self._dirty = True
+
     def change_model(self, model: Model):
         self.model = model
-    
+        self._dirty = True
+
     def change_base_dir(self, path: Path | str):
         new_base = Path(path)
         old_base = self.base_dir
@@ -140,18 +137,30 @@ class Agent:
         self.base_dir = new_base
         self.system_prompt_path = new_system_prompt
         self.session_dir = new_session
-    
+        self._dirty = True
+
     def change_system_prompt(self, prompt: str):
         self.system_prompt = prompt
         self.system_prompt_path.write_text(prompt, encoding='utf-8')
+        self._dirty = True
 
     def save(self):
-        now = time.time()
-        if now - self._last_save_time < self._save_cooldown:
-            return
-        self._last_save_time = now
-        self.session.save()
-        self._save_config()
+        try:
+            self.session.save()
+            if self._dirty:
+                self._save_config()
+                self._dirty = False
+        except Exception as e:
+            self.logger.warning(f"Failed to save agent config: {e}")
+
+    def flush(self):
+        """强制把当前状态写盘，清空 dirty。给后端在关闭/重启前用。"""
+        try:
+            self.session.save()
+            self._save_config()
+            self._dirty = False
+        except Exception as e:
+            self.logger.warning(f"Failed to flush agent config: {e}")
 
     def _save_config(self):
         config_path = self.base_dir / 'agent_config.yaml'
@@ -160,168 +169,22 @@ class Agent:
             yaml.dump(config_dict, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
     def to_config_dict(self) -> dict:
-        tools_list = []
+        tool_groups: dict[str, list[str]] = {}
         for t in self.tools.values():
-            if getattr(t, '_hook_managed', False) or getattr(t, '_team_managed', False):
+            if t.source in ("built_in", "mcp"):
+                tool_groups.setdefault(t.source, []).append(t.name)
+            elif t.source in ("hook", "team"):
                 continue
-            tool_dict = t.to_config_dict()
-            # Strip policy from per-tool config — serialized at agent level
-            if "config" in tool_dict and isinstance(tool_dict["config"], dict):
-                tool_dict["config"] = {k: v for k, v in tool_dict["config"].items() if k != "policy"}
-            tools_list.append(tool_dict)
-
+            else:
+                tool_groups.setdefault("unknown", []).append(t.name)
         return {
-            "version": 1,
             "name": self.name,
+            "base_dir": str(self.base_dir),
             "system_prompt": self.system_prompt,
-            "model": self.model.to_config_dict(),
-            "policy": self.policy,
-            "tools": tools_list,
-            "skills": [s.to_config_dict() for s in self.skills.values()],
-            "hooks": self.hook.to_config_dict() if self.hook else [],
-            "session": {
-                "latest_session_id": self.session.id,
-            },
-            "timers": [
-                {"seconds": seconds, "name": name, "hint": hint}
-                for seconds, name, hint in self.input._timer_configs
-            ],
+            "tools": tool_groups,
+            "skills": [s.name for s in self.skills.values()],
+            "last_session_id": self.session.id if self.session else None,
         }
-
-    @classmethod
-    async def from_config_dict(cls, config_dict: dict, *,
-                         extra_tool_builders: dict = None,
-                         extra_hook_builders: dict = None,
-                         base_dir: str | Path = None) -> 'Agent':
-        extra_tool_builders = extra_tool_builders or {}
-        extra_hook_builders = extra_hook_builders or {}
-
-        model_config = config_dict.get("model", {})
-        model = Model.from_config_dict(model_config)
-
-        agent_base_dir = Path(base_dir) if base_dir else Path.cwd()
-        name = config_dict.get("name", "Agent")
-        if agent_base_dir.name == name:
-            agent_dir = agent_base_dir
-        else:
-            agent_dir = agent_base_dir / name
-        system_prompt = config_dict.get("system_prompt", "")
-
-        tools = []
-        from ..built_in_tool import TOOL_CREATOR as BUILT_IN_TOOL_CREATOR
-        all_builders = {**BUILT_IN_TOOL_CREATOR, **extra_tool_builders}
-
-        mcp_cfgs = [t for t in config_dict.get("tools", []) if t.get("source") == "mcp"]
-        other_cfgs = [t for t in config_dict.get("tools", []) if t.get("source") != "mcp"]
-
-        mcp_clients = {}
-
-        if mcp_cfgs:
-            from .mcp import restore_mcp_tools
-            mcp_tools, mcp_clients = await restore_mcp_tools(mcp_cfgs)
-            tools.extend(mcp_tools)
-
-        for tool_cfg in other_cfgs:
-            source = tool_cfg.get("source")
-            tool_cfg_data = tool_cfg.get("config", {})
-
-            if source and source in all_builders:
-                builder = all_builders[source]
-                if asyncio.iscoroutinefunction(builder):
-                    tool = await builder(tool_cfg_data)
-                else:
-                    tool = builder(tool_cfg_data)
-                tools.append(tool)
-
-        skills = []
-        for skill_cfg in config_dict.get("skills", []):
-            skill_path = skill_cfg.get("path")
-            if skill_path and Path(skill_path).exists():
-                from .skill import scan_skills
-                skills_dict = scan_skills(Path(skill_path).parent)
-                skill = skills_dict.get(skill_cfg["name"])
-                if skill:
-                    skills.append(skill)
-
-        session = None
-        session_cfg = config_dict.get("session", {})
-        latest_id = session_cfg.get("latest_session_id")
-        if latest_id:
-            session_dir = agent_dir / 'session' / latest_id
-            jsonl_file = session_dir / f'{latest_id}.jsonl'
-            if jsonl_file.exists():
-                try:
-                    session = Session.load(latest_id, session_dir)
-                except Exception:
-                    pass
-
-        # Read policy: prefer top-level; fall back to first tool's config.policy
-        # for backward compatibility with agent_config.yaml files created before
-        # the policy-deduplication refactor.
-        policy = config_dict.get("policy", None)
-        if not policy:
-            for tool_cfg in config_dict.get("tools", []):
-                tool_policy = tool_cfg.get("config", {}).get("policy", None)
-                if tool_policy:
-                    policy = tool_policy
-                    break
-
-        config = AgentConfig(
-            model=model,
-            base_dir=agent_base_dir,
-            system_prompt=system_prompt,
-            name=name,
-            session=session,
-            tools=tools,
-            skills=skills,
-            policy=policy,
-        )
-        agent = cls(config)
-
-        if mcp_clients:
-            agent.register_mcp_clients(mcp_clients)
-
-        from ..built_in_hook import HOOK_CREATOR as BUILT_IN_HOOK_CREATOR
-        all_hook_builders = {**BUILT_IN_HOOK_CREATOR, **extra_hook_builders}
-
-        hook_cfgs = config_dict.get("hooks", [])
-        if hook_cfgs:
-            for hc in hook_cfgs:
-                source = hc.get("source")
-                hook_config = hc.get("config", {})
-
-                if source and source in all_hook_builders:
-                    builder = all_hook_builders[source]
-                    builder(agent, hook_config)
-
-        timer_cfgs = config_dict.get("timers", [])
-        for tc in timer_cfgs:
-            agent.input.every(
-                seconds=tc.get("seconds", 60),
-                name=tc.get("name", ""),
-                hint=tc.get("hint", ""),
-            )
-
-        return agent
-
-    @classmethod
-    async def load(cls, base_dir: str | Path, *,
-             extra_tool_builders: dict = None,
-             extra_hook_builders: dict = None) -> 'Agent':
-        base_path = Path(base_dir)
-        config_path = base_path / 'agent_config.yaml'
-        if not config_path.exists():
-            raise FileNotFoundError(f"Agent config not found: {config_path}")
-
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config_dict = yaml.safe_load(f)
-
-        return await cls.from_config_dict(
-            config_dict,
-            extra_tool_builders=extra_tool_builders,
-            extra_hook_builders=extra_hook_builders,
-            base_dir=base_path,
-        )
     
     async def load_session(self, session_file_path: Path | str):
         await self.hook.trigger(HookType.NEW_SESSION)
@@ -352,21 +215,24 @@ class Agent:
                     shutil.copy2(f, dst)
 
         self.session = Session.load(session_id, dst_dir)
-        
+
         ever_used_tools = self.session.ever_used_tools
         for tool_name in ever_used_tools:
             if tool_name not in self.tools:
                 self.logger.warning(f"Tool '{tool_name}' not found in agent tools")
+        self._dirty = True
 
     async def new_session(self):
         await self.hook.trigger(HookType.NEW_SESSION)
         self.session.save()
         self.session = Session.create(self.session_dir)
-    
+        self._dirty = True
+
     def add_tools(self, tools: List[Tool]):
         for t in tools:
             self.tools[t.name] = t
         self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
+        self._dirty = True
 
     def register_mcp_clients(self, clients: dict):
         self._mcp_clients.update(clients)
@@ -397,6 +263,7 @@ class Agent:
                     loop.create_task(client.close())
                 except RuntimeError:
                     asyncio.run(client.close())
+        self._dirty = True
     
     def _add_load_skills_tool(self):
         @tool
@@ -473,8 +340,12 @@ Your available skills are:
 
     def add_skills(self, skills:List[Skill]):
         new_skills = {s.name: s for s in skills}
+        if not self.skills and new_skills:
+            self._add_load_skills_tool()
         self.skills.update(new_skills)
         self.skill_prompt = self._load_skill_prompt()
+        self._dirty = True
+        
     
     def construct_model_input(self) -> Model_Input:
         tools = list(self.tools.values())
@@ -644,6 +515,7 @@ Your available skills are:
                         _exit_reason = "stopped"
                         break
                     self.state = AgentState.Running
+                    await self._emit({'type': 'agent_state', 'state': 'running'})
                     try:
                         await self._handle_event(event)
                     except Exception as e:
@@ -659,6 +531,7 @@ Your available skills are:
                         self.state = AgentState.Error
                     if self._running:
                         self.state = AgentState.Waiting
+                        await self._emit({'type': 'agent_state', 'state': 'waiting'})
                 else:
                     _exit_reason = "not_running"
             finally:
@@ -666,6 +539,10 @@ Your available skills are:
                 self._event_queue = asyncio.Queue()
                 self._running = False
                 self.state = AgentState.Ready
+                try:
+                    await self._emit({'type': 'agent_state', 'state': 'ready'})
+                except Exception:
+                    pass
                 try:
                     self.save()
                 except Exception as e:

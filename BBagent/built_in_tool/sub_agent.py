@@ -2,7 +2,6 @@
 SubAgent tool - Delegate tasks to a sub-agent with its own model and tools.
 """
 import inspect
-from dataclasses import asdict
 from uuid import uuid4 as uuid
 
 from ..core.tool import Tool
@@ -108,6 +107,5 @@ async def create_sub_agent_tool(
         name="SubAgent",
         description=description,
         input_schema=input_schema,
-        source="built_in.sub_agent",
-        config={"policy": asdict(policy)} if policy else {},
+        source="built_in",
     )

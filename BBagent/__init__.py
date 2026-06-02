@@ -34,7 +34,6 @@ from .core import (
     MCPServerConfig,
     parse_config_file,
     load_configs,
-    restore_mcp_tools,
     Skill,
     scan_skills,
 )
@@ -50,14 +49,11 @@ from .built_in_tool import (
     create_grep_tool,
     create_find_tool,
     create_ls_tool,
-    create_ask_human_tool,
 )
 
 from .built_in_hook import (
-    create_memory_compress_hook,
-    setup_agent_hook,
     compress_session,
-    MemoryCompressConfig,
+    BuiltinHookConfig,
     HOOK_CREATOR,
 )
 
@@ -97,7 +93,6 @@ __all__ = [
     "MCPServerConfig",
     "parse_config_file",
     "load_configs",
-    "restore_mcp_tools",
     "Skill",
     "scan_skills",
     "create_all_tools",
@@ -110,13 +105,10 @@ __all__ = [
     "create_grep_tool",
     "create_find_tool",
     "create_ls_tool",
-    "create_ask_human_tool",
 ]
 
 __all__ += [
-    "create_memory_compress_hook",
-    "setup_agent_hook",
     "HOOK_CREATOR",
     "compress_session",
-    "MemoryCompressConfig",
+    "BuiltinHookConfig",
 ]

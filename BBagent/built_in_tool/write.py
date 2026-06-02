@@ -2,7 +2,6 @@
 Write tool - Write content to a file, creating directories as needed.
 """
 import os
-from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -111,6 +110,5 @@ def create_write_tool(
         name="Write",
         description="Writes content to a file. Creates the file if it doesn't exist.",
         input_schema=input_schema,
-        source="built_in.write",
-        config={"policy": asdict(policy)} if policy else {},
+        source="built_in",
     )

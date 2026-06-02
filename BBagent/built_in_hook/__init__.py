@@ -14,7 +14,7 @@ from .memory import (
 )
 from .ctx_compress_hook import create_ctx_compress_hook, compress_session, COMPRESS_PROMPT, COMPRESS_PREFIX
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 from ..core import Agent, Model, HookContext, HookType
 
@@ -56,44 +56,70 @@ Before you receive each user message, the system automatically searches the memo
 
 
 @dataclass
-class MemoryCompressConfig:
-    """Configuration for memory and context compression hooks."""
+class BuiltinHookConfig:
+    """Unified configuration for built-in hook builders in HOOK_CREATOR.
+    Each builder reads only the fields relevant to its own subsystem."""
 
+    # === Memory subsystem (consumed by _setup_memory) ===
+    # System prompt template appended to agent.system_prompt after memory setup.
     memory_system_prompt: str = MEMORY_SYSTEM_PROMPT
+    # Description shown on the add_memory tool that the memory builder injects.
     add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION
-    compress_prompt: str = COMPRESS_PROMPT
-    compress_prefix: str = COMPRESS_PREFIX
-    keep_recent_turns: int = KEEP_RECENT_TURNS
-    compression_threshold: float = COMPRESSION_THRESHOLD
-    small_turn_cap: int = SMALL_TURN_CAP
-    merge_ratio: float = MERGE_RATIO
-    max_inject: int = MAX_INJECT
-    max_candidates: int = MAX_CANDIDATES
-    rrf_k: int = RRF_K
-    bm25_weight: float = BM25_WEIGHT
-    vector_weight: float = VECTOR_WEIGHT
+    # System prompt for the memory-extraction subagent.
     extract_prompt: str = EXTRACT_SYSTEM_PROMPT
+    # Tool description used inside the extraction subagent.
     extract_subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT
+    # User-side prompt for the extraction subagent.
     extract_user_prompt: str = EXTRACT_USER_PROMPT
+    # System prompt for the memory-cleaning pass.
     clean_prompt: str = CLEAN_SYSTEM_PROMPT
+    # User-side prompt for the memory-cleaning pass.
     clean_user_prompt: str = CLEAN_USER_PROMPT
+    # When accumulated mutation count exceeds this, the cleaning pass runs.
     clean_mutation_threshold: int = 50
+    # Max number of memories injected before a user message.
+    max_inject: int = MAX_INJECT
+    # Max candidate memories retrieved before reranking.
+    max_candidates: int = MAX_CANDIDATES
+    # RRF k used to fuse BM25 and vector retrieval scores.
+    rrf_k: int = RRF_K
+    # BM25 weight in the fused retrieval score.
+    bm25_weight: float = BM25_WEIGHT
+    # Vector weight in the fused retrieval score.
+    vector_weight: float = VECTOR_WEIGHT
+    # Model used by the memory subsystem; defaults to the agent's own model.
     submodel: Model = None
+    # Embedding model used by the memory subsystem; defaults to OllamaEmbedding().
     embedding_model: Embedding = None
 
+    # === Compress subsystem (consumed by _setup_compress) ===
+    # System prompt for the context-compression step.
+    compress_prompt: str = COMPRESS_PROMPT
+    # Prefix prepended to compressed turns in the session.
+    compress_prefix: str = COMPRESS_PREFIX
+    # Number of recent turns kept verbatim and never compressed.
+    keep_recent_turns: int = KEEP_RECENT_TURNS
+    # Token-ratio threshold (0..1) at which compression is triggered.
+    compression_threshold: float = COMPRESSION_THRESHOLD
 
-def setup_agent_hook(agent: Agent, config: MemoryCompressConfig = None):
-    return create_memory_compress_hook(agent, config)
+    # === Shared by both memory and compress ===
+    # Memory merge ratio; also used by compress to size the target token count.
+    merge_ratio: float = MERGE_RATIO
+    # Token cap for "small" turns; used by both extraction and compression heuristics.
+    small_turn_cap: int = SMALL_TURN_CAP
 
 
-def create_memory_compress_hook(agent: Agent, config: MemoryCompressConfig | dict = None):
+def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
+    """Register the memory subsystem: 4 hooks + add_memory tool + system_prompt extension.
+
+    Soft-depends on _setup_compress: the extract_memories_before_compress hook
+    reads ctx['compression_needed'], which is only set when the compress builder
+    is also installed. With no compress builder, that hook is a no-op.
+    """
     if config is None:
-        config = MemoryCompressConfig()
+        config = BuiltinHookConfig()
     elif isinstance(config, dict):
-        config = MemoryCompressConfig(**config)
-
-    agent.hook.bind("built_in.memory_compress", asdict(config))
-    agent.hook_config = config
+        config = BuiltinHookConfig(**config)
 
     submodel = config.submodel or agent.model
     embedding_model = config.embedding_model or OllamaEmbedding()
@@ -110,17 +136,7 @@ def create_memory_compress_hook(agent: Agent, config: MemoryCompressConfig | dic
         lambda: agent.session.id,
         prompt=config.add_memory_tool_prompt,
     )
-    add_tool.mark_hook_managed()
     agent.add_tools([add_tool])
-
-    check_compress, do_compress = create_ctx_compress_hook(
-        config.compression_threshold,
-        config.merge_ratio,
-        config.small_turn_cap,
-        config.keep_recent_turns,
-        compress_prompt=config.compress_prompt,
-        compress_prefix=config.compress_prefix,
-    )
 
     (extract_memory_before_compress,
      extract_memory_before_new_session,
@@ -144,31 +160,54 @@ def create_memory_compress_hook(agent: Agent, config: MemoryCompressConfig | dic
 
     hook = agent.hook
     hook.register(func=inject_memory_hook, hook_type=HookType.AFTER_INPUT, priority=99)
-    hook.register(func=check_compress, hook_type=HookType.BEFORE_STREAM, priority=100)
     hook.register(func=extract_memory_before_compress, hook_type=HookType.BEFORE_STREAM, priority=101)
-    hook.register(func=do_compress, hook_type=HookType.BEFORE_STREAM, priority=102)
     hook.register(func=extract_memory_before_new_session, hook_type=HookType.NEW_SESSION, priority=100)
     hook.register(func=clean_memory_hook, hook_type=HookType.NEW_SESSION, priority=101)
 
-    prompt = config.memory_system_prompt
-    prompt = prompt.format(
+    prompt = config.memory_system_prompt.format(
         memory_dir=memory_manager.memory_dir,
         add_tool_name=add_tool.name,
     )
     agent.change_system_prompt(agent.system_prompt + prompt)
 
 
+def _setup_compress(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
+    """Register the context-compression subsystem: 2 hooks.
+
+    Side effect: sets ctx['compression_needed'] before each stream so that
+    the memory builder's extract_memories_before_compress hook can react.
+    """
+    if config is None:
+        config = BuiltinHookConfig()
+    elif isinstance(config, dict):
+        config = BuiltinHookConfig(**config)
+
+    check_compress, do_compress = create_ctx_compress_hook(
+        config.compression_threshold,
+        config.merge_ratio,
+        config.small_turn_cap,
+        config.keep_recent_turns,
+        compress_prompt=config.compress_prompt,
+        compress_prefix=config.compress_prefix,
+    )
+
+    hook = agent.hook
+    hook.register(func=check_compress, hook_type=HookType.BEFORE_STREAM, priority=100)
+    hook.register(func=do_compress, hook_type=HookType.BEFORE_STREAM, priority=102)
+
+
 HOOK_CREATOR = {
-    "built_in.memory_compress": create_memory_compress_hook,
+    "built_in.memory": _setup_memory,
+    "built_in.compress": _setup_compress,
 }
 
 
 __all__ = [
-    "create_memory_compress_hook",
-    "setup_agent_hook",
+    "_setup_memory",
+    "_setup_compress",
     "HOOK_CREATOR",
     "compress_session",
     "extract_memories",
     "MEMORY_SYSTEM_PROMPT",
-    "MemoryCompressConfig",
+    "BuiltinHookConfig",
 ]

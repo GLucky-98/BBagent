@@ -36,7 +36,7 @@ class InputChannel:
         self._queue: Optional[asyncio.Queue] = None
         self._running = False
         self._timer_configs: list[tuple[float, str, str]] = []
-        self._timers: list[asyncio.Task] = []
+        self._timers: list[tuple[str, asyncio.Task]] = []
 
     async def start(self, output_queue: asyncio.Queue):
         self._queue = output_queue
@@ -44,7 +44,7 @@ class InputChannel:
         self._timers = []
         for seconds, name, hint in self._timer_configs:
             task = self._create_timer_task(seconds, name, hint)
-            self._timers.append(task)
+            self._timers.append((name, task))
 
     def _create_timer_task(self, seconds: float, name: str, hint: str) -> asyncio.Task:
         async def _loop():
@@ -63,7 +63,7 @@ class InputChannel:
 
     async def stop(self):
         self._running = False
-        for task in self._timers:
+        for _, task in self._timers:
             task.cancel()
         self._timers.clear()
         self._queue = None
@@ -79,8 +79,37 @@ class InputChannel:
         )
         self._queue.put_nowait(event)
 
-    def every(self, seconds: float, name: str = "", hint: str = ""):
+    def every(self, seconds: float, name: str = "", hint: str = "") -> 'InputChannel':
         self._timer_configs.append((seconds, name, hint))
-        task = self._create_timer_task(seconds, name, hint)
-        self._timers.append(task)
+        if self._running:
+            task = self._create_timer_task(seconds, name, hint)
+            self._timers.append((name, task))
         return self
+
+    def cancel(self, name: str) -> bool:
+        """按 name 取消一个 timer。返回是否实际取消了一个。"""
+        removed = False
+        for i in range(len(self._timer_configs) - 1, -1, -1):
+            if self._timer_configs[i][1] == name:
+                del self._timer_configs[i]
+                removed = True
+        for i in range(len(self._timers) - 1, -1, -1):
+            tname, task = self._timers[i]
+            if tname == name:
+                task.cancel()
+                del self._timers[i]
+        return removed
+
+    def list_timers(self) -> list[dict]:
+        """返回当前所有 timer 配置的快照。"""
+        return [
+            {"seconds": seconds, "name": name, "hint": hint}
+            for seconds, name, hint in self._timer_configs
+        ]
+
+    def clear_timers(self) -> None:
+        """清空所有 timer 配置并取消所有任务。"""
+        for _, task in self._timers:
+            task.cancel()
+        self._timers.clear()
+        self._timer_configs.clear()

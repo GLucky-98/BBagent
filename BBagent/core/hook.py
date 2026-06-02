@@ -94,7 +94,6 @@ class AgentHook:
         }
         self._context: Optional[HookContext] = None
         self._enabled = True
-        self._bound_sources: list[dict] = []
 
     @property
     def context(self) -> HookContext:
@@ -104,9 +103,6 @@ class AgentHook:
 
     def set_context(self, agent):
         self.context.agent = agent
-
-    def bind(self, source: str, config: dict = None):
-        self._bound_sources.append({"source": source, "config": config or {}})
 
     def hook(self, hook_type: HookType, priority: int = None, critical: bool = False):
         """装饰器：注册 Hook"""
@@ -182,7 +178,6 @@ class AgentHook:
     def clear(self):
         for hook_type in self._hooks:
             self._hooks[hook_type] = []
-        self._bound_sources = []
         self._context = None
 
     def merge(self, *others: 'AgentHook'):
@@ -194,6 +189,3 @@ class AgentHook:
                     while new_hook.priority in existing:
                         new_hook.priority += 1
                     self._register(new_hook)
-
-    def to_config_dict(self) -> list:
-        return self._bound_sources
