@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Callable, List, Optional
 from uuid import uuid4 as uuid
 
-import yaml
-
 from .model import Model, Model_Input
 from .tool import Tool, tool
 from .message import (
@@ -105,15 +103,13 @@ class Agent:
 
         self.state = AgentState.Ready
 
-        self._dirty = False
+
 
     def change_name(self, name: str):
         self.name = name
-        self._dirty = True
 
     def change_model(self, model: Model):
         self.model = model
-        self._dirty = True
 
     def change_base_dir(self, path: Path | str):
         new_base = Path(path)
@@ -137,55 +133,11 @@ class Agent:
         self.base_dir = new_base
         self.system_prompt_path = new_system_prompt
         self.session_dir = new_session
-        self._dirty = True
 
     def change_system_prompt(self, prompt: str):
         self.system_prompt = prompt
         self.system_prompt_path.write_text(prompt, encoding='utf-8')
-        self._dirty = True
 
-    def save(self):
-        try:
-            self.session.save()
-            if self._dirty:
-                self._save_config()
-                self._dirty = False
-        except Exception as e:
-            self.logger.warning(f"Failed to save agent config: {e}")
-
-    def flush(self):
-        """强制把当前状态写盘，清空 dirty。给后端在关闭/重启前用。"""
-        try:
-            self.session.save()
-            self._save_config()
-            self._dirty = False
-        except Exception as e:
-            self.logger.warning(f"Failed to flush agent config: {e}")
-
-    def _save_config(self):
-        config_path = self.base_dir / 'agent_config.yaml'
-        config_dict = self.to_config_dict()
-        with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(config_dict, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-
-    def to_config_dict(self) -> dict:
-        tool_groups: dict[str, list[str]] = {}
-        for t in self.tools.values():
-            if t.source in ("built_in", "mcp"):
-                tool_groups.setdefault(t.source, []).append(t.name)
-            elif t.source in ("hook", "team"):
-                continue
-            else:
-                tool_groups.setdefault("unknown", []).append(t.name)
-        return {
-            "name": self.name,
-            "base_dir": str(self.base_dir),
-            "system_prompt": self.system_prompt,
-            "tools": tool_groups,
-            "skills": [s.name for s in self.skills.values()],
-            "last_session_id": self.session.id if self.session else None,
-        }
-    
     async def load_session(self, session_file_path: Path | str):
         await self.hook.trigger(HookType.NEW_SESSION)
         self.session.save()
@@ -220,19 +172,19 @@ class Agent:
         for tool_name in ever_used_tools:
             if tool_name not in self.tools:
                 self.logger.warning(f"Tool '{tool_name}' not found in agent tools")
-        self._dirty = True
+
 
     async def new_session(self):
         await self.hook.trigger(HookType.NEW_SESSION)
         self.session.save()
         self.session = Session.create(self.session_dir)
-        self._dirty = True
+
 
     def add_tools(self, tools: List[Tool]):
         for t in tools:
             self.tools[t.name] = t
         self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
-        self._dirty = True
+
 
     def register_mcp_clients(self, clients: dict):
         self._mcp_clients.update(clients)
@@ -263,7 +215,7 @@ class Agent:
                     loop.create_task(client.close())
                 except RuntimeError:
                     asyncio.run(client.close())
-        self._dirty = True
+
     
     def _add_load_skills_tool(self):
         @tool
@@ -344,7 +296,7 @@ Your available skills are:
             self._add_load_skills_tool()
         self.skills.update(new_skills)
         self.skill_prompt = self._load_skill_prompt()
-        self._dirty = True
+
         
     
     def construct_model_input(self) -> Model_Input:
@@ -458,7 +410,6 @@ Your available skills are:
                 )
                 raise
             finally:
-                self.save()
                 self.state = AgentState.Ready
                 await self.hook.trigger(HookType.AFTER_RUN)
                 self.logger.info("Agent run completed")
@@ -493,10 +444,6 @@ Your available skills are:
                 )
                 self._running = False
                 self.state = AgentState.Error
-                try:
-                    self.save()
-                except Exception:
-                    pass
                 return
 
             _exit_reason = "unknown"
@@ -543,10 +490,6 @@ Your available skills are:
                     await self._emit({'type': 'agent_state', 'state': 'ready'})
                 except Exception:
                     pass
-                try:
-                    self.save()
-                except Exception as e:
-                    self.logger.warning(f"Failed to save agent state on stop: {e}")
                 self.logger.info(
                     "Agent event loop stopped",
                     context={"exit_reason": _exit_reason}
@@ -593,7 +536,6 @@ Your available skills are:
                 )
                 await self.hook.trigger(HookType.ON_ERROR, e)
             finally:
-                self.save()
                 await self.hook.trigger(HookType.AFTER_RUN)
                 self.logger.info("Event handling completed")
                 self.logger.clear_trace_id()

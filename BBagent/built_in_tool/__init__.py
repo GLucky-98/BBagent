@@ -15,14 +15,14 @@ from .sub_agent import create_sub_agent_tool
 
 
 TOOL_CREATOR = {
-    "built_in.read": create_read_tool,
-    "built_in.write": create_write_tool,
-    "built_in.edit": create_edit_tool,
-    "built_in.bash": create_bash_tool,
-    "built_in.find": create_find_tool,
-    "built_in.grep": create_grep_tool,
-    "built_in.ls": create_ls_tool,
-    "built_in.sub_agent": create_sub_agent_tool,
+    "read": create_read_tool,
+    "write": create_write_tool,
+    "edit": create_edit_tool,
+    "bash": create_bash_tool,
+    "find": create_find_tool,
+    "grep": create_grep_tool,
+    "ls": create_ls_tool,
+    "sub_agent": create_sub_agent_tool,
 }
 
 
