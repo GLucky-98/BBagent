@@ -104,7 +104,7 @@ async def create_sub_agent_tool(
 
     return Tool(
         sub_agent_func,
-        name="SubAgent",
+        name="sub_agent",
         description=description,
         input_schema=input_schema,
         source="built_in",

@@ -38,7 +38,7 @@ class Model(ABC):
     def __init__(self, model: str, api_key: str, base_url: str, max_context_tokens: int = 200000):
         self.model = model
         self.api_key = api_key
-        self.base_url = base_url
+        self.base_url_raw = base_url
         self.max_context_tokens = max_context_tokens
         self._async_client: httpx.AsyncClient | None = None
         self._active_requests: int = 0
@@ -81,9 +81,21 @@ class Model(ABC):
     def model_response_parse(self, response:dict) -> ModelMessage | str:
         pass
 
-    @abstractmethod
     def to_config_dict(self) -> dict:
-        pass
+        """子类需设置 self.provider, self.max_completion_tokens, self.temperature, self.top_p, self.thinking, self.extra_args"""
+        config = {
+            "provider": self.provider,
+            "model": self.model,
+            "api_key": self.api_key,
+            "base_url": self.base_url_raw,
+            "max_completion_tokens": self.max_completion_tokens,
+            "max_context_tokens": self.max_context_tokens,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "thinking": self.thinking,
+        }
+        config.update(self.extra_args)
+        return config
 
     @staticmethod
     def _resolve_env_vars(value: str) -> str:
@@ -135,19 +147,23 @@ class AnthropicModel(Model):
                  model: str,
                  api_key: str,
                  base_url: str = "https://api.anthropic.com",
-                 max_tokens: int = 100000,
+                 max_completion_tokens: int = 65536,
                  max_context_tokens: int = 200000,
                  temperature: float = 1,
-                 top_p: float = 0.95,
-                 thinking: dict = None,
+                 top_p: float = 1,
+                 thinking: bool = True,
                  **kwargs):
         
-        super().__init__(model, api_key, base_url+'/v1/messages', max_context_tokens=max_context_tokens)
+        self.provider = "anthropic"
+        self.base_url_raw = base_url
+        self.base_url = base_url + '/v1/messages'
+
+        super().__init__(model, api_key, base_url, max_context_tokens=max_context_tokens)
         
-        self.max_tokens = max_tokens
+        self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
         self.top_p = top_p
-        self.thinking = thinking if thinking is not None else {"type":"adaptive","display":"summarized"}
+        self.thinking = thinking
         self.extra_args = kwargs if kwargs else {}
 
         self.headers = {
@@ -157,11 +173,13 @@ class AnthropicModel(Model):
                     }
 
         self.payload = {
-                    "max_tokens": self.max_tokens,
+                    "max_tokens": self.max_completion_tokens,
                     "model": self.model,
                     "temperature": self.temperature,
                     "top_p": self.top_p
                     }
+        if not thinking:
+            self.payload["thinking"] = {"type": "disabled"}
         
         self.payload.update(self.extra_args)
         self._base_payload = dict(self.payload)
@@ -309,9 +327,6 @@ class AnthropicModel(Model):
 
         if model_input.tools:
             payload['tools'] = [t.schema for t in model_input.tools]
-
-        if self.thinking:
-            payload['thinking'] = self.thinking
         
         payload_messages = []
         if model_input.messages:
@@ -382,23 +397,6 @@ class AnthropicModel(Model):
                             input_tokens=input_tokens,
                             output_tokens=output_tokens)       
 
-    def to_config_dict(self) -> dict:
-        base_url_val = self.base_url
-        if base_url_val.endswith("/v1/messages"):
-            base_url_val = base_url_val[:-len("/v1/messages")]
-        config = {
-            "provider": "anthropic",
-            "model": self.model,
-            "api_key": self.api_key,
-            "base_url": base_url_val,
-            "max_tokens": self.max_tokens,
-            "max_context_tokens": self.max_context_tokens,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "thinking": self.thinking,
-        }
-        config.update(self.extra_args)
-        return config
 
 
 # ----------------------------------------------------------------------------
@@ -411,19 +409,22 @@ class OpenAIModel(Model):
                  model: str,
                  api_key: str,
                  base_url: str = "https://api.openai.com/v1",
-                 max_completion_tokens: int = 100000,
-                 max_context_tokens: int = 128000,
+                 max_completion_tokens: int = 65536,
+                 max_context_tokens: int = 200000,
                  temperature: float = 1.0,
                  top_p: float = 1.0,
-                 thinking: dict = None,
+                 thinking: bool = True,
                  **kwargs):
+
+        self.provider = "openai"
+        self.base_url_raw = base_url
 
         super().__init__(model, api_key, base_url, max_context_tokens=max_context_tokens)
         self.base_url = base_url.rstrip('/') + '/chat/completions'
         self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
         self.top_p = top_p
-        self.thinking = thinking if thinking is not None else {'type':'enabled'}
+        self.thinking = thinking
         self.extra_args = kwargs if kwargs else {}
 
         self.headers = {
@@ -436,8 +437,9 @@ class OpenAIModel(Model):
             "max_completion_tokens": self.max_completion_tokens,
             "temperature": self.temperature,
             "top_p": self.top_p,
-            "thinking": self.thinking,
         }
+        if not thinking:
+            self.payload["thinking"] = {"type": "disabled"}
 
         self.payload['n'] = 1
 
@@ -583,23 +585,7 @@ class OpenAIModel(Model):
             output_tokens=output_tokens
         )
 
-    def to_config_dict(self) -> dict:
-        base_url_val = self.base_url
-        if base_url_val.endswith("/chat/completions"):
-            base_url_val = base_url_val[:-len("/chat/completions")]
-        config = {
-            "provider": "openai",
-            "model": self.model,
-            "api_key": self.api_key,
-            "base_url": base_url_val,
-            "max_completion_tokens": self.max_completion_tokens,
-            "max_context_tokens": self.max_context_tokens,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "thinking": self.thinking,
-        }
-        config.update(self.extra_args)
-        return config
+
 
     def _parse_content_parts(self, parts: list) -> List[ContentBlock]:
         """将 OpenAI 响应中的 content parts 转换为内部 ContentBlock 列表"""

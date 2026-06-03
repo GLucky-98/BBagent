@@ -130,7 +130,7 @@ def create_ls_tool(
 
     return Tool(
         ls_func,
-        name="LS",
+        name="ls",
         description="Lists the contents of a directory.",
         input_schema=input_schema,
         source="built_in",

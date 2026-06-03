@@ -128,7 +128,7 @@ def create_read_tool(
 
     return Tool(
         read_func,
-        name="Read",
+        name="read",
         description="Read the complete contents of a file.",
         input_schema=input_schema,
         source="built_in",

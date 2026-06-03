@@ -127,7 +127,7 @@ async def create_bash_tool(
 
     return Tool(
         bash_func,
-        name="Bash",
+        name="bash",
         description="Execute a bash command. Returns the stdout and stderr output.",
         input_schema=input_schema,
         source="built_in",

@@ -119,7 +119,7 @@ def create_edit_tool(
 
     return Tool(
         edit_func,
-        name="Edit",
+        name="edit",
         description="Makes a precise edit to a file. old_string must match the existing content exactly.",
         input_schema=input_schema,
         source="built_in",

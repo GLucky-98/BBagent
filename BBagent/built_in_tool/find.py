@@ -3,7 +3,7 @@ Find tool - Find files by name pattern (glob matching).
 """
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from ..core.tool import Tool
 from .policy import Policy
@@ -34,7 +34,7 @@ def create_find_tool(
 
     operations = FindOperations()
 
-    def match_glob(base_path: str, pattern: str) -> list[str]:
+    def match_glob(base_path: str, pattern: str) -> Iterable[str]:
         base = Path(base_path)
 
         if "**" in pattern:
@@ -136,7 +136,7 @@ def create_find_tool(
 
     return Tool(
         find_func,
-        name="Glob",
+        name="find",
         description="Finds files by name pattern using glob matching.",
         input_schema=input_schema,
         source="built_in",

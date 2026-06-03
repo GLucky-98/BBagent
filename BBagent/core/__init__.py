@@ -10,7 +10,6 @@ from .mcp import (
     make_notification,
     parse_config_file,
     load_configs,
-    restore_mcp_tools,
 )
 from .message import (
     Session,

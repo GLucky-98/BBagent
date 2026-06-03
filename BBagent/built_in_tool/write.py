@@ -107,7 +107,7 @@ def create_write_tool(
 
     return Tool(
         write_func,
-        name="Write",
+        name="write",
         description="Writes content to a file. Creates the file if it doesn't exist.",
         input_schema=input_schema,
         source="built_in",

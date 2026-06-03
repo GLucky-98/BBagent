@@ -297,7 +297,7 @@ class MCPTool(Tool):
             - __doc__ == config["description"]
             - 参数签名与 inputSchema 一致，并包含正确的默认值
         """
-        func_name = mcp_client.name + "_" + config["name"]
+        func_name = f"mcp:{mcp_client.name}::{config['name']}"
         func_doc = config["description"]
         schema = config["inputSchema"]
         properties = schema.get("properties", {})

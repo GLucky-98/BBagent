@@ -172,7 +172,7 @@ def create_grep_tool(
 
     return Tool(
         grep_func,
-        name="Grep",
+        name="grep",
         description="Searches for a pattern in files using regular expressions.",
         input_schema=input_schema,
         source="built_in",
