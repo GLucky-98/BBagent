@@ -47,11 +47,11 @@ function TeamMessageBubble({ message, color }: { message: Message; color: string
 
 export function TeamChatWindow() {
   const agents = useAppStore((s) => s.agents);
-  const activeAgentName = useAppStore((s) => s.activeAgentName);
+  const activeAgentId = useAppStore((s) => s.activeAgentId);
   const addMessage = useAppStore((s) => s.addMessage);
 
-  const team = agents.find((a) => a.name === activeAgentName && a.type === "team");
-  const members = team?.teamMembers || [];
+  const team = agents.find((a) => a.id === activeAgentId && a.type === "team");
+  const members = team?.members || [];
 
   const [input, setInput] = useState("");
   const [mentionFilter, setMentionFilter] = useState("");
@@ -72,12 +72,14 @@ export function TeamChatWindow() {
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
   useEffect(() => { scrollToBottom(); }, [team?.messages]);
 
-  const connectWs = useCallback((teamName: string) => {
+  const connectWs = useCallback((teamRef: string, teamName: string) => {
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
       wsRef.current.close();
     }
     const wsBase = (import.meta.env.VITE_API_BASE || "http://localhost:8000/api").replace(/^http/, "ws");
-    const ws = new WebSocket(`${wsBase}/ws/team/${teamName}`);
+    // unified-id: backend WS route accepts team.id (preferred) or name
+    // as fallback. Frontend passes team.id when available.
+    const ws = new WebSocket(`${wsBase}/ws/team/${teamRef}`);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
@@ -126,12 +128,14 @@ export function TeamChatWindow() {
 
   useEffect(() => {
     if (team) {
-      connectWs(team.name);
+      // unified-id: pass team.id for the WS route; the second arg is the
+      // team name (the store's in-memory key for addMessage).
+      connectWs(team.id || team.name, team.name);
     }
     return () => {
       wsRef.current?.close();
     };
-  }, [team?.name, connectWs]);
+  }, [team?.id, team?.name, connectWs]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -169,7 +173,7 @@ export function TeamChatWindow() {
       content: input.trim(),
       timestamp: Date.now(),
     };
-    addMessage(team.name, userMsg);
+    addMessage(team.id, userMsg);
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({

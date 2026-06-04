@@ -10,11 +10,11 @@ interface Props {
 
 export const PanelA_FilePanel = forwardRef<HTMLDivElement, Props>(
   ({ width }, ref) => {
-    const activeAgentName = useAppStore((s) => s.activeAgentName);
+    const activeAgentId = useAppStore((s) => s.activeAgentId);
     const [splitRatio, setSplitRatio] = useState(0.4);
     const innerRef = useRef<HTMLDivElement>(null);
 
-    if (!activeAgentName) {
+    if (!activeAgentId) {
       return (
         <div
           ref={ref}

@@ -1,37 +1,58 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from backend.state import state_manager
 from backend.schemas import AgentConfig
 from backend.errors import ConflictError, ErrorCode
 from backend.logging import get_backend_logger
 
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
 logger = get_backend_logger("api.agents")
 router = APIRouter()
 
 
+def _resolve_agent(agent_id: str) -> str:
+    if agent_id not in state_manager.agent_factory.agents:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_id}' not found",
+        )
+    return agent_id
+
+
 @router.get("")
 async def list_agents():
+    agents_dir = DATA_DIR / "agents"
     result = []
-    for name in state_manager.agents:
-        config = state_manager.get_agent_config(name)
+    stale_ids: list[str] = []
+    for agent_id in state_manager.agent_factory.agents:
+        agent = state_manager.agent_factory.agents[agent_id]
+        if not (agent.base_dir / "agent_config.json").exists():
+            stale_ids.append(agent_id)
+            continue
+        config = state_manager.get_agent_config(agent_id)
         if config:
             data = config.model_dump(mode="json")
-            state_info = state_manager.get_agent_state(name)
+            state_info = state_manager.get_agent_state(agent_id)
             data["state"] = state_info["state"]
             data["currentSessionId"] = state_info["session_id"]
             result.append(data)
+    for agent_id in stale_ids:
+        state_manager.agent_factory.agents.pop(agent_id, None)
+        state_manager.agent_factory._model_ids.pop(agent_id, None)
     return result
 
 
-@router.get("/{name}")
-async def get_agent(name: str):
-    config = state_manager.get_agent_config(name)
+@router.get("/{agent_id}")
+async def get_agent(agent_id: str):
+    _resolve_agent(agent_id)
+    config = state_manager.get_agent_config(agent_id)
     if not config:
-        return {"error": {"code": "AGENT_NOT_FOUND", "message": f"Agent '{name}' not found"}}
+        return {"error": {"code": "AGENT_NOT_FOUND", "message": f"Agent '{agent_id}' not found"}}
     data = config.model_dump(mode="json")
-    state_info = state_manager.get_agent_state(name)
+    state_info = state_manager.get_agent_state(agent_id)
     data["state"] = state_info["state"]
     data["currentSessionId"] = state_info["session_id"]
     return data
@@ -39,38 +60,47 @@ async def get_agent(name: str):
 
 @router.post("")
 async def create_agent(config: AgentConfig):
-    if config.name in state_manager.agents:
-        raise ConflictError(ErrorCode.AGENT_ALREADY_EXISTS,
-                            f"Agent '{config.name}' already exists")
+    for existing in state_manager.agent_factory.agents.values():
+        if existing.name == config.name:
+            raise ConflictError(
+                ErrorCode.AGENT_ALREADY_EXISTS,
+                f"Agent '{config.name}' already exists",
+            )
     agent = await state_manager.create_agent(config)
-    data = state_manager.get_agent_config(agent.name).model_dump(mode="json")
-    data["state"] = "waiting"
-    data["currentSessionId"] = agent.session.id
-    data["messages"] = []
-    return data
-
-
-@router.put("/{name}")
-async def update_agent(name: str, updates: dict):
-    agent = await state_manager.update_agent(name, updates)
-    if not agent:
-        return {"error": {"code": "AGENT_NOT_FOUND", "message": f"Agent '{name}' not found"}}
-    data = state_manager.get_agent_config(name).model_dump(mode="json")
-    state_info = state_manager.get_agent_state(name)
+    agent_id = next(
+        (i for i, a in state_manager.agent_factory.agents.items() if a is agent),
+        None,
+    )
+    data = state_manager.get_agent_config(agent_id).model_dump(mode="json")
+    state_info = state_manager.get_agent_state(agent_id)
     data["state"] = state_info["state"]
     data["currentSessionId"] = state_info["session_id"]
     return data
 
 
-@router.delete("/{name}")
-async def delete_agent(name: str, delete_files: bool = Query(default=False)):
+@router.put("/{agent_id}")
+async def update_agent(agent_id: str, updates: dict):
+    _resolve_agent(agent_id)
+    agent = await state_manager.update_agent(agent_id, updates)
+    if not agent:
+        return {"error": {"code": "AGENT_NOT_FOUND", "message": f"Agent '{agent_id}' not found"}}
+    data = state_manager.get_agent_config(agent_id).model_dump(mode="json")
+    state_info = state_manager.get_agent_state(agent_id)
+    data["state"] = state_info["state"]
+    data["currentSessionId"] = state_info["session_id"]
+    return data
+
+
+@router.delete("/{agent_id}")
+async def delete_agent(agent_id: str, delete_files: bool = Query(default=False)):
+    _resolve_agent(agent_id)
     base_path = None
     if delete_files:
-        agent = state_manager.agents.get(name)
+        agent = state_manager.agent_factory.agents.get(agent_id)
         if agent:
             base_path = getattr(agent, "base_dir", None)
 
-    await state_manager.delete_agent(name)
+    await state_manager.delete_agent(agent_id)
 
     if delete_files and base_path:
         bp = Path(str(base_path)).expanduser().resolve()
@@ -81,43 +111,48 @@ async def delete_agent(name: str, delete_files: bool = Query(default=False)):
     return {"success": True}
 
 
-@router.post("/{name}/start")
-async def start_agent(name: str):
-    await state_manager.start_agent(name)
-    return state_manager.get_agent_state(name)
+@router.post("/{agent_id}/start")
+async def start_agent(agent_id: str):
+    _resolve_agent(agent_id)
+    await state_manager.start_agent(agent_id)
+    return state_manager.get_agent_state(agent_id)
 
 
-@router.post("/{name}/stop")
-async def stop_agent(name: str):
-    await state_manager.stop_agent(name)
-    return state_manager.get_agent_state(name)
+@router.post("/{agent_id}/stop")
+async def stop_agent(agent_id: str):
+    _resolve_agent(agent_id)
+    await state_manager.stop_agent(agent_id)
+    return state_manager.get_agent_state(agent_id)
 
 
-@router.get("/{name}/state")
-async def get_agent_state(name: str):
-    state_info = state_manager.get_agent_state(name)
-    if state_info["state"] == "unknown":
-        return {"error": {"code": "AGENT_NOT_FOUND", "message": f"Agent '{name}' not found"}}
+@router.get("/{agent_id}/state")
+async def get_agent_state(agent_id: str):
+    _resolve_agent(agent_id)
+    state_info = state_manager.get_agent_state(agent_id)
     return state_info
 
 
-@router.get("/{name}/sessions")
-async def list_sessions(name: str):
-    return state_manager.get_agent_sessions(name)
+@router.get("/{agent_id}/sessions")
+async def list_sessions(agent_id: str):
+    _resolve_agent(agent_id)
+    return state_manager.get_agent_sessions(agent_id)
 
 
-@router.post("/{name}/sessions/{session_id}/switch")
-async def switch_session(name: str, session_id: str):
-    await state_manager.switch_agent_session(name, session_id)
+@router.post("/{agent_id}/sessions/{session_id}/switch")
+async def switch_session(agent_id: str, session_id: str):
+    _resolve_agent(agent_id)
+    await state_manager.switch_agent_session(agent_id, session_id)
     return {"session_id": session_id, "status": "switched"}
 
 
-@router.post("/{name}/sessions/new")
-async def new_session(name: str):
-    await state_manager.new_agent_session(name)
-    return {"session_id": state_manager.agents[name].session.id}
+@router.post("/{agent_id}/sessions/new")
+async def new_session(agent_id: str):
+    _resolve_agent(agent_id)
+    await state_manager.new_agent_session(agent_id)
+    return {"session_id": state_manager.agent_factory.agents[agent_id].session.id}
 
 
-@router.get("/{name}/messages")
-async def get_messages(name: str):
-    return state_manager.get_agent_messages(name)
+@router.get("/{agent_id}/messages")
+async def get_messages(agent_id: str):
+    _resolve_agent(agent_id)
+    return state_manager.get_agent_messages(agent_id)

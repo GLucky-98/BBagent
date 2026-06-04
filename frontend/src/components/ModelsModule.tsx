@@ -18,10 +18,10 @@ function NewModelForm({ onClose, editModel }: { onClose: () => void; editModel?:
     apiKey: editModel?.apiKey ?? "",
     baseUrl: editModel?.baseUrl ?? (editModel?.provider === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com"),
     maxContextTokens: editModel?.maxContextTokens ?? 200000,
-    maxCompletionTokens: editModel?.maxCompletionTokens ?? 100000,
+    maxCompletionTokens: editModel?.maxCompletionTokens ?? 65536,
     temperature: editModel?.temperature ?? 1,
-    topP: editModel?.topP ?? 0.95,
-    thinkingEnabled: !!editModel?.thinking,
+    topP: editModel?.topP ?? 1,
+    thinkingEnabled: editModel?.thinking ?? true,
   });
 
   const handleSave = () => {
@@ -31,7 +31,7 @@ function NewModelForm({ onClose, editModel }: { onClose: () => void; editModel?:
       apiKey: form.apiKey, baseUrl: form.baseUrl,
       maxContextTokens: form.maxContextTokens, maxCompletionTokens: form.maxCompletionTokens,
       temperature: form.temperature, topP: form.topP,
-      thinking: form.thinkingEnabled ? { type: "adaptive" } : undefined,
+      thinking: form.thinkingEnabled,
     };
     if (editModel) { updateModel(editModel.id, model); } else { addModel(model); }
     onClose();
@@ -114,7 +114,7 @@ function FieldRow({ label, hint, children }: { label: string; hint?: string; chi
   );
 }
 
-function ModelList({ onNew }: { onNew: () => void }) {
+function ModelList({ onNew, onSelect }: { onNew: () => void; onSelect: () => void }) {
   const models = useAppStore((s) => s.models);
   const selectedModelId = useAppStore((s) => s.selectedModelId);
   const setSelectedModelId = useAppStore((s) => s.setSelectedModelId);
@@ -135,7 +135,7 @@ function ModelList({ onNew }: { onNew: () => void }) {
         ) : (
           <div className="space-y-1">
             {models.map((model) => (
-              <button key={model.id} onClick={() => setSelectedModelId(model.id)}
+              <button key={model.id} onClick={() => { setSelectedModelId(model.id); onSelect(); }}
                 className={cn("w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all hover:bg-(--color-secondary)", selectedModelId === model.id && ACTIVE_CLASS)}>
                 <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium", model.provider === "anthropic" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-600")}>
                   {model.provider === "anthropic" ? "ANT" : "OA"}
@@ -239,7 +239,7 @@ export function ModelsModule() {
 
   return (
     <div className="flex h-full">
-      <ModelList onNew={() => { setShowForm(true); setEditingId(null); }} />
+      <ModelList onNew={() => { setShowForm(true); setEditingId(null); }} onSelect={() => { setShowForm(false); setEditingId(null); }} />
       <ModelTestPanel
         showForm={showForm}
         editModel={editingId ? models.find((m) => m.id === editingId) : undefined}

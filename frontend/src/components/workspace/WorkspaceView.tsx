@@ -16,7 +16,7 @@ const PANEL_C_MAX = 600;
 const PANEL_C_DEFAULT = 360;
 
 export function WorkspaceView() {
-  const activeAgentName = useAppStore((s) => s.activeAgentName);
+  const activeAgentId = useAppStore((s) => s.activeAgentId);
   const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
   const agents = useAppStore((s) => s.agents);
   const previewFile = useAppStore((s) => s.previewFile);
@@ -33,10 +33,10 @@ export function WorkspaceView() {
     setPanelCWidth(width);
   }, []);
 
-  const activeAgent = agents.find((a) => a.name === activeAgentName);
+  const activeAgent = agents.find((a) => a.id === activeAgentId);
   const showTeamChat = activeAgent?.type === "team" && !activeTeamMemberName;
 
-  if (!activeAgentName) {
+  if (!activeAgentId) {
     return (
       <div className="flex-1 flex items-center justify-center bg-(--color-muted)/30">
         <div className="text-center">

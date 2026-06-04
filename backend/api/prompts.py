@@ -17,7 +17,7 @@ router = APIRouter()
 
 @router.get("")
 async def list_prompts():
-    return [p.model_dump(mode="json") for p in state_manager.prompts]
+    return [p.model_dump(mode="json") for p in state_manager.prompt_factory.list_all()]
 
 
 @router.post("")

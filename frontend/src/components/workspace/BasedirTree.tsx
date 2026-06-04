@@ -102,7 +102,7 @@ function TreeNode({
 }
 
 export function BasedirTree() {
-  const activeAgentName = useAppStore((s) => s.activeAgentName);
+  const activeAgentId = useAppStore((s) => s.activeAgentId);
   const agents = useAppStore((s) => s.agents);
   const expandedPaths = useAppStore((s) => s.basedirExpandedPaths);
   const toggleExpand = useAppStore((s) => s.toggleBasedirExpand);
@@ -110,7 +110,7 @@ export function BasedirTree() {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const agent = agents.find((a) => a.name === activeAgentName);
+  const agent = agents.find((a) => a.id === activeAgentId);
   const basePath = agent?.basePath;
 
   useEffect(() => {

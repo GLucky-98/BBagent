@@ -49,8 +49,8 @@ function SkillList() {
         ) : (
           <div className="space-y-1">
             {skills.map((skill) => (
-              <button key={skill.name} onClick={() => setSelectedSkillId(skill.name)}
-                className={cn("w-full flex items-start gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-(--color-secondary)", selectedSkillId === skill.name && "bg-(--color-primary)/10 text-(--color-primary) font-semibold shadow-[inset_4px_0_0_0_#10b981]")}>
+              <button key={skill.id || skill.name} onClick={() => setSelectedSkillId(skill.id || skill.name)}
+                className={cn("w-full flex items-start gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-(--color-secondary)", selectedSkillId === (skill.id || skill.name) && "bg-(--color-primary)/10 text-(--color-primary) font-semibold shadow-[inset_4px_0_0_0_#10b981]")}>
                 <div className="w-6 h-6 rounded-lg bg-(--color-primary)/10 text-(--color-primary) flex items-center justify-center shrink-0"><Sparkles size={12} /></div>
                 <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{skill.name}</p><p className="text-xs text-(--color-muted-foreground) mt-0.5 line-clamp-2">{skill.description}</p></div>
               </button>

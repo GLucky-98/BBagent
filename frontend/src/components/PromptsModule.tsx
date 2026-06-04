@@ -45,7 +45,7 @@ function NewPromptForm({ onClose }: { onClose: () => void }) {
   );
 }
 
-function PromptList({ onNew }: { onNew: () => void }) {
+function PromptList({ onNew, onSelect }: { onNew: () => void; onSelect: () => void }) {
   const prompts = useAppStore((s) => s.prompts);
   const selectedPromptId = useAppStore((s) => s.selectedPromptId);
   const setSelectedPromptId = useAppStore((s) => s.setSelectedPromptId);
@@ -94,7 +94,7 @@ function PromptList({ onNew }: { onNew: () => void }) {
         ) : (
           <div className="space-y-1">
             {prompts.map((prompt) => (
-              <button key={prompt.id} onClick={() => setSelectedPromptId(prompt.id)}
+              <button key={prompt.id} onClick={() => { setSelectedPromptId(prompt.id); onSelect(); }}
                 className={cn("w-full flex items-start gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-(--color-secondary)", selectedPromptId === prompt.id && ACTIVE_CLASS)}>
                 <div className="w-6 h-6 rounded-lg bg-(--color-primary)/10 text-(--color-primary) flex items-center justify-center shrink-0"><FileText size={12} /></div>
                 <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{prompt.name}</p></div>
@@ -153,7 +153,7 @@ export function PromptsModule() {
 
   return (
     <div className="flex h-full">
-      <PromptList onNew={() => setShowNew(true)} />
+      <PromptList onNew={() => setShowNew(true)} onSelect={() => setShowNew(false)} />
       <PromptDetailPanel showNew={showNew} onCloseNew={() => setShowNew(false)} />
     </div>
   );

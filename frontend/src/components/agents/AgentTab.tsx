@@ -18,10 +18,10 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
   const [isHovered, setIsHovered] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const activeAgentName = useAppStore((s) => s.activeAgentName);
+  const activeAgentId = useAppStore((s) => s.activeAgentId);
   const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
   const removeAgent = useAppStore((s) => s.removeAgent);
-  const agentState = useAppStore((s) => s.agentStates[agent.name] || agent.state || "ready");
+  const agentState = useAppStore((s) => s.agentStates[agent.id] || agent.state || "ready");
   const startAgent = useAppStore((s) => s.startAgent);
   const stopAgent = useAppStore((s) => s.stopAgent);
   const isTeam = agent.type === "team";
@@ -30,22 +30,22 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
 
   const displayName = useMemo(() => {
     if (!isTeam) return agent.name;
-    if (agent.name !== activeAgentName || !activeTeamMemberName) return agent.name;
-    const member = agent.teamMembers?.find((m) => m.name === activeTeamMemberName);
+    if (agent.id !== activeAgentId || !activeTeamMemberName) return agent.name;
+    const member = agent.members?.find((m) => m.name === activeTeamMemberName);
     return member ? `${agent.name} \u203A ${member.name}` : agent.name;
-  }, [agent, isTeam, activeAgentName, activeTeamMemberName]);
+  }, [agent, isTeam, activeAgentId, activeTeamMemberName]);
 
   const handleDelete = (deleteFiles: boolean) => {
     setDeleteDialogOpen(false);
-    removeAgent(agent.name, deleteFiles);
+    removeAgent(agent.id, deleteFiles);
   };
 
   const handleToggleState = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isRunning) {
-      await stopAgent(agent.name);
+      await stopAgent(agent.id);
     } else {
-      await startAgent(agent.name);
+      await startAgent(agent.id);
     }
   };
 

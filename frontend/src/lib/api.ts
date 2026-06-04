@@ -20,12 +20,18 @@ export const api = {
   deleteModel: (id: string) => request(`/models/${id}`, { method: "DELETE" }),
   testModel: (id: string, prompt: string) => request(`/models/${id}/test`, { method: "POST", body: JSON.stringify({ prompt }) }),
 
-  // MCPs
+  // Tools
+  listTools: () => request("/tools"),
+
+  // Hooks
+  listHooks: () => request("/hooks"),
+
+  // MCPs — per unified-id, paths use id (UUID).
   listMcps: () => request("/mcps"),
   createMcp: (data: unknown) => request("/mcps", { method: "POST", body: JSON.stringify(data) }),
-  updateMcp: (name: string, data: unknown) => request(`/mcps/${name}`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteMcp: (name: string) => request(`/mcps/${name}`, { method: "DELETE" }),
-  discoverMcp: (name: string) => request(`/mcps/${name}/discover`, { method: "POST" }),
+  updateMcp: (id: string, data: unknown) => request(`/mcps/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteMcp: (id: string) => request(`/mcps/${id}`, { method: "DELETE" }),
+  discoverMcp: (id: string) => request(`/mcps/${id}/discover`, { method: "POST" }),
   importMcps: (path: string) => request("/mcps/import", { method: "POST", body: JSON.stringify({ path }) }),
 
   // Prompts
@@ -39,30 +45,31 @@ export const api = {
   listSkills: () => request("/skills"),
   importSkills: (path: string) => request("/skills/import", { method: "POST", body: JSON.stringify({ path }) }),
 
-  // Agents
+  // Agents — per unified-id, all paths use agent.id (UUID).
+  // `getAgent` accepts id or name (server resolves both).
   listAgents: () => request("/agents"),
-  getAgent: (name: string) => request(`/agents/${name}`),
+  getAgent: (id: string) => request(`/agents/${id}`),
   createAgent: (data: unknown) => request("/agents", { method: "POST", body: JSON.stringify(data) }),
-  updateAgent: (name: string, data: unknown) => request(`/agents/${name}`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteAgent: (name: string, deleteFiles?: boolean) =>
-    request(`/agents/${name}${deleteFiles ? '?delete_files=true' : ''}`, { method: "DELETE" }),
-  startAgent: (name: string) => request(`/agents/${name}/start`, { method: "POST" }),
-  stopAgent: (name: string) => request(`/agents/${name}/stop`, { method: "POST" }),
-  getAgentState: (name: string) => request(`/agents/${name}/state`),
-  listSessions: (name: string) => request(`/agents/${name}/sessions`),
-  switchSession: (name: string, sessionId: string) =>
-    request(`/agents/${name}/sessions/${sessionId}/switch`, { method: "POST" }),
-  newSession: (name: string) => request(`/agents/${name}/sessions/new`, { method: "POST" }),
-  getAgentMessages: (name: string) => request(`/agents/${name}/messages`),
+  updateAgent: (id: string, data: unknown) => request(`/agents/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteAgent: (id: string, deleteFiles?: boolean) =>
+    request(`/agents/${id}${deleteFiles ? '?delete_files=true' : ''}`, { method: "DELETE" }),
+  startAgent: (id: string) => request(`/agents/${id}/start`, { method: "POST" }),
+  stopAgent: (id: string) => request(`/agents/${id}/stop`, { method: "POST" }),
+  getAgentState: (id: string) => request(`/agents/${id}/state`),
+  listSessions: (id: string) => request(`/agents/${id}/sessions`),
+  switchSession: (id: string, sessionId: string) =>
+    request(`/agents/${id}/sessions/${sessionId}/switch`, { method: "POST" }),
+  newSession: (id: string) => request(`/agents/${id}/sessions/new`, { method: "POST" }),
+  getAgentMessages: (id: string) => request(`/agents/${id}/messages`),
 
-  // Teams
+  // Teams — paths use team.id.
   listTeams: () => request("/teams"),
-  getTeam: (name: string) => request(`/teams/${name}`),
+  getTeam: (id: string) => request(`/teams/${id}`),
   createTeam: (data: unknown) => request("/teams", { method: "POST", body: JSON.stringify(data) }),
-  updateTeam: (name: string, data: unknown) => request(`/teams/${name}`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteTeam: (name: string) => request(`/teams/${name}`, { method: "DELETE" }),
-  startTeam: (name: string) => request(`/teams/${name}/start`, { method: "POST" }),
-  stopTeam: (name: string) => request(`/teams/${name}/stop`, { method: "POST" }),
+  updateTeam: (id: string, data: unknown) => request(`/teams/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteTeam: (id: string) => request(`/teams/${id}`, { method: "DELETE" }),
+  startTeam: (id: string) => request(`/teams/${id}/start`, { method: "POST" }),
+  stopTeam: (id: string) => request(`/teams/${id}/stop`, { method: "POST" }),
 
   // Files
   getFileTree: (path: string) => request(`/files/tree?path=${encodeURIComponent(path)}`),
@@ -81,7 +88,7 @@ export function createChatWs(): WebSocket {
   return new WebSocket(`${wsBase}/ws/chat`);
 }
 
-export function createTeamChatWs(teamName: string): WebSocket {
+export function createTeamChatWs(teamId: string): WebSocket {
   const wsBase = API_BASE.replace(/^http/, "ws");
-  return new WebSocket(`${wsBase}/ws/team/${teamName}`);
+  return new WebSocket(`${wsBase}/ws/team/${teamId}`);
 }

@@ -10,7 +10,7 @@ router = APIRouter()
 
 @router.get("")
 async def list_models():
-    return [m.model_dump(mode="json") for m in state_manager.models]
+    return [m.model_dump(mode="json") for m in state_manager.model_factory.list_all()]
 
 
 @router.post("")
@@ -23,17 +23,23 @@ async def create_model(config: ModelConfig):
 
 @router.put("/{model_id}")
 async def update_model(model_id: str, updates: dict):
-    updated = state_manager.update_model(model_id, updates)
+    updated, affected = await state_manager.update_model_and_invalidate(
+        model_id, updates
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Model not found")
-    return updated.model_dump(mode="json")
+    return {
+        **updated.model_dump(mode="json"),
+        "affectedAgents": affected,
+    }
 
 
 @router.delete("/{model_id}")
 async def delete_model(model_id: str):
-    if not state_manager.delete_model(model_id):
+    ok, affected = await state_manager.delete_model_and_invalidate(model_id)
+    if not ok:
         raise HTTPException(status_code=404, detail="Model not found")
-    return {"success": True}
+    return {"success": True, "affectedAgents": affected}
 
 
 @router.post("/{model_id}/test")
@@ -42,40 +48,20 @@ async def test_model(model_id: str, req: ModelTestRequest):
     if not model_config:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    config_dict = _build_model_config_dict(model_config)
     try:
-        model = Model.from_config_dict(config_dict)
+        model = Model.from_config_dict(model_config.core_dict)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to initialize model: {e}")
 
     human_msg = HumanMessage(content=req.prompt)
     model_input = Model_Input(messages=[human_msg])
     try:
-        response = await model.async_invoke(model_input)
+        response = model.invoke(model_input)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     content = _extract_text_content(response)
     return {"content": content}
-
-
-def _build_model_config_dict(model_config: ModelConfig) -> dict:
-    base = {
-        "provider": model_config.provider,
-        "model": model_config.modelName,
-        "api_key": model_config.apiKey,
-        "base_url": model_config.baseUrl,
-        "max_context_tokens": model_config.maxContextTokens,
-        "temperature": model_config.temperature,
-        "top_p": model_config.topP,
-    }
-    if model_config.thinking:
-        base["thinking"] = model_config.thinking
-    if model_config.provider == "anthropic":
-        base["max_tokens"] = model_config.maxCompletionTokens
-    else:
-        base["max_completion_tokens"] = model_config.maxCompletionTokens
-    return base
 
 
 def _extract_text_content(response) -> str:

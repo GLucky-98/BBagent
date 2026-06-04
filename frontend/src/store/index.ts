@@ -9,19 +9,33 @@ import type {
   Prompt,
   SettingsTab,
   SessionInfo,
+  HookListResponse,
 } from "../types";
 import { api } from "../lib/api";
 
+export interface Toast {
+  id: string;
+  message: string;
+  type: "info" | "warning";
+}
+
 export interface AppState {
   agents: Agent[];
-  activeAgentName: string | null;
+  // Per the unified-id design, the primary identifier for the active
+  // agent is its id (UUID), not its display name. All lookups and
+  // routing use id.
+  activeAgentId: string | null;
   activeTeamMemberName: string | null;
-  setActiveAgentName: (name: string | null) => void;
-  selectTeamMember: (teamName: string, memberName: string | null) => void;
-  updateAgent: (name: string, updates: Partial<Agent>) => Promise<void>;
-  updateTeam: (name: string, updates: Partial<Agent>) => Promise<void>;
-  removeAgent: (name: string, deleteFiles?: boolean) => Promise<void>;
-  addMessage: (agentName: string, message: Message) => void;
+  setActiveAgentId: (id: string | null) => void;
+  selectTeamMember: (teamId: string, memberName: string | null) => void;
+  updateAgent: (id: string, updates: Partial<Agent>) => Promise<void>;
+  updateTeam: (id: string, updates: Partial<Agent>) => Promise<void>;
+  removeAgent: (id: string, deleteFiles?: boolean) => Promise<void>;
+  addMessage: (agentId: string, message: Message) => void;
+
+  // Hook descriptors from GET /api/hooks. Populated by loadAll.
+  hooksDescriptor: HookListResponse | null;
+  fetchHooksDescriptor: () => Promise<void>;
 
   isSettingsOpen: boolean;
   settingsActiveTab: SettingsTab;
@@ -32,12 +46,12 @@ export interface AppState {
     open: boolean;
     mode: "create" | "edit";
     type: "agent" | "team" | "";
-    agentName?: string;
+    agentId?: string;
   };
   openConfigDialog: (
     mode: "create" | "edit",
     type: "agent" | "team" | "",
-    agentName?: string
+    agentId?: string
   ) => void;
   closeConfigDialog: () => void;
 
@@ -71,12 +85,17 @@ export interface AppState {
   setSelectedModelId: (id: string | null) => void;
   addModel: (model: Model) => Promise<void>;
   updateModel: (id: string, updates: Partial<Model>) => Promise<void>;
+  deleteModel: (id: string) => Promise<void>;
 
   tools: Tool[];
+  fetchTools: () => Promise<void>;
   mcpServers: MCPServer[];
   selectedMcpId: string | null;
   setSelectedMcpId: (id: string | null) => void;
   addMcpServer: (server: MCPServer) => Promise<void>;
+  updateMcpServer: (id: string, updates: Partial<MCPServer>) => Promise<void>;
+  deleteMcpServer: (id: string) => Promise<void>;
+  discoverMcpTools: (id: string) => Promise<void>;
   importMcpServers: (path: string) => Promise<void>;
 
   skills: Skill[];
@@ -91,29 +110,45 @@ export interface AppState {
   importPrompts: (path: string) => Promise<void>;
 
   expandedTeams: Set<string>;
-  toggleTeamExpanded: (teamName: string) => void;
+  toggleTeamExpanded: (teamId: string) => void;
 
   agentStates: Record<string, "ready" | "waiting" | "running" | "error">;
-  isAgentStreaming: Record<string, boolean>;
-  setAgentState: (name: string, state: "ready" | "waiting" | "running" | "error") => void;
-  setIsStreaming: (name: string, streaming: boolean) => void;
+  setAgentState: (id: string, state: "ready" | "waiting" | "running" | "error") => void;
   agentSessions: Record<string, SessionInfo[]>;
-  loadAgentSessions: (name: string) => Promise<void>;
-  switchSession: (name: string, sessionId: string) => Promise<void>;
-  createNewSession: (name: string) => Promise<void>;
-  loadAgentMessages: (name: string) => Promise<void>;
-  startAgent: (name: string) => Promise<void>;
-  stopAgent: (name: string) => Promise<void>;
+  loadAgentSessions: (id: string) => Promise<void>;
+  switchSession: (id: string, sessionId: string) => Promise<void>;
+  createNewSession: (id: string) => Promise<void>;
+  loadAgentMessages: (id: string) => Promise<void>;
+  startAgent: (id: string) => Promise<void>;
+  stopAgent: (id: string) => Promise<void>;
 
   loadAll: () => Promise<void>;
   createAgentApi: (agent: Agent) => Promise<void>;
   createTeamApi: (team: Agent) => Promise<void>;
+
+  toasts: Toast[];
+  addToast: (message: string, type?: "info" | "warning") => void;
+  dismissToast: (id: string) => void;
 }
+
+// Builtin tool UUIDs must match backend's BUILTIN_TOOL_IDS
+// (BBagent/built_in_tool/__init__.py). Used as the React key / id when the
+// API listTools() response is not yet available.
+const BUILTIN_TOOL_IDS: Record<string, string> = {
+  bash: "5a40e5e1-6931-4126-b142-581379f4f2eb",
+  read: "4c48a29c-a52a-4ec7-b7d7-d265316091c7",
+  write: "20c41591-9b4e-4ff0-9182-f11db46fef41",
+  edit: "2d35e797-d8f7-41cf-aa12-e439ec74230b",
+  grep: "4dc7319f-7ff7-484b-aa19-c39fa5efa772",
+  find: "023a166d-246b-4aeb-be56-3119210b9bba",
+  ls: "20ae9084-3a2c-413b-bdbb-86f04fb9fdd3",
+};
 
 const defaultTools: Tool[] = [
   {
-    id: "tool-1",
+    id: BUILTIN_TOOL_IDS.bash,
     name: "bash",
+    source: "built_in",
     description: "Execute shell commands in a terminal environment",
     inputSchema: {
       type: "object",
@@ -123,11 +158,11 @@ const defaultTools: Tool[] = [
       },
       required: ["command"],
     },
-    isMcp: false,
   },
   {
-    id: "tool-2",
+    id: BUILTIN_TOOL_IDS.read,
     name: "read",
+    source: "built_in",
     description: "Read contents of a file from the filesystem",
     inputSchema: {
       type: "object",
@@ -138,11 +173,11 @@ const defaultTools: Tool[] = [
       },
       required: ["path"],
     },
-    isMcp: false,
   },
   {
-    id: "tool-3",
+    id: BUILTIN_TOOL_IDS.write,
     name: "write",
+    source: "built_in",
     description: "Write content to a file in the filesystem",
     inputSchema: {
       type: "object",
@@ -152,11 +187,11 @@ const defaultTools: Tool[] = [
       },
       required: ["path", "content"],
     },
-    isMcp: false,
   },
   {
-    id: "tool-4",
+    id: BUILTIN_TOOL_IDS.edit,
     name: "edit",
+    source: "built_in",
     description: "Make targeted edits to a file",
     inputSchema: {
       type: "object",
@@ -167,11 +202,11 @@ const defaultTools: Tool[] = [
       },
       required: ["path", "old_str", "new_str"],
     },
-    isMcp: false,
   },
   {
-    id: "tool-5",
+    id: BUILTIN_TOOL_IDS.grep,
     name: "grep",
+    source: "built_in",
     description: "Search for patterns in files",
     inputSchema: {
       type: "object",
@@ -182,11 +217,11 @@ const defaultTools: Tool[] = [
       },
       required: ["pattern", "path"],
     },
-    isMcp: false,
   },
   {
-    id: "tool-6",
+    id: BUILTIN_TOOL_IDS.find,
     name: "find",
+    source: "built_in",
     description: "Find files matching criteria",
     inputSchema: {
       type: "object",
@@ -196,87 +231,71 @@ const defaultTools: Tool[] = [
       },
       required: ["pattern", "path"],
     },
-    isMcp: false,
   },
   {
-    id: "tool-7",
+    id: BUILTIN_TOOL_IDS.ls,
     name: "ls",
+    source: "built_in",
     description: "List directory contents",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string", description: "Directory to list" } },
       required: ["path"],
     },
-    isMcp: false,
-  },
-  {
-    id: "tool-8",
-    name: "ask_human",
-    description: "Ask the human user a question when you need clarification, additional information, or a decision",
-    inputSchema: {
-      type: "object",
-      properties: {
-        question: { type: "string", description: "The question to ask the human user" },
-      },
-      required: ["question"],
-    },
-    isMcp: false,
   },
 ];
 
 export const useAppStore = create<AppState>((set, get) => ({
   agents: [],
-  activeAgentName: null,
+  activeAgentId: null,
   activeTeamMemberName: null,
 
-  setActiveAgentName: (name) => {
-    const agent = name ? get().agents.find((a) => a.name === name) : null;
+  setActiveAgentId: (id) => {
+    const agent = id ? get().agents.find((a) => a.id === id) : null;
     set({
-      activeAgentName: name,
+      activeAgentId: id,
       activeTeamMemberName: null,
-      workingDirPath: agent?.policy?.cwd || "",
+      workingDirPath: agent?.workingDir || "",
       baseDirPath: agent?.basePath || "",
       previewFile: null,
     });
   },
 
-  selectTeamMember: (teamName, memberName) => {
+  selectTeamMember: (teamId, memberName) => {
     if (memberName) {
-      const team = get().agents.find((a) => a.name === teamName);
-      const member = team?.teamMembers?.find((m) => m.name === memberName);
-      set({ activeAgentName: teamName, activeTeamMemberName: memberName, workingDirPath: member?.policy?.cwd || "", baseDirPath: member?.basePath || "", previewFile: null });
+      const team = get().agents.find((a) => a.id === teamId);
+      const member = team?.members?.find((m) => m.name === memberName);
+      set({ activeAgentId: teamId, activeTeamMemberName: memberName, workingDirPath: member?.workingDir || "", baseDirPath: member?.basePath || "", previewFile: null });
     } else {
-      const team = get().agents.find((a) => a.name === teamName);
-      set({ activeAgentName: teamName, activeTeamMemberName: null, workingDirPath: team?.policy?.cwd || "", baseDirPath: team?.basePath || "", previewFile: null });
+      const team = get().agents.find((a) => a.id === teamId);
+      set({ activeAgentId: teamId, activeTeamMemberName: null, workingDirPath: team?.workingDir || "", baseDirPath: team?.basePath || "", previewFile: null });
     }
   },
 
-  updateAgent: async (name, updates) => {
-    const result = await api.updateAgent(name, updates);
+  updateAgent: async (id, updates) => {
+    const result = await api.updateAgent(id, updates);
     set((state) => ({
-      agents: state.agents.map((a) => (a.name === name ? { ...a, ...result, messages: a.messages } : a)),
-      workingDirPath: state.activeAgentName === name && result.policy?.cwd ? result.policy.cwd : state.workingDirPath,
+      agents: state.agents.map((a) => (a.id === id ? { ...a, ...result, messages: a.messages } : a)),
+      workingDirPath: state.activeAgentId === id && result.workingDir ? result.workingDir : state.workingDirPath,
     }));
   },
-  updateTeam: async (name, updates) => {
-    const result = await api.updateTeam(name, updates);
+  updateTeam: async (id, updates) => {
+    const result = await api.updateTeam(id, updates);
     set((state) => ({
-      agents: state.agents.map((a) => (a.name === name ? { ...a, ...result, messages: a.messages } : a)),
-      workingDirPath: state.activeAgentName === name && result.policy?.cwd ? result.policy.cwd : state.workingDirPath,
+      agents: state.agents.map((a) => (a.id === id ? { ...a, ...result, messages: a.messages } : a)),
+      workingDirPath: state.activeAgentId === id && result.workingDir ? result.workingDir : state.workingDirPath,
     }));
   },
-  removeAgent: async (name, deleteFiles) => {
-    const agent = get().agents.find((a) => a.name === name);
-    if (!agent) return;
-    await api.deleteAgent(agent.name, deleteFiles);
+  removeAgent: async (id, deleteFiles) => {
+    await api.deleteAgent(id, deleteFiles);
     set((state) => ({
-      agents: state.agents.filter((a) => a.name !== name),
-      activeAgentName: state.activeAgentName === name ? null : state.activeAgentName,
-      previewFile: state.activeAgentName === name ? null : state.previewFile,
+      agents: state.agents.filter((a) => a.id !== id),
+      activeAgentId: state.activeAgentId === id ? null : state.activeAgentId,
+      previewFile: state.activeAgentId === id ? null : state.previewFile,
     }));
   },
-  addMessage: (agentName, message) =>
-    set((state) => ({ agents: state.agents.map((a) => (a.name === agentName ? { ...a, messages: [...a.messages, message] } : a)) })),
+  addMessage: (agentId, message) =>
+    set((state) => ({ agents: state.agents.map((a) => (a.id === agentId ? { ...a, messages: [...a.messages, message] } : a)) })),
 
   isSettingsOpen: false,
   settingsActiveTab: "models",
@@ -284,8 +303,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   closeSettings: () => set({ isSettingsOpen: false }),
 
   configDialog: { open: false, mode: "create", type: "" },
-  openConfigDialog: (mode, type, agentName) => set({ configDialog: { open: true, mode, type, agentName } }),
-  closeConfigDialog: () => set({ configDialog: { open: false, mode: "create", type: "", agentName: undefined } }),
+  openConfigDialog: (mode, type, agentId) => set({ configDialog: { open: true, mode, type, agentId } }),
+  closeConfigDialog: () => set({ configDialog: { open: false, mode: "create", type: "", agentId: undefined } }),
 
   workingDirPath: "",
   setWorkingDirPath: (path) => set({ workingDirPath: path }),
@@ -321,24 +340,90 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({ models: [...state.models, model] }));
   },
   updateModel: async (id, updates) => {
-    await api.updateModel(id, updates);
+    const result = await api.updateModel(id, updates);
     set((state) => ({ models: state.models.map((m) => (m.id === id ? { ...m, ...updates } : m)) }));
+    if (result.affectedAgents && result.affectedAgents.length > 0) {
+      const agents = get().agents;
+      const names = result.affectedAgents
+        .map((aid: string) => agents.find((a) => a.id === aid)?.name)
+        .filter(Boolean)
+        .join(", ");
+      get().addToast(`Model config updated. Auto-applied to agents: ${names}`, "info");
+    }
+  },
+  deleteModel: async (id) => {
+    const result = await api.deleteModel(id);
+    set((state) => ({
+      models: state.models.filter((m) => m.id !== id),
+      selectedModelId: state.selectedModelId === id ? null : state.selectedModelId,
+    }));
+    if (result.affectedAgents && result.affectedAgents.length > 0) {
+      const agents = get().agents;
+      const names = result.affectedAgents
+        .map((aid: string) => agents.find((a) => a.id === aid)?.name)
+        .filter(Boolean)
+        .join(", ");
+      get().addToast(`Model deleted. Please reassign a model for: ${names}`, "warning");
+    }
   },
 
   tools: defaultTools,
+
+  fetchTools: async () => {
+    try {
+      const tools = await api.listTools();
+      set({ tools: tools || [] });
+    } catch (e) {
+      console.warn("Failed to fetch tools:", e);
+    }
+  },
+
+  hooksDescriptor: null,
+  fetchHooksDescriptor: async () => {
+    try {
+      const hooks = await api.listHooks();
+      set({ hooksDescriptor: hooks });
+    } catch (e) {
+      console.warn("Failed to fetch hooks descriptor:", e);
+    }
+  },
 
   mcpServers: [],
   selectedMcpId: null,
   setSelectedMcpId: (id) => set({ selectedMcpId: id }),
   addMcpServer: async (server) => {
     await api.createMcp(server);
-    set((state) => ({ mcpServers: [...state.mcpServers, server] }));
+    const [mcps, tools] = await Promise.all([api.listMcps(), api.listTools()]);
+    set({ mcpServers: mcps || [], tools: tools || [] });
+  },
+  updateMcpServer: async (id, updates) => {
+    const result = await api.updateMcp(id, updates);
+    const [mcps, tools] = await Promise.all([api.listMcps(), api.listTools()]);
+    set({ mcpServers: mcps || [], tools: tools || [] });
+    if (result.hint) {
+      get().addToast(result.hint, "warning");
+    }
+  },
+  deleteMcpServer: async (id) => {
+    const result = await api.deleteMcp(id);
+    const [mcps, tools] = await Promise.all([api.listMcps(), api.listTools()]);
+    set({ mcpServers: mcps || [], tools: tools || [] });
+    if (result.hint) {
+      get().addToast(result.hint, "warning");
+    }
+  },
+  discoverMcpTools: async (id) => {
+    const result = await api.discoverMcp(id);
+    const [mcps, tools] = await Promise.all([api.listMcps(), api.listTools()]);
+    set({ mcpServers: mcps || [], tools: tools || [] });
+    const count = result.tools?.length ?? 0;
+    get().addToast(`Discovered ${count} tool(s)`, "info");
   },
   importMcpServers: async (path: string) => {
     const result = await api.importMcps(path);
     if (result.imported > 0) {
-      const mcps = await api.listMcps();
-      set({ mcpServers: mcps || [] });
+      const [mcps, tools] = await Promise.all([api.listMcps(), api.listTools()]);
+      set({ mcpServers: mcps || [], tools: tools || [] });
     }
   },
 
@@ -369,69 +454,63 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   expandedTeams: new Set<string>(),
-  toggleTeamExpanded: (teamName) =>
+  toggleTeamExpanded: (teamId: string) =>
     set((state) => {
       const newSet = new Set(state.expandedTeams);
-      newSet.has(teamName) ? newSet.delete(teamName) : newSet.add(teamName);
+      newSet.has(teamId) ? newSet.delete(teamId) : newSet.add(teamId);
       return { expandedTeams: newSet };
     }),
 
   agentStates: {},
-  isAgentStreaming: {},
 
-  setAgentState: (name, state) =>
+  setAgentState: (id, state) =>
     set((s) => ({
-      agentStates: { ...s.agentStates, [name]: state },
-      agents: s.agents.map((a) => (a.name === name ? { ...a, state } : a)),
-    })),
-
-  setIsStreaming: (name, streaming) =>
-    set((s) => ({
-      isAgentStreaming: { ...s.isAgentStreaming, [name]: streaming },
+      agentStates: { ...s.agentStates, [id]: state },
+      agents: s.agents.map((a) => (a.id === id ? { ...a, state } : a)),
     })),
 
   agentSessions: {},
 
-  loadAgentSessions: async (name: string) => {
+  loadAgentSessions: async (id: string) => {
     try {
-      const sessions = await api.listSessions(name);
-      set((s) => ({ agentSessions: { ...s.agentSessions, [name]: sessions } }));
+      const sessions = await api.listSessions(id);
+      set((s) => ({ agentSessions: { ...s.agentSessions, [id]: sessions } }));
     } catch (e) {
       console.error("Failed to load sessions:", e);
     }
   },
 
-  switchSession: async (name: string, sessionId: string) => {
-    await api.switchSession(name, sessionId);
-    const sessions = get().agentSessions[name] || [];
+  switchSession: async (id: string, sessionId: string) => {
+    await api.switchSession(id, sessionId);
+    const sessions = get().agentSessions[id] || [];
     set((s) => ({
       agentSessions: {
         ...s.agentSessions,
-        [name]: sessions.map((sess) => ({
+        [id]: sessions.map((sess) => ({
           ...sess,
           isActive: sess.id === sessionId,
         })),
       },
     }));
-    await get().loadAgentMessages(name);
+    await get().loadAgentMessages(id);
   },
 
-  createNewSession: async (name: string) => {
-    const result = await api.newSession(name);
-    await get().loadAgentSessions(name);
+  createNewSession: async (id: string) => {
+    const result = await api.newSession(id);
+    await get().loadAgentSessions(id);
     set((s) => ({
       agents: s.agents.map((a) =>
-        a.name === name ? { ...a, messages: [], currentSessionId: result.session_id } : a
+        a.id === id ? { ...a, messages: [], currentSessionId: result.session_id } : a
       ),
     }));
   },
 
-  loadAgentMessages: async (name: string) => {
+  loadAgentMessages: async (id: string) => {
     try {
-      const messages = await api.getAgentMessages(name);
+      const messages = await api.getAgentMessages(id);
       set((s) => ({
         agents: s.agents.map((a) =>
-          a.name === name ? { ...a, messages: messages.map((m: Message, i: number) => ({ ...m, id: m.messageId || `hist-${i}` })) } : a
+          a.id === id ? { ...a, messages: messages.map((m: Message, i: number) => ({ ...m, id: m.messageId || `hist-${i}` })) } : a
         ),
       }));
     } catch (e) {
@@ -439,22 +518,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  startAgent: async (name: string) => {
-    const result = await api.startAgent(name);
-    get().setAgentState(name, result.state as "ready" | "waiting" | "running" | "error");
+  startAgent: async (id: string) => {
+    const result = await api.startAgent(id);
+    get().setAgentState(id, result.state as "ready" | "waiting" | "running" | "error");
   },
 
-  stopAgent: async (name: string) => {
-    const result = await api.stopAgent(name);
-    get().setAgentState(name, result.state as "ready" | "waiting" | "running" | "error");
-    get().setIsStreaming(name, false);
+  stopAgent: async (id: string) => {
+    const result = await api.stopAgent(id);
+    get().setAgentState(id, result.state as "ready" | "waiting" | "running" | "error");
   },
 
   loadAll: async () => {
     try {
-      const [models, mcps, prompts, skills, agents, teams, state] = await Promise.all([
+      const [models, mcps, tools, hooks, prompts, skills, agents, teams, state] = await Promise.all([
         api.listModels(),
         api.listMcps(),
+        api.listTools(),
+        api.listHooks().catch(() => null),
         api.listPrompts(),
         api.listSkills(),
         api.listAgents(),
@@ -465,21 +545,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       const allAgents = (agents || []).concat(teams || []);
       const seen = new Set<string>();
       const deduped = allAgents.filter((a: Agent) => {
-        if (seen.has(a.name)) return false;
-        seen.add(a.name);
+        if (seen.has(a.id)) return false;
+        seen.add(a.id);
         return true;
       });
       const agentStates: Record<string, "ready" | "waiting" | "running" | "error"> = {};
       const agentSessionsMap: Record<string, SessionInfo[]> = {};
 
       for (const agent of deduped) {
-        agentStates[agent.name] = agent.state || "ready";
-        agentSessionsMap[agent.name] = agent.sessions || [];
+        agentStates[agent.id] = agent.state || "ready";
+        agentSessionsMap[agent.id] = agent.sessions || [];
       }
 
       set({
         models: models || [],
+        tools: tools || [],
         mcpServers: mcps || [],
+        hooksDescriptor: hooks || null,
         prompts: prompts || [],
         skills: skills || [],
         agents: deduped,
@@ -496,33 +578,55 @@ export const useAppStore = create<AppState>((set, get) => ({
   createAgentApi: async (agent: Agent) => {
     const created = await api.createAgent(agent);
     set((state) => {
-      if (state.agents.some((a) => a.name === created.name)) return state;
+      if (state.agents.some((a) => a.id === created.id)) return state;
       return {
         agents: [...state.agents, created],
-        activeAgentName: created.name,
-        agentStates: { ...state.agentStates, [created.name]: created.state || "waiting" },
+        activeAgentId: created.id,
+        agentStates: { ...state.agentStates, [created.id]: created.state || "waiting" },
       };
     });
   },
 
   createTeamApi: async (team: Agent) => {
-    const created = await api.createTeam(team);
+    const result = await api.createTeam(team);
+    // Normalize the TeamConfig response into an Agent shape that the store expects
+    const teamAsAgent: Agent = {
+      ...team,
+      id: result.id || "",
+      name: result.name,
+      teamDescription: result.teamDescription,
+      basePath: result.baseDir || team.basePath,
+      members: result.members,
+      contacts: result.contacts,
+    };
     set((state) => {
-      if (state.agents.some((a) => a.name === created.name)) return state;
-      return { agents: [...state.agents, created], activeAgentName: created.id };
+      if (state.agents.some((a) => a.id === teamAsAgent.id)) return state;
+      return { agents: [...state.agents, teamAsAgent], activeAgentId: teamAsAgent.id };
     });
+  },
+
+  toasts: [],
+  addToast: (message, type = "info") => {
+    const id = crypto.randomUUID();
+    set((state) => ({ toasts: [...state.toasts, { id, message, type }] }));
+    setTimeout(() => {
+      set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
+    }, 6000);
+  },
+  dismissToast: (id) => {
+    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
   },
 }));
 
 export const useSelectedAgent = () => {
   const agents = useAppStore((s) => s.agents);
-  const activeAgentName = useAppStore((s) => s.activeAgentName);
+  const activeAgentId = useAppStore((s) => s.activeAgentId);
   const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
-  if (!activeAgentName) return null;
-  const agent = agents.find((a) => a.name === activeAgentName);
+  if (!activeAgentId) return null;
+  const agent = agents.find((a) => a.id === activeAgentId);
   if (!agent) return null;
   if (agent.type === "team" && activeTeamMemberName) {
-    return agent.teamMembers?.find((m) => m.name === activeTeamMemberName) ?? null;
+    return agent.members?.find((m) => m.name === activeTeamMemberName) ?? null;
   }
   return agent;
 };

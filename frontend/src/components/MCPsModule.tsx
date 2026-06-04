@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Server, Plus, FolderOpen, X } from "lucide-react";
+import { Server, Plus, FolderOpen, X, Trash2, RefreshCw } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 import type { MCPServer } from "../types";
@@ -7,19 +7,34 @@ import { FolderPickerModal } from "./FolderPickerModal";
 
 const ACTIVE_CLASS = "bg-(--color-primary)/10 text-(--color-primary) font-semibold shadow-[inset_4px_0_0_0_#10b981]";
 
+const INITIAL_ENV_ROWS = 3;
+
 function NewServerForm({ onClose }: { onClose: () => void }) {
   const addMcpServer = useAppStore((s) => s.addMcpServer);
-  const [form, setForm] = useState<{ name: string; command: string; args: string; env: string }>({ name: "", command: "", args: "", env: "" });
+  const [name, setName] = useState("");
+  const [command, setCommand] = useState("");
+  const [args, setArgs] = useState("");
+  const [envRows, setEnvRows] = useState<{ key: string; value: string }[]>(
+    Array.from({ length: INITIAL_ENV_ROWS }, () => ({ key: "", value: "" }))
+  );
+
+  const updateEnvRow = (idx: number, patch: Partial<{ key: string; value: string }>) => {
+    setEnvRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  };
+  const addEnvRow = () => setEnvRows((rows) => [...rows, { key: "", value: "" }]);
+  const removeEnvRow = (idx: number) => setEnvRows((rows) => rows.filter((_, i) => i !== idx));
 
   const handleSave = () => {
+    const env: Record<string, string> = {};
+    for (const { key, value } of envRows) {
+      const k = key.trim();
+      if (k) env[k] = value.trim();
+    }
     const server: MCPServer = {
-      name: form.name, command: form.command,
-      args: form.args.split(" ").filter(Boolean),
-      env: form.env.split("\n").filter(Boolean).reduce<Record<string, string>>((acc, line) => {
-        const [k, ...v] = line.split("=");
-        if (k) acc[k.trim()] = v.join("=").trim();
-        return acc;
-      }, {}),
+      id: "",  // backend assigns on POST
+      name, command,
+      args: args.split(" ").filter(Boolean),
+      env,
       tools: [],
     };
     addMcpServer(server);
@@ -35,32 +50,74 @@ function NewServerForm({ onClose }: { onClose: () => void }) {
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         <div>
           <label className="block text-sm font-medium mb-1">Name</label>
-          <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-            className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="my-mcp-server"
+            className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white placeholder:text-(--color-muted-foreground)/60 focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Command</label>
-          <input type="text" value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })}
-            placeholder="npx" className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
+          <input type="text" value={command} onChange={(e) => setCommand(e.target.value)}
+            placeholder="npx"
+            className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white placeholder:text-(--color-muted-foreground)/60 focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Arguments (space-separated)</label>
-          <input type="text" value={form.args} onChange={(e) => setForm({ ...form, args: e.target.value })}
-            placeholder="-y @firecrawl/mcp" className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
+          <input type="text" value={args} onChange={(e) => setArgs(e.target.value)}
+            placeholder="-y @firecrawl/mcp"
+            className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white placeholder:text-(--color-muted-foreground)/60 focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Environment (KEY=VALUE per line)</label>
-          <textarea value={form.env} onChange={(e) => setForm({ ...form, env: e.target.value })}
-            rows={4} className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring) resize-none" />
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-sm font-medium">Environment Variables</label>
+            <button
+              type="button"
+              onClick={addEnvRow}
+              className="flex items-center gap-1 text-xs text-(--color-primary) hover:underline"
+            >
+              <Plus size={12} /> Add
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            {envRows.map((row, idx) => (
+              <div key={idx} className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={row.key}
+                  onChange={(e) => updateEnvRow(idx, { key: e.target.value })}
+                  placeholder="KEY"
+                  className="flex-1 min-w-0 px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white placeholder:text-(--color-muted-foreground)/60 focus:outline-none focus:ring-1 focus:ring-(--color-ring) font-mono"
+                />
+                <input
+                  type="text"
+                  value={row.value}
+                  onChange={(e) => updateEnvRow(idx, { value: e.target.value })}
+                  placeholder="VALUE"
+                  className="flex-[1.5] min-w-0 px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white placeholder:text-(--color-muted-foreground)/60 focus:outline-none focus:ring-1 focus:ring-(--color-ring) font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeEnvRow(idx)}
+                  disabled={envRows.length <= 1}
+                  className="p-1.5 rounded text-(--color-muted-foreground) hover:bg-(--color-secondary) hover:text-red-500 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-(--color-muted-foreground)"
+                  title="Remove"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-(--color-muted-foreground) mt-1.5">
+            Rows with empty KEY will be ignored.
+          </p>
         </div>
-        <button onClick={handleSave} disabled={!form.name || !form.command}
+        <button onClick={handleSave} disabled={!name || !command}
           className="w-full py-2 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) text-sm hover:opacity-90 disabled:opacity-50">Save</button>
       </div>
     </div>
   );
 }
 
-function MCPList({ onNew }: { onNew: () => void }) {
+function MCPList({ onNew, onSelect }: { onNew: () => void; onSelect: () => void }) {
   const mcpServers = useAppStore((s) => s.mcpServers);
   const selectedMcpId = useAppStore((s) => s.selectedMcpId);
   const setSelectedMcpId = useAppStore((s) => s.setSelectedMcpId);
@@ -109,8 +166,8 @@ function MCPList({ onNew }: { onNew: () => void }) {
         ) : (
           <div className="space-y-1">
             {mcpServers.map((server) => (
-              <button key={server.name} onClick={() => setSelectedMcpId(server.name)}
-                className={cn("w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-(--color-secondary)", selectedMcpId === server.name && ACTIVE_CLASS)}>
+              <button key={server.id || server.name} onClick={() => { setSelectedMcpId(server.id || server.name); onSelect(); }}
+                className={cn("w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-(--color-secondary)", selectedMcpId === (server.id || server.name) && ACTIVE_CLASS)}>
                 <Server size={14} className="shrink-0" /><span className="flex-1 text-sm font-medium truncate">{server.name}</span>
               </button>
             ))}
@@ -124,6 +181,8 @@ function MCPList({ onNew }: { onNew: () => void }) {
 function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseForms: () => void }) {
   const mcpServers = useAppStore((s) => s.mcpServers);
   const selectedMcpId = useAppStore((s) => s.selectedMcpId);
+  const discoverMcpTools = useAppStore((s) => s.discoverMcpTools);
+  const [discovering, setDiscovering] = useState(false);
 
   if (showNew) return <NewServerForm onClose={onCloseForms} />;
 
@@ -137,12 +196,30 @@ function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseFo
     );
   }
 
+  const handleDiscover = async () => {
+    setDiscovering(true);
+    try {
+      await discoverMcpTools(selectedServer.id);
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
   return (
     <div className="flex-1 h-full flex flex-col bg-(--color-background)">
       <header className="px-4 py-3 bg-white border-b border-(--color-border)">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-(--color-primary)/10 text-(--color-primary) flex items-center justify-center"><Server size={16} /></div>
-          <h2 className="font-semibold text-sm">{selectedServer.name}</h2>
+          <h2 className="font-semibold text-sm flex-1">{selectedServer.name}</h2>
+          <button
+            onClick={handleDiscover}
+            disabled={discovering}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-(--color-border) text-xs hover:bg-(--color-secondary) disabled:opacity-50 transition-colors"
+            title="Discover tools from this MCP server"
+          >
+            <RefreshCw size={12} className={discovering ? "animate-spin" : ""} />
+            {discovering ? "Discovering..." : "Discover Tools"}
+          </button>
         </div>
       </header>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -165,7 +242,7 @@ function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseFo
               <p className="text-xs text-(--color-muted-foreground) text-center">No tools loaded</p>
             ) : (
               selectedServer.tools.map((tool) => (
-                <div key={tool.id} className="text-xs">
+                <div key={tool.id || tool.name} className="text-xs">
                   <div className="font-medium">{tool.name}</div>
                   {tool.description && <div className="text-(--color-muted-foreground) mt-0.5">{tool.description}</div>}
                 </div>
@@ -183,7 +260,7 @@ export function MCPsModule() {
 
   return (
     <div className="flex h-full">
-      <MCPList onNew={() => setShowNew(true)} />
+      <MCPList onNew={() => setShowNew(true)} onSelect={() => setShowNew(false)} />
       <MCPDetailPanel showNew={showNew} onCloseForms={() => setShowNew(false)} />
     </div>
   );
