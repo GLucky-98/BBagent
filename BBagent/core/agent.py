@@ -520,7 +520,7 @@ Your available skills are:
             )
             msg = event.to_human_message()
             self.session.add_message(msg)
-            await self.hook.trigger(HookType.AFTER_INPUT, msg)
+            await self.hook.trigger(HookType.AFTER_INPUT)
             try:
                 async for chunk in self.stream_tool_loop():
                     await self._emit(chunk)
