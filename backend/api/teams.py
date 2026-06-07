@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
@@ -27,7 +28,13 @@ async def list_teams():
     result = []
     stale_ids: list[str] = []
     for team_id, team in state_manager.team_factory.teams.items():
-        if not (teams_dir / team_id / "team_config.json").exists():
+        # 检查 team_config.json 是否存在（可能在新结构 teams/{id}/{name}/ 或旧结构 teams/{id}/）
+        found = False
+        if team.base_dir:
+            found = (team.base_dir / "team_config.json").exists()
+        if not found and (teams_dir / team_id / "team_config.json").exists():
+            found = True
+        if not found:
             stale_ids.append(team_id)
             continue
         meta = state_manager.team_factory._team_meta.get(team_id, {})
@@ -36,6 +43,8 @@ async def list_teams():
             name=team.name,
             agentCount=len(team.agents),
             teamDescription=team.team_description,
+            workingDir=meta.get("workingDir", ""),
+            baseDir=str(team.base_dir) if team.base_dir else "",
             memberIds=meta.get("memberIds", []),
             started=state_manager.team_factory.is_started(team_id),
         ).model_dump(mode="json")
@@ -119,6 +128,17 @@ async def start_team(team_id: str):
         aid = agent_id_by_name.get(agent_name, agent_name)
         await state_manager.start_agent(aid)
     await team.start()
+
+    # 等待所有 agent 事件循环启动完毕（状态不再为 Ready）
+    for _ in range(30):  # 最多等 3 秒
+        team.update_state()
+        if str(team.state).lower() not in ("ready",):
+            break
+        await asyncio.sleep(0.1)
+    else:
+        team.update_state()
+        logger.warning("Team '%s' members did not leave Ready state within 3s", team.name)
+
     state_manager.team_factory.start(team_id)
     return {"state": state_manager.team_factory.get_state(team_id)}
 

@@ -111,7 +111,7 @@ export function BasedirTree() {
   const [copied, setCopied] = useState(false);
 
   const agent = agents.find((a) => a.id === activeAgentId);
-  const basePath = agent?.basePath;
+  const basePath = agent?.baseDir;
 
   useEffect(() => {
     if (!basePath) return;

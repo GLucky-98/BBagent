@@ -264,8 +264,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       activeAgentId: id,
       activeTeamMemberName: null,
-      workingDirPath: agent && isSingleAgent(agent) ? agent.workingDir : "",
-      baseDirPath: agent?.basePath || "",
+      workingDirPath: agent?.workingDir || "",
+      baseDirPath: agent?.baseDir || "",
       previewFile: null,
     });
   },
@@ -279,15 +279,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeAgentId: member?.id ?? teamId,
         activeTeamMemberName: memberName,
         workingDirPath: member?.workingDir || "",
-        baseDirPath: member?.basePath || "",
+        baseDirPath: member?.baseDir || "",
         previewFile: null,
       });
     } else {
       set({
         activeAgentId: teamId,
         activeTeamMemberName: null,
-        workingDirPath: agent && isSingleAgent(agent) ? agent.workingDir : "",
-        baseDirPath: agent?.basePath || "",
+        workingDirPath: agent?.workingDir || "",
+        baseDirPath: agent?.baseDir || "",
         previewFile: null,
       });
     }
@@ -656,7 +656,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const name = agent?.name || id;
     try {
       const result = await api.startTeam(id);
-      get().setAgentState(id, result.state as "ready" | "waiting" | "running" | "error");
+      const state = result.state as "ready" | "waiting" | "running" | "error";
+      get().setAgentState(id, state);
+      // 同步更新所有 member agent 的状态（team WS 不再订阅 agent dispatcher）
+      if (isTeam(agent)) {
+        for (const m of agent.members) {
+          get().setAgentState(m.id, state);
+        }
+      }
       get().addToast(`Team '${name}' started`, "info");
     } catch (e: any) {
       get().addToast(`Failed to start team '${name}': ${e.message || e}`, "warning");
@@ -668,7 +675,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const name = agent?.name || id;
     try {
       const result = await api.stopTeam(id);
-      get().setAgentState(id, result.state as "ready" | "waiting" | "running" | "error");
+      const state = result.state as "ready" | "waiting" | "running" | "error";
+      get().setAgentState(id, state);
+      // 同步更新所有 member agent 的状态（team WS 不再订阅 agent dispatcher）
+      if (isTeam(agent)) {
+        for (const m of agent.members) {
+          get().setAgentState(m.id, state);
+        }
+      }
       get().addToast(`Team '${name}' stopped`, "info");
     } catch (e: any) {
       get().addToast(`Failed to stop team '${name}': ${e.message || e}`, "warning");
@@ -775,7 +789,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         id: a.id as string,
         name: a.name as string,
         type: "single",
-        basePath: (a.basePath as string) || "",
+        baseDir: (a.baseDir as string) || "",
         workingDir: (a.workingDir as string) || "",
         modelId: (a.modelId as string) || "",
         systemPrompt: (a.systemPrompt as string) || "",
@@ -794,7 +808,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         id: t.id as string,
         name: t.name as string,
         type: "team",
-        basePath: (t.workingDir as string) || "",
+        baseDir: (t.baseDir as string) || "",
         workingDir: (t.workingDir as string) || "",
         teamDescription: (t.teamDescription as string) || "",
         members: [],
@@ -911,7 +925,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: created.id || "",
       name: created.name,
       type: "single",
-      basePath: created.basePath || "",
+      baseDir: created.baseDir || "",
       workingDir: created.workingDir || "",
       modelId: created.modelId || "",
       systemPrompt: created.systemPrompt || "",
@@ -931,7 +945,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         agents: [...state.agents, agent],
         activeAgentId: agent.id,
         workingDirPath: agent.workingDir,
-        baseDirPath: agent.basePath,
+        baseDirPath: agent.baseDir,
         agentStates: { ...state.agentStates, [agent.id]: agent.state },
       };
     });
@@ -944,7 +958,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: m.id as string,
       name: m.name as string,
       type: "single" as const,
-      basePath: (m.basePath as string) || "",
+      baseDir: (m.baseDir as string) || "",
       workingDir: (m.workingDir as string) || (result.workingDir as string) || "",
       modelId: (m.modelId as string) || "",
       systemPrompt: (m.systemPrompt as string) || "",
@@ -963,7 +977,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: result.id || "",
       name: result.name,
       type: "team",
-      basePath: result.workingDir || "",
+      baseDir: result.baseDir || "",
       workingDir: result.workingDir || "",
       teamDescription: result.teamDescription || "",
       members: memberAgents,
@@ -981,8 +995,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         agents: [...state.agents, ...memberAgents, team],
         teamMemberIds: newMemberIds,
         activeAgentId: team.id,
-        workingDirPath: "",
-        baseDirPath: team.basePath,
+        workingDirPath: team.workingDir,
+        baseDirPath: team.baseDir,
       };
     });
   },

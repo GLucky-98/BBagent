@@ -103,7 +103,7 @@ interface AgentBase {
 // Single Agent 运行时类型
 export interface SingleAgent extends AgentBase {
   type: "single";
-  basePath: string;
+  baseDir: string;
   workingDir: string;
   modelId: string;
   systemPrompt: string;
@@ -117,7 +117,7 @@ export interface SingleAgent extends AgentBase {
 // Team 运行时类型
 export interface Team extends AgentBase {
   type: "team";
-  basePath: string;
+  baseDir: string;
   workingDir: string;
   teamDescription: string;
   members: SingleAgent[];

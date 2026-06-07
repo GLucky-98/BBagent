@@ -38,13 +38,16 @@ class TeamFactory:
         if not teams_dir.exists():
             return
 
-        dirs = []
-        for d in sorted(teams_dir.iterdir()):
-            if not d.is_dir():
+        dirs: list[tuple[Path, Path]] = []  # (team_dir, config_path)
+        for id_dir in sorted(teams_dir.iterdir()):
+            if not id_dir.is_dir():
                 continue
-            config_path = d / "team_config.json"
-            if config_path.exists():
-                dirs.append((d, config_path))
+            for name_dir in sorted(id_dir.iterdir()):
+                if not name_dir.is_dir():
+                    continue
+                config_path = name_dir / "team_config.json"
+                if config_path.exists():
+                    dirs.append((name_dir, config_path))
         if not dirs:
             return
 
@@ -55,7 +58,9 @@ class TeamFactory:
         )
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.warning("Failed to load team from '%s': %s", dirs[i][0].name, result)
+                logger.warning(
+                    "Failed to load team from '%s': %s", dirs[i][0], result, exc_info=result,
+                )
 
     async def _load_one(self, team_dir: Path, config_path: Path):
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -86,6 +91,8 @@ class TeamFactory:
             contacts=contacts,
         )
         team = AgentTeam.create(core_config)
+        team.base_dir = team_dir
+        team.load_team_messages()
 
         self.teams[team_id] = team
         self._team_meta[team_id] = raw
@@ -111,6 +118,7 @@ class TeamFactory:
             name=team.name,
             teamDescription=team.team_description,
             workingDir=meta.get("workingDir", ""),
+            baseDir=str(team.base_dir) if team.base_dir else "",
             memberIds=meta.get("memberIds", []),
             contacts=meta.get("contacts", {}),
             started=team_id in self._started,
@@ -119,11 +127,15 @@ class TeamFactory:
     def list_summaries(self) -> list[TeamSummary]:
         result = []
         for team_id, team in self.teams.items():
+            meta = self._team_meta.get(team_id, {})
             result.append(TeamSummary(
                 id=team_id,
                 name=team.name,
                 agentCount=len(team.agents),
                 teamDescription=team.team_description,
+                workingDir=meta.get("workingDir", ""),
+                baseDir=str(team.base_dir) if team.base_dir else "",
+                memberIds=meta.get("memberIds", []),
                 started=team_id in self._started,
             ))
         return result
@@ -187,8 +199,9 @@ class TeamFactory:
         team = AgentTeam.create(core_config)
 
         # --- 步骤3: 落盘 team_config.json ---
-        team_dir = self._data_dir / "teams" / team_id
+        team_dir = self._data_dir / "teams" / team_id / config.name
         team_dir.mkdir(parents=True, exist_ok=True)
+        team.base_dir = team_dir
 
         team_data = {
             "id": team_id,
@@ -210,8 +223,10 @@ class TeamFactory:
         meta = self._team_meta.get(team_id)
         if not meta:
             return
-        team_dir = self._data_dir / "teams" / team_id
-        config_path = team_dir / "team_config.json"
+        team = self.teams.get(team_id)
+        if not team or not team.base_dir:
+            return
+        config_path = team.base_dir / "team_config.json"
         if config_path.parent.exists():
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(meta, f, indent=2, ensure_ascii=False)
@@ -249,13 +264,17 @@ class TeamFactory:
             meta["teamDescription"] = updates["teamDescription"]
         if "name" in updates:
             meta["name"] = updates["name"]
+        if "workingDir" in updates:
+            meta["workingDir"] = updates["workingDir"]
+        if "contacts" in updates:
+            meta["contacts"] = updates["contacts"]
 
         # Persist updated meta
-        team_dir = self._data_dir / "teams" / team_id
-        config_path = team_dir / "team_config.json"
-        if config_path.exists():
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(meta, f, indent=2, ensure_ascii=False)
+        if team.base_dir:
+            config_path = team.base_dir / "team_config.json"
+            if config_path.parent.exists():
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(meta, f, indent=2, ensure_ascii=False)
 
         return team
 
@@ -277,7 +296,9 @@ class TeamFactory:
         del self.teams[team_id]
         self._team_meta.pop(team_id, None)
         self._started.discard(team_id)
-        team_dir = self._data_dir / "teams" / team_id
-        if team_dir.exists():
-            shutil.rmtree(team_dir)
+        # 删除 teams/{id}/ 目录（team.base_dir 的父目录）
+        if team.base_dir:
+            team_root = team.base_dir.parent
+            if team_root.exists():
+                shutil.rmtree(team_root)
         return True

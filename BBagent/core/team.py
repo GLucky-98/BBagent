@@ -6,7 +6,7 @@ from typing import Awaitable, Callable, List
 
 from .agent import Agent, AgentState
 from .input import EventType
-from .message import ContentBlock, Message
+from .message import ContentBlock, Message, TextBlock
 from .tool import Tool
 
 
@@ -111,6 +111,23 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             return self._contacts[agent_name]
         return {name for name in self.agents if name != agent_name}
 
+    def _wrap_with_prefix(self, content: str | List[ContentBlock], from_agent: str,
+                          to_agent: str) -> str | List[ContentBlock]:
+        """如果接收方通讯录中包含发送方，则添加前缀提示；否则原样返回（伪装 user 消息）"""
+        receiver_contacts = self._get_visible_contacts(to_agent)
+        if from_agent not in receiver_contacts:
+            return content
+
+        prefix = (
+            f"[Message from teammate: {from_agent}]\n"
+            f"You can use send_message or broadcast to reply.\n\n"
+        )
+
+        if isinstance(content, str):
+            return prefix + content
+        else:
+            return [TextBlock(text=prefix)] + content
+
     def _inject_team_tools(self, agent: Agent):
         team = self
         agent_name = agent.name
@@ -190,8 +207,9 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         target = self.agents.get(to_agent)
         if target is None:
             raise ValueError(f"Agent '{to_agent}' not found in team")
+        wrapped = self._wrap_with_prefix(content, from_agent, to_agent)
         target.input.push(
-            content,
+            wrapped,
             source_id=f"team:{from_agent}",
             event_type=EventType.AGENT_MESSAGE,
         )
@@ -207,8 +225,9 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         for name in visible:
             agent = self.agents.get(name)
             if agent:
+                wrapped = self._wrap_with_prefix(content, from_agent, name)
                 agent.input.push(
-                    content,
+                    wrapped,
                     source_id=f"team:{from_agent}",
                     event_type=EventType.AGENT_MESSAGE,
                 )

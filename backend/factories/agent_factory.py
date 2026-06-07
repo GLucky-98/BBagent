@@ -202,7 +202,7 @@ class AgentFactory:
             modelId=model_id,
             systemPrompt=config_dict.get("systemPrompt", ""),
             workingDir=policy.get("cwd", ""),
-            basePath=str(agent_dir),
+            baseDir=str(agent_dir),
             toolIds=list(tool_ids),
             skillIds=list(skill_ids),
             toolPolicy=dict(policy),
@@ -264,6 +264,9 @@ class AgentFactory:
                 policy["cwd"] = policy.get("cwd") or (config.workingDir or "").strip() or str(agent.base_dir)
                 agent.policy = policy
 
+                # Create a new session for the agent
+                agent.session = Session.create(agent.session_dir)
+
                 config.id = agent_id
 
                 # All succeeded — commit to caches
@@ -279,13 +282,14 @@ class AgentFactory:
                     modelId=config.modelId,
                     systemPrompt=config.systemPrompt,
                     workingDir=policy.get("cwd", ""),
-                    basePath=str(agent.base_dir),
+                    baseDir=str(agent.base_dir),
                     toolIds=list(config.toolIds),
                     skillIds=list(config.skillIds),
                     toolPolicy=dict(policy),
                     hookNames=list(config.hookNames),
                     hookConfig=dict(config.hookConfig or {}),
                     timers=list(config.timers),
+                    lastSessionId=agent.session.id if getattr(agent, "session", None) else "",
                 )
 
                 self._write_agent_json_full(agent_id, started=False)
@@ -1069,7 +1073,7 @@ class AgentFactory:
                 "modelId": cfg.modelId,
                 "systemPrompt": cfg.systemPrompt,
                 "workingDir": policy.get("cwd", ""),
-                "basePath": str(agent.base_dir),
+                "baseDir": str(agent.base_dir),
                 "toolIds": list(cfg.toolIds),
                 "skillIds": list(cfg.skillIds),
                 "toolPolicy": dict(policy),

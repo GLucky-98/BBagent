@@ -869,7 +869,8 @@ function TeamForm({
         <p className="text-sm text-(--color-muted-foreground) mb-6">Set up team info and description</p>
         <div><label className="block text-sm font-medium mb-1.5">Team Name <span className="text-red-500">*</span></label>
           <input type="text" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="My Agent Team"
-            className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring)" />
+            disabled={!!initialData?.name}
+            className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring) disabled:opacity-50 disabled:cursor-not-allowed" />
         </div>
         <div>
           <label className="block text-sm font-medium mb-1.5">Working Directory</label>
@@ -1270,7 +1271,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
             initialData={{
               name: existingAgent.name,
               teamDescription: existingAgent.teamDescription ?? "",
-              workingDir: existingAgent.workingDir ?? existingAgent.basePath ?? "",
+              workingDir: existingAgent.workingDir ?? existingAgent.baseDir ?? "",
               members: existingAgent.members.map((m) => ({
                 name: m.name,
                 modelId: m.modelId,

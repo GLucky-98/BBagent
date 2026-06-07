@@ -118,6 +118,7 @@ class SafeMarkdown extends Component<{ content: string }> {
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
   const isSystemNotification = message.role === "system" && !message.chunkType;
+  const isInputEvent = message.chunkType === "input_event";
 
   if (isUser) {
     return (
@@ -125,11 +126,20 @@ function MessageBubble({ message }: { message: Message }) {
         <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-(--color-primary) text-(--color-primary-foreground)">
           <User size={16} />
         </div>
-        <div className="max-w-[70%] rounded-2xl px-4 py-2.5 bg-(--color-primary) text-(--color-primary-foreground) rounded-tr-sm">
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-          <span className="text-[10px] mt-1 block text-(--color-primary-foreground)/60">
-            {new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </span>
+        <div className="max-w-[70%]">
+          {isInputEvent && message.sourceAgent && (
+            <div className="text-right mb-0.5">
+              <span className="inline-block text-[10px] font-medium px-2 py-0.5 rounded-full bg-(--color-muted) text-(--color-muted-foreground)">
+                {message.sourceAgent}
+              </span>
+            </div>
+          )}
+          <div className="rounded-2xl px-4 py-2.5 bg-(--color-primary) text-(--color-primary-foreground) rounded-tr-sm">
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+            <span className="text-[10px] mt-1 block text-(--color-primary-foreground)/60">
+              {new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -459,17 +469,25 @@ export function ChatWindow() {
             }
           } else if (chunk.type === "input_event") {
             // Non-direct-user input events (timer, team agent, team user)
-            const label = chunk.event_type === "timer_trigger"
-              ? `[Timer: ${chunk.source_id.replace("timer:", "")}]`
-              : chunk.source_id
-                ? `[${chunk.source_id}]`
-                : `[${chunk.event_type}]`;
+            const sourceId: string = chunk.source_id || "";
+            let sourceTag: string;
+            if (chunk.event_type === "timer_trigger") {
+              sourceTag = `Timer: ${sourceId.replace("timer:", "")}`;
+            } else if (sourceId.startsWith("team:")) {
+              const sender = sourceId.slice(5);
+              sourceTag = sender === "user" ? "" : sender;
+            } else if (sourceId) {
+              sourceTag = sourceId;
+            } else {
+              sourceTag = chunk.event_type || "";
+            }
             addMessage(agentId, {
               id: crypto.randomUUID(),
               role: "user",
-              content: `${label} ${chunk.content}`,
+              content: chunk.content,
               timestamp: Date.now(),
               chunkType: "input_event",
+              sourceAgent: sourceTag || undefined,
             });
           } else if (chunk.type === "completed_message") {
             streamBufferRef.current = "";
