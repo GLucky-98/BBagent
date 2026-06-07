@@ -9,6 +9,8 @@ import subprocess
 import sys
 import uvicorn
 
+from backend.logging import get_uvicorn_log_config
+
 
 def kill_old_server(port: int = 8000):
     try:
@@ -32,6 +34,7 @@ def main():
         port=8000,
         reload=True,
         reload_dirs=["backend"],
+        log_config=get_uvicorn_log_config(),
     )
 
 
