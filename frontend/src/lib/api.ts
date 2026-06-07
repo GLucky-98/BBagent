@@ -1,3 +1,5 @@
+import type { CreateAgentPayload, CreateTeamPayload, UpdateAgentPayload, UpdateTeamPayload } from "../types";
+
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000/api";
 
 async function request(path: string, options: RequestInit = {}) {
@@ -6,8 +8,9 @@ async function request(path: string, options: RequestInit = {}) {
     ...options,
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
+    const body = await res.json().catch(() => null);
+    const message = body?.error?.message || body?.detail || res.statusText;
+    throw new Error(message);
   }
   return res.json();
 }
@@ -44,13 +47,15 @@ export const api = {
   // Skills
   listSkills: () => request("/skills"),
   importSkills: (path: string) => request("/skills/import", { method: "POST", body: JSON.stringify({ path }) }),
+  deleteSkill: (id: string) => request(`/skills/${id}`, { method: "DELETE" }),
+  refreshSkill: (id: string) => request(`/skills/${id}/refresh`, { method: "POST" }),
 
   // Agents — per unified-id, all paths use agent.id (UUID).
   // `getAgent` accepts id or name (server resolves both).
   listAgents: () => request("/agents"),
   getAgent: (id: string) => request(`/agents/${id}`),
-  createAgent: (data: unknown) => request("/agents", { method: "POST", body: JSON.stringify(data) }),
-  updateAgent: (id: string, data: unknown) => request(`/agents/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  createAgent: (data: CreateAgentPayload) => request("/agents", { method: "POST", body: JSON.stringify(data) }),
+  updateAgent: (id: string, data: UpdateAgentPayload) => request(`/agents/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteAgent: (id: string, deleteFiles?: boolean) =>
     request(`/agents/${id}${deleteFiles ? '?delete_files=true' : ''}`, { method: "DELETE" }),
   startAgent: (id: string) => request(`/agents/${id}/start`, { method: "POST" }),
@@ -62,14 +67,28 @@ export const api = {
   newSession: (id: string) => request(`/agents/${id}/sessions/new`, { method: "POST" }),
   getAgentMessages: (id: string) => request(`/agents/${id}/messages`),
 
+  // Timers — per agent, timer identified by name
+  listTimers: (id: string) => request(`/agents/${id}/timers`),
+  addTimer: (id: string, data: { name: string; seconds: number; hint: string; enabled: boolean }) =>
+    request(`/agents/${id}/timers`, { method: "POST", body: JSON.stringify(data) }),
+  updateTimer: (id: string, name: string, data: { seconds?: number; hint?: string; enabled?: boolean }) =>
+    request(`/agents/${id}/timers/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(data) }),
+  startTimer: (id: string, name: string) =>
+    request(`/agents/${id}/timers/${encodeURIComponent(name)}/start`, { method: "POST" }),
+  stopTimer: (id: string, name: string) =>
+    request(`/agents/${id}/timers/${encodeURIComponent(name)}/stop`, { method: "POST" }),
+  deleteTimer: (id: string, name: string) =>
+    request(`/agents/${id}/timers/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
   // Teams — paths use team.id.
   listTeams: () => request("/teams"),
   getTeam: (id: string) => request(`/teams/${id}`),
-  createTeam: (data: unknown) => request("/teams", { method: "POST", body: JSON.stringify(data) }),
-  updateTeam: (id: string, data: unknown) => request(`/teams/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  createTeam: (data: CreateTeamPayload) => request("/teams", { method: "POST", body: JSON.stringify(data) }),
+  updateTeam: (id: string, data: UpdateTeamPayload) => request(`/teams/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteTeam: (id: string) => request(`/teams/${id}`, { method: "DELETE" }),
   startTeam: (id: string) => request(`/teams/${id}/start`, { method: "POST" }),
   stopTeam: (id: string) => request(`/teams/${id}/stop`, { method: "POST" }),
+  getTeamMessages: (id: string) => request(`/teams/${id}/messages`),
 
   // Files
   getFileTree: (path: string) => request(`/files/tree?path=${encodeURIComponent(path)}`),

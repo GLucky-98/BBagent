@@ -66,3 +66,11 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background-color: oklch(0.5 0 0);
 }
+
+@keyframes pulse-green-yellow {
+  0%, 100% { background-color: #22c55e; }
+  50% { background-color: #eab308; }
+}
+.animate-pulse-green-yellow {
+  animation: pulse-green-yellow 0.6s ease-in-out infinite;
+}

@@ -34,9 +34,9 @@ async def create_sub_agent_tool(
 
     all_sub_tools: dict[str, Tool] = {}
     for creator_key, creator in TOOL_CREATOR.items():
-        if creator_key == "built_in.sub_agent":
+        if creator_key == "sub_agent":
             continue
-        base_name = creator_key.replace("built_in.", "")
+        base_name = creator_key
         try:
             sig = inspect.signature(creator)
             accepts_policy = len(sig.parameters) > 0

@@ -34,6 +34,8 @@ export function WorkspaceView() {
   }, []);
 
   const activeAgent = agents.find((a) => a.id === activeAgentId);
+  // Show TeamChatWindow only when team tab is active AND no specific member is selected.
+  // When a teammate is selected, activeAgentId is the mate's UUID → ChatWindow handles it.
   const showTeamChat = activeAgent?.type === "team" && !activeTeamMemberName;
 
   if (!activeAgentId) {

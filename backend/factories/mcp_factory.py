@@ -6,7 +6,6 @@ AgentFactory). Notifies ToolFactory when MCP servers are added/removed/updated.
 
 import asyncio
 import json
-import logging
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -18,6 +17,7 @@ from BBagent.core.mcp import (
 
 from backend.schemas import MCPServerConfig, ToolConfig
 from backend.factories import _next_id, _mcp_tool_id, _safe_filename
+from backend.logging import get_backend_logger
 
 if TYPE_CHECKING:
     from backend.factories.tool_factory import ToolFactory
@@ -28,7 +28,7 @@ class MCPFactory:
         self._data_dir = data_dir
         self._configs: dict[str, MCPServerConfig] = {}  # mcp_id -> MCPServerConfig
         self._tool_factory = tool_factory
-        self._logger = logging.getLogger("state.mcp_factory")
+        self._logger = get_backend_logger("state.mcp_factory")
 
     def _mcps_dir(self) -> Path:
         return self._data_dir / "mcps"

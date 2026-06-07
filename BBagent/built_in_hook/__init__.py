@@ -125,7 +125,7 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
     embedding_model = config.embedding_model or OllamaEmbedding()
 
     memory_manager = MemoryManager(
-        name=agent.name + '_memory',
+        name="memories",
         memory_dir=agent.base_dir / 'memory',
         logger=agent.logger,
         embedding=embedding_model,

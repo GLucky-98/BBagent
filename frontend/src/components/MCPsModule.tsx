@@ -1,22 +1,30 @@
 import { useState } from "react";
-import { Server, Plus, FolderOpen, X, Trash2, RefreshCw } from "lucide-react";
+import { Server, Plus, FolderOpen, X, Trash2, RefreshCw, Pencil } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 import type { MCPServer } from "../types";
 import { FolderPickerModal } from "./FolderPickerModal";
 
-const ACTIVE_CLASS = "bg-(--color-primary)/10 text-(--color-primary) font-semibold shadow-[inset_4px_0_0_0_#10b981]";
+const ACTIVE_CLASS = "bg-(--color-primary)/10 text-(--color-primary) font-semibold shadow-[inset_4px_0_0_0_#3b82f6]";
 
 const INITIAL_ENV_ROWS = 3;
 
-function NewServerForm({ onClose }: { onClose: () => void }) {
+function ServerForm({ onClose, editServer }: { onClose: () => void; editServer?: MCPServer }) {
   const addMcpServer = useAppStore((s) => s.addMcpServer);
-  const [name, setName] = useState("");
-  const [command, setCommand] = useState("");
-  const [args, setArgs] = useState("");
-  const [envRows, setEnvRows] = useState<{ key: string; value: string }[]>(
-    Array.from({ length: INITIAL_ENV_ROWS }, () => ({ key: "", value: "" }))
-  );
+  const updateMcpServer = useAppStore((s) => s.updateMcpServer);
+
+  const [name, setName] = useState(editServer?.name ?? "");
+  const [command, setCommand] = useState(editServer?.command ?? "");
+  const [args, setArgs] = useState(editServer?.args.join(" ") ?? "");
+  const existingEnv = editServer?.env ?? {};
+  const envKeys = Object.keys(existingEnv);
+  const initialRows = envKeys.length >= INITIAL_ENV_ROWS
+    ? envKeys.map((k) => ({ key: k, value: existingEnv[k] }))
+    : [
+        ...envKeys.map((k) => ({ key: k, value: existingEnv[k] })),
+        ...Array.from({ length: INITIAL_ENV_ROWS - envKeys.length }, () => ({ key: "", value: "" })),
+      ];
+  const [envRows, setEnvRows] = useState<{ key: string; value: string }[]>(initialRows);
 
   const updateEnvRow = (idx: number, patch: Partial<{ key: string; value: string }>) => {
     setEnvRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
@@ -31,20 +39,24 @@ function NewServerForm({ onClose }: { onClose: () => void }) {
       if (k) env[k] = value.trim();
     }
     const server: MCPServer = {
-      id: "",  // backend assigns on POST
+      id: editServer?.id ?? "",
       name, command,
       args: args.split(" ").filter(Boolean),
       env,
-      tools: [],
+      tools: editServer?.tools ?? [],
     };
-    addMcpServer(server);
+    if (editServer) {
+      updateMcpServer(editServer.id, server);
+    } else {
+      addMcpServer(server);
+    }
     onClose();
   };
 
   return (
     <div className="flex-1 h-full flex flex-col bg-(--color-background)">
       <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-(--color-border)">
-        <h3 className="text-sm font-semibold">New MCP Server</h3>
+        <h3 className="text-sm font-semibold">{editServer ? "Edit MCP Server" : "New MCP Server"}</h3>
         <button onClick={onClose} className="p-1 rounded hover:bg-(--color-secondary)"><X size={14} /></button>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -117,11 +129,12 @@ function NewServerForm({ onClose }: { onClose: () => void }) {
   );
 }
 
-function MCPList({ onNew, onSelect }: { onNew: () => void; onSelect: () => void }) {
+function MCPList({ onNew, onSelect, onEdit }: { onNew: () => void; onSelect: () => void; onEdit: (id: string) => void }) {
   const mcpServers = useAppStore((s) => s.mcpServers);
   const selectedMcpId = useAppStore((s) => s.selectedMcpId);
   const setSelectedMcpId = useAppStore((s) => s.setSelectedMcpId);
   const importMcpServers = useAppStore((s) => s.importMcpServers);
+  const deleteMcpServer = useAppStore((s) => s.deleteMcpServer);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importing, setImporting] = useState(false);
 
@@ -129,9 +142,22 @@ function MCPList({ onNew, onSelect }: { onNew: () => void; onSelect: () => void 
     setImporting(true);
     try {
       await importMcpServers(path);
+    } catch (e: any) {
+      useAppStore.getState().addToast(`MCP import failed: ${e.message || e}`, "warning");
     } finally {
       setImporting(false);
     }
+  };
+
+  const handleEdit = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedMcpId(id);
+    onEdit(id);
+  };
+
+  const handleDelete = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    deleteMcpServer(id);
   };
 
   return (
@@ -166,10 +192,33 @@ function MCPList({ onNew, onSelect }: { onNew: () => void; onSelect: () => void 
         ) : (
           <div className="space-y-1">
             {mcpServers.map((server) => (
-              <button key={server.id || server.name} onClick={() => { setSelectedMcpId(server.id || server.name); onSelect(); }}
-                className={cn("w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-(--color-secondary)", selectedMcpId === (server.id || server.name) && ACTIVE_CLASS)}>
-                <Server size={14} className="shrink-0" /><span className="flex-1 text-sm font-medium truncate">{server.name}</span>
-              </button>
+              <div
+                key={server.id || server.name}
+                onClick={() => { setSelectedMcpId(server.id || server.name); onSelect(); }}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-all hover:bg-(--color-secondary) cursor-pointer group",
+                  selectedMcpId === (server.id || server.name) && ACTIVE_CLASS,
+                )}
+              >
+                <Server size={14} className="shrink-0" />
+                <span className="flex-1 text-sm font-medium truncate">{server.name}</span>
+                <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    className="p-1 rounded hover:bg-(--color-secondary) text-(--color-muted-foreground) hover:text-(--color-primary)"
+                    onClick={(e) => handleEdit(server.id || server.name, e)}
+                    title="Edit server"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    className="p-1 rounded hover:bg-red-50 text-(--color-muted-foreground) hover:text-red-500"
+                    onClick={(e) => handleDelete(server.id || server.name, e)}
+                    title="Delete server"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         )}
@@ -178,15 +227,15 @@ function MCPList({ onNew, onSelect }: { onNew: () => void; onSelect: () => void 
   );
 }
 
-function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseForms: () => void }) {
+function MCPDetailPanel({ showForm, editServer, onCloseForm }: { showForm: boolean; editServer?: MCPServer; onCloseForm: () => void }) {
   const mcpServers = useAppStore((s) => s.mcpServers);
   const selectedMcpId = useAppStore((s) => s.selectedMcpId);
   const discoverMcpTools = useAppStore((s) => s.discoverMcpTools);
   const [discovering, setDiscovering] = useState(false);
 
-  if (showNew) return <NewServerForm onClose={onCloseForms} />;
+  if (showForm) return <ServerForm onClose={onCloseForm} editServer={editServer} />;
 
-  const selectedServer = mcpServers.find((s) => s.name === selectedMcpId);
+  const selectedServer = mcpServers.find((s) => (s.id || s.name) === selectedMcpId);
 
   if (!selectedServer) {
     return (
@@ -256,12 +305,21 @@ function MCPDetailPanel({ showNew, onCloseForms }: { showNew: boolean; onCloseFo
 }
 
 export function MCPsModule() {
-  const [showNew, setShowNew] = useState(false);
+  const mcpServers = useAppStore((s) => s.mcpServers);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const handleNew = () => { setShowForm(true); setEditingId(null); };
+  const handleSelect = () => { setShowForm(false); setEditingId(null); };
 
   return (
     <div className="flex h-full">
-      <MCPList onNew={() => setShowNew(true)} onSelect={() => setShowNew(false)} />
-      <MCPDetailPanel showNew={showNew} onCloseForms={() => setShowNew(false)} />
+      <MCPList onNew={handleNew} onSelect={handleSelect} onEdit={(id) => { setEditingId(id); setShowForm(true); }} />
+      <MCPDetailPanel
+        showForm={showForm}
+        editServer={editingId ? mcpServers.find((s) => (s.id || s.name) === editingId) : undefined}
+        onCloseForm={() => { setShowForm(false); setEditingId(null); }}
+      />
     </div>
   );
 }

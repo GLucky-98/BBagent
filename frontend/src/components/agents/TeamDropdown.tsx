@@ -1,10 +1,10 @@
 import { User, Users, Settings2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useAppStore } from "../../store";
-import type { Agent } from "../../types";
+import type { Team } from "../../types";
 
 interface TeamDropdownProps {
-  agent: Agent;
+  agent: Team;
 }
 
 export function TeamDropdown({ agent }: TeamDropdownProps) {
@@ -14,7 +14,7 @@ export function TeamDropdown({ agent }: TeamDropdownProps) {
 
   return (
     <div className="w-52 bg-white rounded-lg shadow-lg border border-(--color-border) p-1.5">
-      {agent.members?.map((member) => (
+      {agent.members.map((member) => (
         <button key={member.name} onClick={() => selectTeamMember(agent.id, member.name)}
           className={cn("flex items-center justify-between w-full px-3 py-2 rounded-md text-sm cursor-pointer hover:bg-(--color-secondary) outline-none", activeTeamMemberName === member.name && "bg-(--color-primary)/10 text-(--color-primary)")}>
           <div className="flex items-center gap-2"><User className="w-4 h-4" /><span>{member.name}</span></div>

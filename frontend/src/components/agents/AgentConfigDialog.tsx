@@ -1,14 +1,17 @@
 import { useState, useEffect } from "react";
-import { X, Bot, Users, Search, FileText, Settings } from "lucide-react";
+import { X, Bot, Users, Search, FileText, Settings, Copy } from "lucide-react";
 import { useAppStore } from "../../store";
 import { cn } from "../../lib/utils";
 import type {
-  Agent,
+  SingleAgent,
   HookDescriptor,
   HookFieldSchema,
   HookSection,
   ToolPolicy,
+  CreateAgentPayload,
+  CreateTeamPayload,
 } from "../../types";
+import { isTeam, isSingleAgent } from "../../types";
 import { FolderPicker } from "../FolderPicker";
 
 // === Field defaults ===
@@ -203,7 +206,7 @@ function HookFieldInput({
 
   if (field.type === "text") {
     const filteredPrompts = promptFilter
-      ? prompts.filter((p) => p.name.toLowerCase().includes(promptFilter.toLowerCase()) || (p.description && p.description.toLowerCase().includes(promptFilter.toLowerCase())))
+      ? prompts.filter((p) => p.name.toLowerCase().includes(promptFilter.toLowerCase()) || p.content.toLowerCase().includes(promptFilter.toLowerCase()))
       : prompts;
     return (
       <div>
@@ -254,9 +257,6 @@ function HookFieldInput({
                     }}
                   >
                     <span className="font-medium">{p.name}</span>
-                    {p.description && (
-                      <span className="text-xs text-(--color-muted-foreground) ml-2">{p.description}</span>
-                    )}
                   </button>
                 ))
               )}
@@ -449,8 +449,8 @@ export interface SingleAgentFormData {
   modelId: string;
   systemPrompt: string;
   workingDir: string;
-  toolNames: string[];
-  skillNames: string[];
+  toolIds: string[];
+  skillIds: string[];
   hookNames: string[];
   toolPolicy: ToolPolicy;
   hookConfig: Record<string, unknown>;
@@ -472,17 +472,19 @@ function SingleAgentForm({
   const skills = useAppStore((s) => s.skills);
   const prompts = useAppStore((s) => s.prompts);
   const hooksDescriptor = useAppStore((s) => s.hooksDescriptor);
+  const agents = useAppStore((s) => s.agents);
   const [showPromptPicker, setShowPromptPicker] = useState(false);
   const [promptFilter, setPromptFilter] = useState("");
   const [showAllPrompts, setShowAllPrompts] = useState(false);
+  const [copyFromOpen, setCopyFromOpen] = useState(false);
 
   const [form, setForm] = useState({
     name: initialData?.name ?? "",
     modelId: initialData?.modelId ?? models[0]?.id ?? "",
     systemPrompt: initialData?.systemPrompt ?? "",
     workingDir: initialData?.workingDir ?? "",
-    toolNames: initialData?.toolNames ?? [] as string[],
-    skillNames: initialData?.skillNames ?? [] as string[],
+    toolIds: initialData?.toolIds ?? [] as string[],
+    skillIds: initialData?.skillIds ?? [] as string[],
     hookNames: initialData?.hookNames ?? DEFAULT_HOOK_NAMES,
   });
   const [toolPolicy, setToolPolicy] = useState<ToolPolicy>(
@@ -510,8 +512,6 @@ function SingleAgentForm({
         : p.name.toLowerCase().includes(promptFilter.toLowerCase())
   );
 
-  const isInline = saving === undefined; // inline mode: no external saving state
-
   const handleToggleHook = (name: string) => {
     setForm((f) => ({
       ...f,
@@ -521,34 +521,82 @@ function SingleAgentForm({
     }));
   };
 
+  const handleCopyFrom = (agentId: string) => {
+    const agent = agents.find((a) => a.id === agentId);
+    if (agent && isSingleAgent(agent)) {
+      const data = agentToFormData(agent);
+      setForm({
+        name: data.name + " (copy)",
+        modelId: data.modelId,
+        systemPrompt: data.systemPrompt,
+        workingDir: data.workingDir,
+        toolIds: data.toolIds,
+        skillIds: data.skillIds,
+        hookNames: data.hookNames,
+      });
+      setToolPolicy(data.toolPolicy);
+      setHookConfig(data.hookConfig);
+      setCopyFromOpen(false);
+    }
+  };
+
+  const singleAgents = agents.filter(isSingleAgent);
+
   return (
-    <div className={cn("flex flex-col", isInline ? "p-6 max-h-full" : "p-8 max-h-[85vh] overflow-hidden")}>
-      {!isInline && (
-        <div className="shrink-0 flex items-start justify-between mb-4 pr-10">
+    <div className="flex flex-col p-8 max-h-[85vh] overflow-hidden">
+      <div className="shrink-0 flex items-start justify-between mb-4 pr-10">
           <div>
             <h2 className="text-lg font-semibold mb-1">{initialData ? "Edit Agent" : "Configure Agent"}</h2>
             <p className="text-sm text-(--color-muted-foreground)">{initialData ? "Update agent configuration" : "Fill in the agent configuration details"}</p>
             {saveError && <p className="text-sm text-red-500 mt-1">{saveError}</p>}
           </div>
-          <button
-            onClick={() => onSave({ ...form, toolPolicy, hookConfig })}
-            disabled={!form.modelId || saving}
-            className="px-8 py-2.5 rounded-lg border border-(--color-primary) bg-(--color-primary) text-(--color-primary-foreground) text-sm hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shrink-0 shadow-sm"
-          >
-            {saving ? "Saving..." : initialData ? "Save Changes" : "Create Agent"}
-          </button>
-        </div>
-      )}
-      {isInline && saveError && <p className="text-sm text-red-500 mb-2">{saveError}</p>}
+          <div className="flex items-center gap-2 shrink-0">
+            {!initialData && singleAgents.length > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => setCopyFromOpen(!copyFromOpen)}
+                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-lg border border-(--color-border) hover:bg-(--color-secondary) text-sm transition-colors"
+                >
+                  <Copy className="w-4 h-4" />
+                  Copy From
+                </button>
+                {copyFromOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setCopyFromOpen(false)} />
+                    <div className="absolute right-0 top-full mt-1 z-20 w-56 bg-white rounded-lg border border-(--color-border) shadow-lg max-h-60 overflow-y-auto">
+                      {singleAgents.map((a) => (
+                        <button
+                          key={a.id}
+                          onClick={() => handleCopyFrom(a.id)}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-(--color-secondary) truncate"
+                        >
+                          {a.name}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            <button
+              onClick={() => onSave({ ...form, toolPolicy, hookConfig })}
+              disabled={!form.modelId || saving}
+              className="px-8 py-2.5 rounded-lg border border-(--color-primary) bg-(--color-primary) text-(--color-primary-foreground) text-sm hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+            >
+              {saving ? "Saving..." : initialData ? "Save Changes" : "Create Agent"}
+            </button>
+          </div>
+      </div>
 
-      <div className={cn("grid grid-cols-2 gap-8 flex-1 min-h-0", isInline && "overflow-y-auto")}>
+      <div className="grid grid-cols-2 gap-8 flex-1 min-h-0 overflow-y-auto">
         {/* === LEFT COLUMN: Basic info + Skills === */}
         <div className="space-y-4 overflow-y-auto pr-4 min-h-0">
           <div>
             <label className="block text-sm font-medium mb-1.5">Name <span className="text-red-500">*</span></label>
             <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
               placeholder="My Agent (leave empty for auto-generated)"
-              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring)" />
+              disabled={!!initialData}
+              className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring) disabled:opacity-50 disabled:cursor-not-allowed" />
           </div>
 
           <div>
@@ -605,7 +653,6 @@ function SingleAgentForm({
                       <button key={p.id} onClick={() => { setForm({ ...form, systemPrompt: p.content }); setShowPromptPicker(false); }}
                         className="w-full text-left px-3 py-2 hover:bg-(--color-secondary) text-sm">
                         <span className="font-medium">{p.name}</span>
-                        <span className="text-xs text-(--color-muted-foreground) ml-2">{p.description}</span>
                       </button>
                     ))
                   )}
@@ -624,10 +671,9 @@ function SingleAgentForm({
                 <label key={s.id || s.name} className="flex items-center justify-between text-sm cursor-pointer">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="truncate">{s.name}</span>
-                    <span className="text-xs text-(--color-muted-foreground) shrink-0">{s.metadata.version && `v${s.metadata.version}`}</span>
                   </div>
-                  <input type="checkbox" checked={form.skillNames.includes(s.id || s.name)}
-                    onChange={(e) => setForm({ ...form, skillNames: e.target.checked ? [...form.skillNames, s.id || s.name] : form.skillNames.filter((n) => n !== (s.id || s.name)) })}
+                  <input type="checkbox" checked={form.skillIds.includes(s.id || s.name)}
+                    onChange={(e) => setForm({ ...form, skillIds: e.target.checked ? [...form.skillIds, s.id || s.name] : form.skillIds.filter((n) => n !== (s.id || s.name)) })}
                     className="rounded shrink-0 ml-2" />
                 </label>
               ))}
@@ -654,8 +700,8 @@ function SingleAgentForm({
                 {builtInTools.map((t) => (
                   <label key={t.id} className="flex items-center justify-between text-sm cursor-pointer">
                     <span className="truncate">{t.name}</span>
-                    <input type="checkbox" checked={form.toolNames.includes(t.id)}
-                      onChange={(e) => setForm({ ...form, toolNames: e.target.checked ? [...form.toolNames, t.id] : form.toolNames.filter((n) => n !== t.id) })}
+                    <input type="checkbox" checked={form.toolIds.includes(t.id)}
+                      onChange={(e) => setForm({ ...form, toolIds: e.target.checked ? [...form.toolIds, t.id] : form.toolIds.filter((n) => n !== t.id) })}
                       className="rounded shrink-0 ml-2" />
                   </label>
                 ))}
@@ -667,8 +713,8 @@ function SingleAgentForm({
                     {serverTools.map((t) => (
                       <label key={t.id} className="flex items-center justify-between text-sm cursor-pointer">
                         <span className="truncate">{t.name}</span>
-                        <input type="checkbox" checked={form.toolNames.includes(t.id)}
-                          onChange={(e) => setForm({ ...form, toolNames: e.target.checked ? [...form.toolNames, t.id] : form.toolNames.filter((n) => n !== t.id) })}
+                        <input type="checkbox" checked={form.toolIds.includes(t.id)}
+                          onChange={(e) => setForm({ ...form, toolIds: e.target.checked ? [...form.toolIds, t.id] : form.toolIds.filter((n) => n !== t.id) })}
                           className="rounded shrink-0 ml-2" />
                       </label>
                     ))}
@@ -720,16 +766,6 @@ function SingleAgentForm({
         </div>
       </div>
 
-      {isInline && (
-        <div className="shrink-0 flex justify-end pt-4 border-t border-(--color-border)">
-          <button onClick={() => onSave({ ...form, toolPolicy, hookConfig })}
-            disabled={!form.modelId}
-            className="px-8 py-2.5 rounded-lg border border-(--color-primary) bg-(--color-primary) text-(--color-primary-foreground) text-sm hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shrink-0 shadow-sm">
-            {initialData ? "Update Member" : "Save Member"}
-          </button>
-        </div>
-      )}
-
       <ToolPolicyDialog
         open={toolPolicyOpen}
         onClose={() => setToolPolicyOpen(false)}
@@ -755,7 +791,7 @@ function SingleAgentForm({
 interface TeamFormData {
   name: string;
   teamDescription: string;
-  baseDir: string;
+  workingDir: string;
   members: SingleAgentFormData[];
   contacts: Record<string, Record<string, string>>;
 }
@@ -764,18 +800,29 @@ function TeamForm({
   initialData,
   onSave,
 }: {
-  initialData?: { name: string; teamDescription: string; baseDir?: string; members: SingleAgentFormData[]; contacts: Record<string, Record<string, string>> };
+  initialData?: { name: string; teamDescription: string; workingDir?: string; members: SingleAgentFormData[]; contacts: Record<string, Record<string, string>> };
   onSave: (data: TeamFormData) => void;
 }) {
   const models = useAppStore((s) => s.models);
+  const tools = useAppStore((s) => s.tools);
+  const skills = useAppStore((s) => s.skills);
+  const prompts = useAppStore((s) => s.prompts);
 
   const [step, setStep] = useState<0 | 1 | 2>(0);
   const [teamName, setTeamName] = useState(initialData?.name ?? "");
   const [teamDesc, setTeamDesc] = useState(initialData?.teamDescription ?? "");
-  const [teamBaseDir, setTeamBaseDir] = useState(initialData?.baseDir ?? "");
+  const [teamWorkingDir, setTeamWorkingDir] = useState(initialData?.workingDir ?? "");
   const [members, setMembers] = useState<SingleAgentFormData[]>(initialData?.members ?? []);
   const [contacts, setContacts] = useState<Record<string, Record<string, string>>>(initialData?.contacts ?? {});
   const [editingMemberIdx, setEditingMemberIdx] = useState<number | null>(null);
+
+  const [showPromptPicker, setShowPromptPicker] = useState(false);
+  const [promptFilter, setPromptFilter] = useState("");
+  const [showAllPrompts, setShowAllPrompts] = useState(false);
+
+  const [rolePromptOpen, setRolePromptOpen] = useState<string | null>(null);
+  const [rolePromptFilter, setRolePromptFilter] = useState("");
+  const [roleShowAll, setRoleShowAll] = useState(false);
 
   const syncContacts = (memberList: SingleAgentFormData[], currentContacts: Record<string, Record<string, string>>) => {
     const result: Record<string, Record<string, string>> = {};
@@ -789,6 +836,22 @@ function TeamForm({
     return result;
   };
 
+  const filteredPrompts = prompts.filter((p) =>
+    showAllPrompts
+      ? true
+      : promptFilter.trim() === ""
+        ? false
+        : p.name.toLowerCase().includes(promptFilter.toLowerCase())
+  );
+
+  const roleFilteredPrompts = prompts.filter((p) =>
+    roleShowAll
+      ? true
+      : rolePromptFilter.trim() === ""
+        ? false
+        : p.name.toLowerCase().includes(rolePromptFilter.toLowerCase())
+  );
+
   const handleMemberSave = (data: SingleAgentFormData) => {
     const updated = editingMemberIdx != null && editingMemberIdx < members.length
       ? members.map((m, i) => (i === editingMemberIdx ? data : m))
@@ -801,28 +864,66 @@ function TeamForm({
   // Step 0: Team info
   if (step === 0) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
         <h2 className="text-lg font-semibold mb-1">Configure Team</h2>
         <p className="text-sm text-(--color-muted-foreground) mb-6">Set up team info and description</p>
         <div><label className="block text-sm font-medium mb-1.5">Team Name <span className="text-red-500">*</span></label>
           <input type="text" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="My Agent Team"
             className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring)" />
         </div>
-        <div><label className="block text-sm font-medium mb-1.5">Team Description</label>
-          <textarea value={teamDesc} onChange={(e) => setTeamDesc(e.target.value)} placeholder="A collaborative team for full-stack development..." rows={4}
-            className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring) resize-none" />
+        <div>
+          <label className="block text-sm font-medium mb-1.5">Working Directory</label>
+          <p className="text-xs text-(--color-muted-foreground) mb-1.5">Shared working directory for all team agents</p>
+          <FolderPicker
+            value={teamWorkingDir}
+            onChange={(path) => setTeamWorkingDir(path)}
+            placeholder="/workspace/team-project"
+          />
+          {teamWorkingDir && (
+            <p className="text-[10px] text-(--color-muted-foreground) mt-1 truncate">All agents will use: <span className="font-mono">{teamWorkingDir}</span></p>
+          )}
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1.5">Base Directory</label>
-          <p className="text-xs text-(--color-muted-foreground) mb-1.5">Each team agent will be created under this directory</p>
-          <FolderPicker
-            value={teamBaseDir}
-            onChange={(path) => setTeamBaseDir(path)}
-            placeholder="/workspace/team-base"
-          />
-          {teamBaseDir && (
-            <p className="text-[10px] text-(--color-muted-foreground) mt-1 truncate">Members will be stored at: <span className="font-mono">{teamBaseDir}/&lt;agent-name&gt;</span></p>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-sm font-medium">Team Description</label>
+            <button onClick={() => { setShowPromptPicker(!showPromptPicker); setPromptFilter(""); }}
+              className="flex items-center gap-1 text-xs text-(--color-primary) hover:underline">
+              <FileText className="w-3 h-3" />
+              {showPromptPicker ? "Hide Prompt Library" : "From Prompt Library"}
+            </button>
+          </div>
+          {showPromptPicker && (
+            <div className="mb-2 border border-(--color-border) rounded-lg overflow-hidden">
+              <div className="flex items-center gap-1 px-3 py-2 border-b border-(--color-border) bg-(--color-muted)/20">
+                <Search className="w-3 h-3 text-(--color-muted-foreground) shrink-0" />
+                <input type="text" value={promptFilter} onChange={(e) => setPromptFilter(e.target.value)}
+                  placeholder="Search by prompt title..." className="flex-1 text-xs bg-transparent outline-none" />
+                <button
+                  type="button"
+                  onClick={() => { setShowAllPrompts(!showAllPrompts); setPromptFilter(""); }}
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-(--color-border) hover:bg-(--color-secondary) shrink-0"
+                >
+                  {showAllPrompts ? "Search" : "Browse All"}
+                </button>
+              </div>
+              <div className="max-h-[120px] overflow-y-auto">
+                {prompts.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-xs text-(--color-muted-foreground)">No prompts available</div>
+                ) : filteredPrompts.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-xs text-(--color-muted-foreground)">No matching prompts found</div>
+                ) : (
+                  filteredPrompts.map((p) => (
+                    <button key={p.id} onClick={() => { setTeamDesc(p.content); setShowPromptPicker(false); }}
+                      className="w-full text-left px-3 py-2 hover:bg-(--color-secondary) text-sm">
+                      <span className="font-medium">{p.name}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
           )}
+          <textarea value={teamDesc} onChange={(e) => setTeamDesc(e.target.value)} placeholder="A collaborative team for full-stack development..." rows={4}
+            className="w-full px-3 py-2 rounded-lg border border-(--color-border) bg-white focus:outline-none focus:ring-2 focus:ring-(--color-ring) resize-none" />
         </div>
         <button onClick={() => setStep(1)} disabled={!teamName}
           className="w-full py-2.5 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90 disabled:opacity-50">Next: Add Agents</button>
@@ -830,17 +931,18 @@ function TeamForm({
     );
   }
 
-  // Member editor (Add/Edit)
+  // Member editor (Add/Edit) — fully reuses SingleAgentForm
   if (editingMemberIdx !== null) {
     const editingMember = editingMemberIdx < members.length ? members[editingMemberIdx] : null;
     return (
-      <div className="flex flex-col max-h-[75vh]">
-        <div className="flex items-center gap-3 px-6 pt-4 pb-2 shrink-0">
-          <button onClick={() => setEditingMemberIdx(null)}
-            className="text-sm text-(--color-muted-foreground) hover:text-(--color-foreground)">&larr; Back to members</button>
-          <h3 className="text-base font-semibold">{editingMember ? `Edit: ${editingMember.name}` : "Add Agent"}</h3>
-        </div>
-        <div className="flex-1 overflow-y-auto">
+      <div className="flex flex-col max-h-[85vh]">
+        <button
+          onClick={() => setEditingMemberIdx(null)}
+          className="text-sm text-(--color-muted-foreground) hover:text-(--color-foreground) px-6 pt-4 pb-2 shrink-0 self-start"
+        >
+          &larr; Back to members
+        </button>
+        <div className="flex-1 overflow-hidden">
           <SingleAgentForm
             initialData={editingMember ?? undefined}
             onSave={handleMemberSave}
@@ -866,12 +968,18 @@ function TeamForm({
                 <p className="text-sm font-medium truncate">{m.name}</p>
                 <p className="text-xs text-(--color-muted-foreground)">{models.find((mod) => mod.id === m.modelId)?.name ?? "No model"}</p>
                 <div className="flex items-center gap-1 mt-1 flex-wrap">
-                  {m.toolNames.map((tn: string) => (
-                    <span key={tn} className="px-1.5 py-0.5 text-[10px] rounded bg-(--color-muted)/30 text-(--color-muted-foreground)">{tn}</span>
-                  ))}
-                  {m.skillNames.map((sn: string) => (
-                    <span key={sn} className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700">{sn}</span>
-                  ))}
+                  {m.toolIds.map((tn: string) => {
+                    const tool = tools.find((t) => t.id === tn);
+                    return (
+                      <span key={tn} className="px-1.5 py-0.5 text-[10px] rounded bg-(--color-muted)/30 text-(--color-muted-foreground)">{tool?.name ?? tn}</span>
+                    );
+                  })}
+                  {m.skillIds.map((sn: string) => {
+                    const skill = skills.find((s) => (s.id || s.name) === sn);
+                    return (
+                      <span key={sn} className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700">{skill?.name ?? sn}</span>
+                    );
+                  })}
                   {m.hookNames.map((hn: string) => (
                     <span key={hn} className="px-1.5 py-0.5 text-[10px] rounded bg-violet-100 text-violet-700">{hn}</span>
                   ))}
@@ -915,7 +1023,7 @@ function TeamForm({
           <thead>
             <tr className="border-b border-(--color-border) text-left text-xs text-(--color-muted-foreground)">
               <th className="py-2 pr-3 font-medium w-[120px]">Agent</th>
-              <th className="py-2 pr-3 font-medium">Role</th>
+              <th className="py-2 pr-3 font-medium w-[240px]">Role</th>
               <th className="py-2 font-medium">Contacts</th>
             </tr>
           </thead>
@@ -926,6 +1034,55 @@ function TeamForm({
                 <tr key={member.name} className="border-b border-(--color-border)/50">
                   <td className="py-2.5 pr-3 font-medium align-top">{member.name}</td>
                   <td className="py-2.5 pr-3 align-top">
+                    {rolePromptOpen === member.name && (
+                      <div className="mb-2 border border-(--color-border) rounded-lg overflow-hidden">
+                        <div className="flex items-center gap-1 px-3 py-2 border-b border-(--color-border) bg-(--color-muted)/20">
+                          <Search className="w-3 h-3 text-(--color-muted-foreground) shrink-0" />
+                          <input type="text" value={rolePromptFilter} onChange={(e) => setRolePromptFilter(e.target.value)}
+                            placeholder="Search by prompt title..." className="flex-1 text-xs bg-transparent outline-none" />
+                          <button
+                            type="button"
+                            onClick={() => { setRoleShowAll(!roleShowAll); setRolePromptFilter(""); }}
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-(--color-border) hover:bg-(--color-secondary) shrink-0"
+                          >
+                            {roleShowAll ? "Search" : "Browse All"}
+                          </button>
+                        </div>
+                        <div className="max-h-[120px] overflow-y-auto">
+                          {prompts.length === 0 ? (
+                            <div className="px-3 py-4 text-center text-xs text-(--color-muted-foreground)">No prompts available</div>
+                          ) : roleFilteredPrompts.length === 0 ? (
+                            <div className="px-3 py-4 text-center text-xs text-(--color-muted-foreground)">No matching prompts found</div>
+                          ) : (
+                            roleFilteredPrompts.map((p) => (
+                              <button key={p.id} onClick={() => {
+                                const newContacts = { ...contacts };
+                                newContacts[member.name] = { ...(newContacts[member.name] ?? {}), [member.name]: p.content };
+                                setContacts(newContacts);
+                                setRolePromptOpen(null);
+                                setRolePromptFilter("");
+                              }}
+                                className="w-full text-left px-3 py-2 hover:bg-(--color-secondary) text-sm">
+                                <span className="font-medium">{p.name}</span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between mb-1">
+                      <button
+                        onClick={() => {
+                          setRolePromptOpen(rolePromptOpen === member.name ? null : member.name);
+                          setRolePromptFilter("");
+                          setRoleShowAll(false);
+                        }}
+                        className="flex items-center gap-1 text-xs text-(--color-primary) hover:underline"
+                      >
+                        <FileText className="w-3 h-3" />
+                        {rolePromptOpen === member.name ? "Hide Prompt Library" : "From Prompt Library"}
+                      </button>
+                    </div>
                     <input
                       type="text"
                       value={memberContacts[member.name] ?? ""}
@@ -935,7 +1092,7 @@ function TeamForm({
                         setContacts(newContacts);
                       }}
                       placeholder="Role description..."
-                      className="w-full px-2 py-1 text-xs rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
+                      className="w-full px-3 py-2 text-sm rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
                   </td>
                   <td className="py-2.5 align-top">
                     <div className="flex flex-wrap gap-x-3 gap-y-1">
@@ -969,7 +1126,7 @@ function TeamForm({
       </div>
       <div className="flex gap-2 mt-4 pt-4 border-t border-(--color-border) shrink-0">
         <button onClick={() => setStep(1)} className="flex-1 py-2 rounded-lg border border-(--color-border) hover:bg-(--color-secondary) text-sm">Back</button>
-        <button onClick={() => onSave({ name: teamName, teamDescription: teamDesc, baseDir: teamBaseDir, members, contacts })}
+        <button onClick={() => onSave({ name: teamName, teamDescription: teamDesc, workingDir: teamWorkingDir, members, contacts })}
           className="flex-1 py-2.5 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90">Create Team</button>
       </div>
     </div>
@@ -986,15 +1143,15 @@ interface AgentConfigDialogProps {
   agentId?: string;
 }
 
-// Helper: turn existing Agent data into SingleAgentFormData for editing.
-function agentToFormData(agent: Agent): SingleAgentFormData {
+// Helper: turn existing SingleAgent data into SingleAgentFormData for editing.
+function agentToFormData(agent: SingleAgent): SingleAgentFormData {
   return {
     name: agent.name,
     modelId: agent.modelId,
     systemPrompt: agent.systemPrompt,
     workingDir: agent.workingDir ?? "",
-    toolNames: agent.toolNames ?? [],
-    skillNames: agent.skillNames ?? [],
+    toolIds: agent.toolIds ?? [],
+    skillIds: agent.skillIds ?? [],
     hookNames: agent.hookNames ?? DEFAULT_HOOK_NAMES,
     toolPolicy: agent.toolPolicy ?? DEFAULT_TOOL_POLICY,
     hookConfig: agent.hookConfig ?? {},
@@ -1003,7 +1160,6 @@ function agentToFormData(agent: Agent): SingleAgentFormData {
 
 export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentConfigDialogProps) {
   const agents = useAppStore((s) => s.agents);
-  const models = useAppStore((s) => s.models);
   const addAgent = useAppStore((s) => s.createAgentApi);
   const addTeam = useAppStore((s) => s.createTeamApi);
   const updateAgent = useAppStore((s) => s.updateAgent);
@@ -1038,25 +1194,21 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
     try {
       // Sync workingDir into toolPolicy.cwd so backend always has cwd
       const toolPolicyWithCwd = { ...data.toolPolicy, cwd: data.workingDir };
-      const payloadData = { ...data, toolPolicy: toolPolicyWithCwd };
+      const payload: CreateAgentPayload = {
+        name: data.name,
+        modelId: data.modelId,
+        systemPrompt: data.systemPrompt,
+        workingDir: data.workingDir,
+        toolIds: data.toolIds,
+        skillIds: data.skillIds,
+        hookNames: data.hookNames,
+        hookConfig: data.hookConfig,
+        toolPolicy: toolPolicyWithCwd,
+      };
 
-      // No basePath sent (backend auto-generates) and no messages.
       if (mode === "edit" && existingAgent) {
-        // unified-id: PUT path uses agent.id; backend resolves id or name.
-        await updateAgent(existingAgent.id || existingAgent.name, { ...payloadData, type: "single" });
+        await updateAgent(existingAgent.id || existingAgent.name, payload);
       } else {
-        // Backend fills in id/basePath/state/sessions/currentSessionId/messages
-        // on response. Pre-populate the required Agent shape with placeholders.
-        const payload: Agent = {
-          id: "",
-          ...payloadData,
-          type: "single",
-          basePath: "",
-          messages: [],
-          state: "ready",
-          sessions: [],
-          currentSessionId: "",
-        };
         await addAgent(payload);
       }
       onClose();
@@ -1070,60 +1222,30 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
   };
 
   const handleTeamSave = (data: TeamFormData) => {
-    // For team members, derive per-member basePath from teamBaseDir (if set).
-    // Note: this is currently advisory; backend ignores basePath on POST
-    // (it auto-generates DATA_DIR/agents/{id}/{name}). Team storage layout
-    // is now keyed by id per the unified-id design.
-    const teamMembers: Agent[] = data.members.map((m) => {
-      const memberBasePath = data.baseDir
-        ? `${data.baseDir.replace(/\/$/, "")}/${m.name}`
-        : "";
-      return {
-        id: "",
-        name: m.name,
-        type: "single",
-        basePath: memberBasePath,
-        baseDir: memberBasePath,
-        workingDir: m.workingDir,
-        modelId: m.modelId,
-        systemPrompt: m.systemPrompt,
-        toolNames: m.toolNames,
-        skillNames: m.skillNames,
-        hookNames: m.hookNames,
-        hookConfig: m.hookConfig,
-        toolPolicy: { ...m.toolPolicy, cwd: m.workingDir },
-        messages: [],
-        state: "ready",
-        sessions: [],
-        currentSessionId: "",
-      };
-    });
-    const team: Agent = {
-      id: "",
+    const memberPayloads: CreateAgentPayload[] = data.members.map((m) => ({
+      name: m.name,
+      modelId: m.modelId,
+      systemPrompt: m.systemPrompt,
+      workingDir: m.workingDir,
+      toolIds: m.toolIds,
+      skillIds: m.skillIds,
+      hookNames: m.hookNames,
+      hookConfig: m.hookConfig,
+      toolPolicy: { ...m.toolPolicy, cwd: m.workingDir },
+    }));
+
+    const payload: CreateTeamPayload = {
       name: data.name,
-      type: "team",
-      basePath: data.baseDir,
-      baseDir: data.baseDir,
-      workingDir: "",
-      modelId: models[0]?.id ?? "",
-      systemPrompt: data.teamDescription,
-      toolNames: [],
-      skillNames: [],
-      hookNames: [],
-      hookConfig: {},
-      toolPolicy: DEFAULT_TOOL_POLICY,
       teamDescription: data.teamDescription,
-      members: teamMembers,
+      workingDir: data.workingDir,
+      members: memberPayloads,
       contacts: data.contacts,
-      messages: [],
-      state: "ready",
-      sessions: [],
-      currentSessionId: "",
     };
+
     if (mode === "edit" && existingAgent) {
-      updateTeam(existingAgent.id, team);
+      updateTeam(existingAgent.id, payload);
     } else {
-      addTeam(team);
+      addTeam(payload);
     }
     onClose();
   };
@@ -1137,32 +1259,35 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
         <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-(--color-secondary) transition-colors z-10"><X size={18} /></button>
         {effectiveType === "agent" && (
           <SingleAgentForm
-            initialData={existingAgent && existingAgent.type === "single" ? agentToFormData(existingAgent) : undefined}
+            initialData={existingAgent && isSingleAgent(existingAgent) ? agentToFormData(existingAgent) : undefined}
             onSave={handleSingleSave}
             saving={saving}
             saveError={error}
           />
         )}
-        {effectiveType === "team" && (
+        {effectiveType === "team" && existingAgent && isTeam(existingAgent) && (
           <TeamForm
-            initialData={existingAgent && existingAgent.type === "team" ? {
+            initialData={{
               name: existingAgent.name,
               teamDescription: existingAgent.teamDescription ?? "",
-              baseDir: existingAgent.baseDir ?? existingAgent.basePath ?? "",
-              members: (existingAgent.members ?? []).map((m) => ({
+              workingDir: existingAgent.workingDir ?? existingAgent.basePath ?? "",
+              members: existingAgent.members.map((m) => ({
                 name: m.name,
                 modelId: m.modelId,
                 systemPrompt: m.systemPrompt,
                 workingDir: m.workingDir,
-                toolNames: m.toolNames,
-                skillNames: m.skillNames,
+                toolIds: m.toolIds,
+                skillIds: m.skillIds,
                 hookNames: m.hookNames ?? DEFAULT_HOOK_NAMES,
                 toolPolicy: m.toolPolicy ?? DEFAULT_TOOL_POLICY,
                 hookConfig: m.hookConfig ?? {},
               })),
               contacts: existingAgent.contacts ?? {},
-            } : undefined}
+            }}
             onSave={handleTeamSave} />
+        )}
+        {effectiveType === "team" && !existingAgent && (
+          <TeamForm onSave={handleTeamSave} />
         )}
       </div>
     </div>

@@ -4,8 +4,12 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.logging import get_backend_logger
 from backend.state import state_manager
 from backend.schemas import MCPServerConfig
+
+
+logger = get_backend_logger("api.mcps")
 
 
 class ImportRequest(BaseModel):
@@ -83,7 +87,12 @@ async def import_mcps(req: ImportRequest):
 
     from BBagent.core.mcp import parse_config_dict
 
-    imported = []
+    logger.info(f"Importing MCP servers from: {target}")
+
+    imported: list[str] = []
+    skipped: list[str] = []
+    errors: list[dict] = []
+
     for item in sorted(target.iterdir()):
         if not item.is_file() or item.suffix.lower() != ".json":
             continue
@@ -97,6 +106,8 @@ async def import_mcps(req: ImportRequest):
                     e.name == core_cfg.name for e in state_manager.mcp_factory.list_all()
                 )
                 if name_exists:
+                    skipped.append(core_cfg.name)
+                    logger.info(f"  [skipped] {core_cfg.name} (already exists)")
                     continue
                 cfg = MCPServerConfig(
                     name=core_cfg.name,
@@ -106,7 +117,18 @@ async def import_mcps(req: ImportRequest):
                 )
                 await state_manager.add_mcp(cfg)
                 imported.append(cfg.name)
-        except Exception:
-            continue
+                logger.info(f"  [imported] {cfg.name}")
+        except Exception as e:
+            errors.append({"file": item.name, "error": str(e)})
+            logger.warning(f"  [error] {item.name}: {e}")
 
-    return {"imported": len(imported)}
+    result = {
+        "imported": len(imported),
+        "skipped": len(skipped),
+        "errors": len(errors),
+        "items": imported,
+        "skipped_items": skipped,
+        "error_items": errors,
+    }
+    logger.info(f"MCP import complete: {result['imported']} imported, {result['skipped']} skipped, {result['errors']} errors")
+    return result

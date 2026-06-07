@@ -88,6 +88,13 @@ class AgentSummary(BaseModel):
     hookEnabled: bool = False
 
 
+class TimerConfig(BaseModel):
+    name: str
+    seconds: float
+    hint: str = ""
+    enabled: bool = True
+
+
 class AgentConfig(BaseModel):
     """Frontend-facing agent configuration payload.
 
@@ -137,6 +144,7 @@ class AgentConfig(BaseModel):
     toolPolicy: dict = Field(default_factory=dict)
     hookNames: list[str] = Field(default_factory=list)
     hookConfig: dict = Field(default_factory=dict)
+    timers: list[TimerConfig] = Field(default_factory=list)
     lastSessionId: str = ""
 
 
@@ -176,14 +184,33 @@ class TeamSummary(BaseModel):
     name: str
     agentCount: int
     teamDescription: str = ""
+    memberIds: list[str] = Field(default_factory=list)
+    started: bool = False
 
 
 class TeamConfig(BaseModel):
     id: str = ""
     name: str
     teamDescription: str = ""
-    baseDir: str = ""
+    workingDir: str = ""
     memberIds: list[str] = Field(default_factory=list)
+    contacts: dict[str, dict[str, str]] = Field(default_factory=dict)
+    started: bool = False
+
+
+class CreateTeamRequest(BaseModel):
+    """Frontend-facing team creation payload.
+
+    Separates team-level config from member agent configs, so the frontend
+    no longer needs to send a bloated Agent object with empty placeholder
+    fields for the team itself.
+
+    workingDir is the shared working directory for all member agents.
+    """
+    name: str
+    teamDescription: str = ""
+    workingDir: str = ""
+    members: list[AgentConfig] = Field(default_factory=list)
     contacts: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 

@@ -1,7 +1,6 @@
 """ModelFactory — manages ModelConfig CRUD, Model instance cache and refcount."""
 
 import json
-import logging
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +9,7 @@ from BBagent.core.model import Model
 from backend.schemas import ModelConfig
 from backend.errors import NotFoundError, ErrorCode
 from backend.factories import _next_id, _safe_filename
+from backend.logging import get_backend_logger
 
 
 class ModelFactory:
@@ -18,7 +18,7 @@ class ModelFactory:
         self._configs: dict[str, ModelConfig] = {}   # model_id -> ModelConfig
         self._instances: dict[str, Model] = {}        # model_id -> Model (shared cache)
         self._refcount: dict[str, int] = {}           # model_id -> ref count
-        self._logger = logging.getLogger("state.model_factory")
+        self._logger = get_backend_logger("state.model_factory")
 
     # --- path helpers ---
 

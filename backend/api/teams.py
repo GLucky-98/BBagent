@@ -2,7 +2,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 from backend.state import state_manager
-from backend.schemas import TeamConfig, TeamSummary
+from backend.schemas import TeamConfig, TeamSummary, CreateTeamRequest
 from backend.errors import ConflictError, ErrorCode
 from backend.logging import get_backend_logger
 
@@ -30,12 +30,17 @@ async def list_teams():
         if not (teams_dir / team_id / "team_config.json").exists():
             stale_ids.append(team_id)
             continue
-        result.append(TeamSummary(
+        meta = state_manager.team_factory._team_meta.get(team_id, {})
+        data = TeamSummary(
             id=team_id,
             name=team.name,
             agentCount=len(team.agents),
             teamDescription=team.team_description,
-        ).model_dump(mode="json"))
+            memberIds=meta.get("memberIds", []),
+            started=state_manager.team_factory.is_started(team_id),
+        ).model_dump(mode="json")
+        data["state"] = state_manager.team_factory.get_state(team_id)
+        result.append(data)
     for team_id in stale_ids:
         state_manager.team_factory.teams.pop(team_id, None)
     return result
@@ -47,22 +52,31 @@ async def get_team(team_id: str):
     config = state_manager.get_team_config(team_id)
     if not config:
         return {"error": {"code": "TEAM_NOT_FOUND", "message": f"Team '{team_id}' not found"}}
-    return config.model_dump(mode="json")
+    data = config.model_dump(mode="json")
+    data["state"] = state_manager.team_factory.get_state(team_id)
+    return data
 
 
 @router.post("")
-async def create_team(config: TeamConfig):
+async def create_team(req: CreateTeamRequest):
     # Check for duplicate name
     for team in state_manager.team_factory.teams.values():
-        if team.name == config.name:
+        if team.name == req.name:
             raise ConflictError(ErrorCode.TEAM_NOT_FOUND,
-                                f"Team '{config.name}' already exists")
-    team = await state_manager.create_team(config)
-    team_id = next(
-        (tid for tid, t in state_manager.team_factory.teams.items() if t is team),
-        None,
+                                f"Team '{req.name}' already exists")
+
+    # Build TeamConfig from the request
+    config = TeamConfig(
+        name=req.name,
+        teamDescription=req.teamDescription,
+        workingDir=req.workingDir,
+        contacts=req.contacts,
     )
-    return state_manager.get_team_config(team_id).model_dump(mode="json")
+
+    _team, team_id = await state_manager.create_team(config, member_configs=req.members)
+    data = state_manager.get_team_config(team_id).model_dump(mode="json")
+    data["state"] = state_manager.team_factory.get_state(team_id)
+    return data
 
 
 @router.put("/{team_id}")
@@ -71,15 +85,26 @@ async def update_team(team_id: str, updates: dict):
     team = state_manager.update_team(team_id, updates)
     if not team:
         return {"error": {"code": "TEAM_NOT_FOUND", "message": f"Team '{team_id}' not found"}}
-    return state_manager.get_team_config(team_id).model_dump(mode="json")
+    data = state_manager.get_team_config(team_id).model_dump(mode="json")
+    data["state"] = state_manager.team_factory.get_state(team_id)
+    return data
 
 
 @router.delete("/{team_id}")
 async def delete_team(team_id: str):
     _resolve_team(team_id)
-    if not state_manager.delete_team(team_id):
+    if not await state_manager.delete_team(team_id):
         return {"error": {"code": "TEAM_NOT_FOUND", "message": f"Team '{team_id}' not found"}}
     return {"success": True}
+
+
+@router.get("/{team_id}/messages")
+async def get_team_messages(team_id: str):
+    _resolve_team(team_id)
+    team = state_manager.team_factory.teams.get(team_id)
+    if not team:
+        return []
+    return [msg.to_dict() for msg in team.get_team_messages()]
 
 
 @router.post("/{team_id}/start")
@@ -94,7 +119,8 @@ async def start_team(team_id: str):
         aid = agent_id_by_name.get(agent_name, agent_name)
         await state_manager.start_agent(aid)
     await team.start()
-    return {"status": "started"}
+    state_manager.team_factory.start(team_id)
+    return {"state": state_manager.team_factory.get_state(team_id)}
 
 
 @router.post("/{team_id}/stop")
@@ -105,6 +131,7 @@ async def stop_team(team_id: str):
         return {"error": {"code": "TEAM_NOT_FOUND", "message": f"Team '{team_id}' not found"}}
 
     await team.stop()
+    state_manager.team_factory.stop(team_id)
     agent_id_by_name = {a.name: aid for aid, a in state_manager.agent_factory.agents.items()}
     for agent_name in team.agents:
         aid = agent_id_by_name.get(agent_name, agent_name)
@@ -112,4 +139,4 @@ async def stop_team(team_id: str):
             await state_manager.stop_agent(aid)
         except Exception:
             logger.warning("Failed to stop agent '%s' during team stop", agent_name)
-    return {"status": "stopped"}
+    return {"state": state_manager.team_factory.get_state(team_id)}

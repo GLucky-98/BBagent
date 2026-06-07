@@ -5,7 +5,6 @@ MCP tools are registered/removed by MCPFactory notifications.
 """
 
 import json
-import logging
 import asyncio
 from pathlib import Path
 from typing import Optional
@@ -15,13 +14,14 @@ from BBagent.core.tool import Tool
 
 from backend.schemas import ToolConfig
 from backend.factories import _builtin_tool_id, _mcp_tool_id, _safe_filename
+from backend.logging import get_backend_logger
 
 
 class ToolFactory:
     def __init__(self, data_dir: Path):
         self._data_dir = data_dir
         self._configs: dict[str, ToolConfig] = {}   # tool_id -> ToolConfig
-        self._logger = logging.getLogger("state.tool_factory")
+        self._logger = get_backend_logger("state.tool_factory")
 
     def _tools_dir(self) -> Path:
         return self._data_dir / "tools"

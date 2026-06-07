@@ -1,19 +1,19 @@
 """PromptFactory — manages PromptConfig CRUD. Simplest factory."""
 
 import json
-import logging
 from pathlib import Path
 from typing import Optional
 
 from backend.schemas import PromptConfig
 from backend.factories import _next_id, _safe_filename
+from backend.logging import get_backend_logger
 
 
 class PromptFactory:
     def __init__(self, data_dir: Path):
         self._data_dir = data_dir
         self._configs: dict[str, PromptConfig] = {}
-        self._logger = logging.getLogger("state.prompt_factory")
+        self._logger = get_backend_logger("state.prompt_factory")
 
     def _prompts_dir(self) -> Path:
         return self._data_dir / "prompts"

@@ -6,6 +6,7 @@ import { useAppStore } from "../../store";
 import { TeamDropdown } from "./TeamDropdown";
 import { ConfirmDialog } from "../ConfirmDialog";
 import type { Agent } from "../../types";
+import { isTeam as isTeamType } from "../../types";
 
 interface AgentTabProps {
   agent: Agent;
@@ -21,40 +22,51 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
   const activeAgentId = useAppStore((s) => s.activeAgentId);
   const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
   const removeAgent = useAppStore((s) => s.removeAgent);
+  const removeTeam = useAppStore((s) => s.removeTeam);
   const agentState = useAppStore((s) => s.agentStates[agent.id] || agent.state || "ready");
   const startAgent = useAppStore((s) => s.startAgent);
   const stopAgent = useAppStore((s) => s.stopAgent);
-  const isTeam = agent.type === "team";
+  const startTeam = useAppStore((s) => s.startTeam);
+  const stopTeam = useAppStore((s) => s.stopTeam);
+  const isTeam = isTeamType(agent);
   const isRunning = agentState === "running" || agentState === "waiting";
-  const isError = agentState === "error";
+
+  const teamActive = agent.id === activeAgentId
+    || (isTeam && activeTeamMemberName
+      && agent.members.some((m) => m.name === activeTeamMemberName));
 
   const displayName = useMemo(() => {
     if (!isTeam) return agent.name;
-    if (agent.id !== activeAgentId || !activeTeamMemberName) return agent.name;
-    const member = agent.members?.find((m) => m.name === activeTeamMemberName);
-    return member ? `${agent.name} \u203A ${member.name}` : agent.name;
-  }, [agent, isTeam, activeAgentId, activeTeamMemberName]);
+    if (teamActive && activeTeamMemberName) {
+      return `${agent.name} \u203A ${activeTeamMemberName}`;
+    }
+    return agent.name;
+  }, [agent, isTeam, teamActive, activeTeamMemberName]);
 
   const handleDelete = (deleteFiles: boolean) => {
     setDeleteDialogOpen(false);
-    removeAgent(agent.id, deleteFiles);
+    if (isTeam) {
+      removeTeam(agent.id);
+    } else {
+      removeAgent(agent.id, deleteFiles);
+    }
   };
 
   const handleToggleState = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isRunning) {
-      await stopAgent(agent.id);
+      await (isTeam ? stopTeam(agent.id) : stopAgent(agent.id));
     } else {
-      await startAgent(agent.id);
+      await (isTeam ? startTeam(agent.id) : startAgent(agent.id));
     }
   };
 
   const stateDotClass = cn(
     "w-2 h-2 rounded-full shrink-0",
-    isRunning && !isError && "bg-green-500",
-    isRunning && !isError && agentState === "running" && "animate-pulse",
-    !isRunning && !isError && "bg-gray-400",
-    isError && "bg-red-500"
+    agentState === "waiting" && "bg-green-500",
+    agentState === "running" && "animate-pulse-green-yellow",
+    agentState === "error" && "bg-red-500",
+    agentState === "ready" && "bg-gray-400"
   );
 
   return (
@@ -84,7 +96,10 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
           <div className={stateDotClass} />
           {isTeam ? (
             <DropdownMenu.Trigger asChild>
-              <span className="text-sm font-medium truncate flex-1">
+              <span
+                className="text-sm font-medium truncate flex-1"
+                onClick={(e) => { onClick(); setDropdownOpen(true); }}
+              >
                 {displayName}
               </span>
             </DropdownMenu.Trigger>

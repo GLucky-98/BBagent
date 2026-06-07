@@ -1,6 +1,4 @@
-import asyncio
 import re
-from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -12,9 +10,6 @@ MENTION_RE = re.compile(r"^@([a-zA-Z0-9_]+)")
 
 
 def _resolve_team_ws(team_id: str) -> str | None:
-    """Resolve a WS path param (team_id) to the team_id. Returns
-    None if not found.
-    """
     if team_id in state_manager.team_factory.teams:
         return team_id
     return None
@@ -30,47 +25,20 @@ async def team_chat_ws(websocket: WebSocket, team_ref: str):
         return
 
     team = state_manager.team_factory.teams[team_id]
-    subscriber_id = f"team:{team_id}:{uuid4().hex[:8]}"
-    member_queues: dict[str, asyncio.Queue] = {}
 
-    for member_name, member_agent in team.agents.items():
-        # Find this member's agent_id by identity match
-        agent_id = next(
-            (i for i, a in state_manager.agent_factory.agents.items() if a is member_agent),
-            None,
-        )
-        if agent_id is None:
-            continue
-        dispatcher = state_manager.get_agent_dispatcher(agent_id)
-        if dispatcher:
-            q = dispatcher.subscribe(f"{subscriber_id}:{member_name}")
-            member_queues[member_name] = q
-
-    async def forwarder():
-        merge_tasks = []
+    # 注册 team_message 回调，将 TeamMessage 实时推送给前端
+    async def on_team_message(msg_dict: dict):
         try:
-            for member_name, q in member_queues.items():
-                merge_tasks.append(_forward_member(websocket, member_name, q))
-            if merge_tasks:
-                await asyncio.gather(*merge_tasks, return_exceptions=True)
-        except asyncio.CancelledError:
+            # TeamMessage.to_dict() 中的 "type" 改名为 "msg_type" 避免和外层冲突
+            inner_type = msg_dict.pop("type", None)
+            payload = {"type": "team_message", **msg_dict}
+            if inner_type is not None:
+                payload["msg_type"] = inner_type
+            await websocket.send_json(payload)
+        except Exception:
             pass
 
-    async def _forward_member(ws: WebSocket, member_name: str, q: asyncio.Queue):
-        try:
-            while True:
-                chunk = await q.get()
-                if chunk is None:
-                    break
-                chunk["source_agent"] = member_name
-                try:
-                    await ws.send_json(chunk)
-                except Exception:
-                    break
-        except asyncio.CancelledError:
-            pass
-
-    forwarder_task = asyncio.create_task(forwarder())
+    team._on_team_message = on_team_message
 
     try:
         async for msg in websocket.iter_json():
@@ -91,9 +59,10 @@ async def team_chat_ws(websocket: WebSocket, team_ref: str):
                 for member_name in mentions:
                     member_agent = team.agents.get(member_name)
                     if member_agent:
-                        member_agent.input.push(
+                        await team.push_to_agent(
+                            member_name,
                             stripped_content.strip(),
-                            source_id=f"team:{team_id}:user",
+                            source="user",
                         )
             else:
                 await websocket.send_json({
@@ -103,21 +72,7 @@ async def team_chat_ws(websocket: WebSocket, team_ref: str):
     except WebSocketDisconnect:
         pass
     finally:
-        forwarder_task.cancel()
-        try:
-            await forwarder_task
-        except asyncio.CancelledError:
-            pass
-        for member_name, member_agent in team.agents.items():
-            agent_id = next(
-                (i for i, a in state_manager.agent_factory.agents.items() if a is member_agent),
-                None,
-            )
-            if agent_id is None:
-                continue
-            dispatcher = state_manager.get_agent_dispatcher(agent_id)
-            if dispatcher:
-                dispatcher.unsubscribe(f"{subscriber_id}:{member_name}")
+        team._on_team_message = None
 
 
 def _parse_mentions(text: str) -> list[str]:

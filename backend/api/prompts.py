@@ -4,8 +4,12 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.logging import get_backend_logger
 from backend.state import state_manager
 from backend.schemas import PromptConfig
+
+
+logger = get_backend_logger("api.prompts")
 
 
 class ImportRequest(BaseModel):
@@ -49,7 +53,12 @@ async def import_prompts(req: ImportRequest):
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=400, detail="Not a valid directory")
 
-    imported = []
+    logger.info(f"Importing prompts from: {target}")
+
+    imported: list[str] = []
+    skipped: list[str] = []
+    errors: list[dict] = []
+
     for item in sorted(target.iterdir()):
         if not item.is_file():
             continue
@@ -63,10 +72,23 @@ async def import_prompts(req: ImportRequest):
                 content=content,
             )
             if state_manager.get_prompt(cfg.id):
+                skipped.append(item.stem)
+                logger.info(f"  [skipped] {item.stem} (already exists)")
                 continue
             state_manager.add_prompt(cfg)
             imported.append(cfg.name)
-        except Exception:
-            continue
+            logger.info(f"  [imported] {cfg.name}")
+        except Exception as e:
+            errors.append({"file": item.name, "error": str(e)})
+            logger.warning(f"  [error] {item.name}: {e}")
 
-    return {"imported": len(imported)}
+    result = {
+        "imported": len(imported),
+        "skipped": len(skipped),
+        "errors": len(errors),
+        "items": imported,
+        "skipped_items": skipped,
+        "error_items": errors,
+    }
+    logger.info(f"Prompt import complete: {result['imported']} imported, {result['skipped']} skipped, {result['errors']} errors")
+    return result

@@ -1,12 +1,12 @@
 import asyncio
-import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from backend.logging import get_backend_logger
 from backend.state import state_manager
 
-logger = logging.getLogger("chat_ws")
+logger = get_backend_logger("api.chat")
 
 router = APIRouter()
 
@@ -36,8 +36,14 @@ async def chat_ws(websocket: WebSocket):
 
     holder = _QueueHolder()
     current_agent_id: str | None = None
-    subscriber_id = f"global:{uuid4().hex[:8]}"
+    subscriber_id = f"ws:{uuid4().hex[:8]}"
     switch_lock = asyncio.Lock()
+
+    # Subscribe to global dispatcher for cross-agent state updates.
+    # This subscription persists for the lifetime of the WS connection
+    # so we always receive agent_state events for every agent.
+    global_sub_id = f"global:{uuid4().hex[:8]}"
+    global_q = state_manager.global_dispatcher.subscribe(global_sub_id)
 
     async def subscribe_to(agent_id: str) -> bool:
         """
@@ -108,6 +114,21 @@ async def chat_ws(websocket: WebSocket):
                 logger.error(f"forwarder send_json failed: {e}, chunk type={chunk.get('type')}")
                 break
 
+    async def global_forwarder():
+        """Forward global dispatcher events (agent_state) to WS client."""
+        while True:
+            try:
+                chunk = await global_q.get()
+            except Exception:
+                break
+            if chunk is _STOP:
+                break
+            try:
+                await websocket.send_json(chunk)
+            except Exception as e:
+                logger.error(f"global_forwarder send_json failed: {e}")
+                break
+
     async def receiver():
         """Read WS messages, dispatch to agent."""
         try:
@@ -141,20 +162,30 @@ async def chat_ws(websocket: WebSocket):
             pass
 
     forwarder_task = asyncio.create_task(forwarder())
+    global_forwarder_task = asyncio.create_task(global_forwarder())
 
     try:
         await receiver()
     finally:
-        # Push stop sentinel to unblock forwarder, then await it
+        # Push stop sentinel to unblock forwarders, then await them
         if holder.queue is not None:
             holder.queue.put_nowait(_STOP)
+        global_q.put_nowait(_STOP)
         forwarder_task.cancel()
+        global_forwarder_task.cancel()
         try:
             await forwarder_task
         except asyncio.CancelledError:
             pass
+        try:
+            await global_forwarder_task
+        except asyncio.CancelledError:
+            pass
 
+        # Unsubscribe from per-agent dispatcher
         if current_agent_id:
             disp = state_manager.get_agent_dispatcher(current_agent_id)
             if disp:
                 disp.unsubscribe(subscriber_id)
+        # Unsubscribe from global dispatcher
+        state_manager.global_dispatcher.unsubscribe(global_sub_id)

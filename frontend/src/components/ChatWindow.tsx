@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, Component } from "react";
 import { flushSync } from "react-dom";
-import { Send, Bot, User, Square, ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { Send, Bot, User, Square, ChevronDown, ChevronRight, Plus, Timer } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Highlight, themes } from "prism-react-renderer";
@@ -8,6 +8,7 @@ import { useAppStore, useSelectedAgent, useAgentModel } from "../store";
 import { cn } from "../lib/utils";
 import { createChatWs } from "../lib/api";
 import type { Message, SessionInfo } from "../types";
+import { TimerPanel } from "./TimerPanel";
 
 // ── Markdown content renderer for text messages ──
 function MarkdownContent({ content }: { content: string }) {
@@ -182,10 +183,12 @@ function sectionColor(msg: Message): string {
   }
 }
 
-function shouldDefaultExpand(msg: Message, isRunning: boolean): boolean {
-  if (isRunning) return true;
+function shouldDefaultExpand(msg: Message, isStreamingGroup: boolean): boolean {
   // Text and standalone assistant messages are always visible.
   if (!msg.chunkType || msg.chunkType === "text") return true;
+  // Non-text blocks (thinking, tool_use, tool_result) auto-expand only if
+  // this group is currently being streamed into.
+  if (isStreamingGroup) return true;
   return false;
 }
 
@@ -259,12 +262,15 @@ function GroupSection({
 
 // ── Composite bubble for a group of adjacent non-user messages ──
 function MessageGroup({
-  messages, isRunning, collapsedSections, onToggleSection,
+  messages, isRunning, streamingMsgId, collapsedSections, onToggleSection,
 }: {
-  messages: Message[]; isRunning: boolean;
+  messages: Message[]; isRunning: boolean; streamingMsgId: string | null;
   collapsedSections: Set<string>; onToggleSection: (id: string) => void;
 }) {
   const timestamp = messages[messages.length - 1]?.timestamp ?? messages[0]?.timestamp;
+  // Only consider this group "currently streaming" when the agent is running
+  // AND one of its messages is the active streaming target.
+  const isStreamingGroup = isRunning && messages.some((m) => m.id === streamingMsgId);
 
   return (
     <div className="flex gap-3 mb-4">
@@ -273,7 +279,7 @@ function MessageGroup({
       </div>
       <div className="max-w-[70%] min-w-0 rounded-2xl bg-(--color-secondary) rounded-tl-sm overflow-hidden">
         {messages.map((msg, i) => {
-          const defaultExpanded = shouldDefaultExpand(msg, isRunning);
+          const defaultExpanded = shouldDefaultExpand(msg, isStreamingGroup);
           const userToggled = collapsedSections.has(msg.id);
           const isExpanded = userToggled ? !defaultExpanded : defaultExpanded;
           return (
@@ -300,6 +306,7 @@ export function ChatWindow() {
   const selectedAgent = useSelectedAgent();
   const agentModel = useAgentModel();
   const addMessage = useAppStore((s) => s.addMessage);
+  const patchMessage = useAppStore((s) => s.patchMessage);
   const agentState = useAppStore((s) => s.agentStates[selectedAgent?.id || ""] || selectedAgent?.state || "ready");
   const isRunning = agentState === "running";
   const setAgentState = useAppStore((s) => s.setAgentState);
@@ -314,12 +321,19 @@ export function ChatWindow() {
   const wsRef = useRef<WebSocket | null>(null);
   const subscribedAgentRef = useRef<string | null>(null);
   const streamBufferRef = useRef("");
+  const currentAssistantMsgIdRef = useRef<string | null>(null);
+  const thinkingBufferRef = useRef("");
+  const currentThinkingMsgIdRef = useRef<string | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelayRef = useRef(1000);
   const MAX_RECONNECT_DELAY = 30000;
 
   const [sessionDropdownOpen, setSessionDropdownOpen] = useState(false);
   const sessionDropdownRef = useRef<HTMLDivElement>(null);
+
+  const [timerPanelOpen, setTimerPanelOpen] = useState(false);
+  const agentTimers = useAppStore((s) => s.agentTimers[selectedAgent?.id || ""]) || [];
+  const loadTimers = useAppStore((s) => s.loadTimers);
 
   // Track which sections the user has manually collapsed.
   // When a section is in this set, its default expand/collapse state is flipped.
@@ -370,41 +384,55 @@ export function ChatWindow() {
         try {
           const chunk = JSON.parse(event.data);
           const agentId = subscribedAgentRef.current;
+
+          // Global dispatcher events (agent_state with agent_id) are
+          // always processed — they carry their own target agent id.
+          if (chunk.type === "agent_state") {
+            setAgentState(chunk.agent_id || agentId, chunk.state);
+            return;
+          }
+
           if (!agentId) return;
 
           if (chunk.type === "text" && chunk.content) {
             streamBufferRef.current += chunk.content;
             const state = useAppStore.getState();
             const currentMsgs = state.agents.find((a) => a.id === agentId)?.messages || [];
-            const lastMsg = currentMsgs[currentMsgs.length - 1];
-            if (lastMsg && lastMsg.role === "assistant" && lastMsg.chunkType !== "tool_use") {
-              const updatedMsgs = [...currentMsgs];
-              updatedMsgs[updatedMsgs.length - 1] = {
-                ...updatedMsgs[updatedMsgs.length - 1],
-                content: streamBufferRef.current,
-              };
-              flushSync(() => {
-                state.updateAgent(agentId, { messages: updatedMsgs });
-              });
+            const existingMsg = currentAssistantMsgIdRef.current
+              ? currentMsgs.find((m) => m.id === currentAssistantMsgIdRef.current)
+              : null;
+            if (existingMsg) {
+              flushSync(() => patchMessage(agentId, currentAssistantMsgIdRef.current!, { content: streamBufferRef.current }));
             } else {
-              flushSync(() => {
-                state.addMessage(agentId, {
-                  id: crypto.randomUUID(),
-                  role: "assistant",
-                  content: chunk.content,
-                  timestamp: Date.now(),
-                  messageId: chunk.message_id,
-                });
-              });
+              const newId = chunk.message_id || crypto.randomUUID();
+              currentAssistantMsgIdRef.current = newId;
+              flushSync(() => addMessage(agentId, {
+                id: newId,
+                role: "assistant",
+                content: streamBufferRef.current,
+                timestamp: Date.now(),
+              }));
             }
           } else if (chunk.type === "thinking" && chunk.content) {
-            addMessage(agentId, {
-              id: crypto.randomUUID(),
-              role: "system",
-              content: chunk.content,
-              timestamp: Date.now(),
-              chunkType: "thinking",
-            });
+            thinkingBufferRef.current += chunk.content;
+            const state = useAppStore.getState();
+            const currentMsgs = state.agents.find((a) => a.id === agentId)?.messages || [];
+            const existingMsg = currentThinkingMsgIdRef.current
+              ? currentMsgs.find((m) => m.id === currentThinkingMsgIdRef.current)
+              : null;
+            if (existingMsg) {
+              flushSync(() => patchMessage(agentId, currentThinkingMsgIdRef.current!, { content: thinkingBufferRef.current }));
+            } else {
+              const newId = crypto.randomUUID();
+              currentThinkingMsgIdRef.current = newId;
+              flushSync(() => addMessage(agentId, {
+                id: newId,
+                role: "system",
+                content: thinkingBufferRef.current,
+                timestamp: Date.now(),
+                chunkType: "thinking",
+              }));
+            }
           } else if (chunk.type === "completed_tool_use") {
             addMessage(agentId, {
               id: crypto.randomUUID(),
@@ -429,12 +457,30 @@ export function ChatWindow() {
                 });
               }
             }
+          } else if (chunk.type === "input_event") {
+            // Non-direct-user input events (timer, team agent, team user)
+            const label = chunk.event_type === "timer_trigger"
+              ? `[Timer: ${chunk.source_id.replace("timer:", "")}]`
+              : chunk.source_id
+                ? `[${chunk.source_id}]`
+                : `[${chunk.event_type}]`;
+            addMessage(agentId, {
+              id: crypto.randomUUID(),
+              role: "user",
+              content: `${label} ${chunk.content}`,
+              timestamp: Date.now(),
+              chunkType: "input_event",
+            });
           } else if (chunk.type === "completed_message") {
             streamBufferRef.current = "";
+            currentAssistantMsgIdRef.current = null;
+            thinkingBufferRef.current = "";
+            currentThinkingMsgIdRef.current = null;
           } else if (chunk.type === "interrupted") {
             streamBufferRef.current = "";
-          } else if (chunk.type === "agent_state") {
-            setAgentState(agentId, chunk.state);
+            currentAssistantMsgIdRef.current = null;
+            thinkingBufferRef.current = "";
+            currentThinkingMsgIdRef.current = null;
           } else if (chunk.type === "switched") {
             setAgentState(agentId, chunk.agent_state);
           } else if (chunk.type === "error") {
@@ -491,6 +537,9 @@ export function ChatWindow() {
     // Clear stream buffer on agent switch. Agent state will be set by
     // the switched chunk (which reads agent.state directly from backend).
     streamBufferRef.current = "";
+    currentAssistantMsgIdRef.current = null;
+    thinkingBufferRef.current = "";
+    currentThinkingMsgIdRef.current = null;
     setCollapsedSections(new Set());
 
     // Load history BEFORE subscribing to WS replay.
@@ -499,6 +548,7 @@ export function ChatWindow() {
     const init = async () => {
       await loadAgentMessages(id);
       loadAgentSessions(id);
+      loadTimers(id);
 
       // Only send switch_agent if we're not already subscribed to this agent
       if (subscribedAgentRef.current !== id && wsRef.current?.readyState === WebSocket.OPEN) {
@@ -517,6 +567,9 @@ export function ChatWindow() {
   useEffect(() => {
     if (!selectedAgent) return;
     streamBufferRef.current = "";
+    currentAssistantMsgIdRef.current = null;
+    thinkingBufferRef.current = "";
+    currentThinkingMsgIdRef.current = null;
     setCollapsedSections(new Set());
     loadAgentMessages(selectedAgent.id);
   }, [selectedAgent?.currentSessionId]);
@@ -576,15 +629,6 @@ export function ChatWindow() {
 
   return (
     <>
-      <style>{`
-        @keyframes pulse-green-yellow {
-          0%, 100% { background-color: #22c55e; }
-          50% { background-color: #eab308; }
-        }
-        .animate-pulse-fast {
-          animation: pulse-green-yellow 0.6s ease-in-out infinite;
-        }
-      `}</style>
     <div className="flex-1 flex flex-col min-h-0 bg-(--color-background)">
       <header className="px-6 py-4 bg-white border-b border-(--color-border)">
         <div className="flex items-center gap-3">
@@ -598,7 +642,7 @@ export function ChatWindow() {
               <span className={cn(
                 "ml-2 inline-block w-1.5 h-1.5 rounded-full",
                 agentState === "waiting" && "bg-green-500",
-                agentState === "running" && "animate-pulse-fast",
+                agentState === "running" && "animate-pulse-green-yellow",
                 agentState === "error" && "bg-red-500",
                 agentState === "ready" && "bg-gray-400"
               )} />
@@ -672,6 +716,7 @@ export function ChatWindow() {
                 key={`group-${seg[0].id}`}
                 messages={seg}
                 isRunning={isRunning}
+                streamingMsgId={currentAssistantMsgIdRef.current || currentThinkingMsgIdRef.current}
                 collapsedSections={collapsedSections}
                 onToggleSection={toggleSection}
               />
@@ -680,8 +725,26 @@ export function ChatWindow() {
         )}
         <div ref={messagesEndRef} />
       </div>
+      {timerPanelOpen && selectedAgent && (
+        <TimerPanel agentId={selectedAgent.id} />
+      )}
       <div className="p-4 bg-white border-t border-(--color-border)">
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setTimerPanelOpen((v) => !v)}
+            className={cn(
+              "flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg border transition-colors shrink-0",
+              timerPanelOpen
+                ? "border-(--color-primary) text-(--color-primary) bg-(--color-primary)/10"
+                : "border-(--color-border) text-(--color-muted-foreground) hover:bg-(--color-secondary)"
+            )}
+            title="Timers"
+          >
+            <Timer size={14} />
+            {agentTimers.length > 0 && (
+              <span className="font-medium">{agentTimers.length}</span>
+            )}
+          </button>
           <div className="flex-1 relative">
             <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Type a message..." rows={1}
               className={cn("w-full px-4 py-3 rounded-xl border border-(--color-border)", "bg-(--color-background) resize-none", "focus:outline-none focus:ring-2 focus:ring-(--color-ring) focus:border-transparent", "placeholder:text-(--color-muted-foreground)")}

@@ -23,13 +23,14 @@ from pathlib import Path
 from typing import Optional
 
 from BBagent.core.agent import Agent, AgentConfig as CoreAgentConfig
+from BBagent.core.message import Session
 from BBagent.core.mcp import MCPClient
 from BBagent.core.tool import Tool
 from BBagent.built_in_tool import TOOL_CREATOR
 from BBagent.built_in_tool.policy import Policy
 from BBagent.built_in_hook import HOOK_CREATOR, BuiltinHookConfig
 
-from backend.schemas import AgentConfig
+from backend.schemas import AgentConfig, TimerConfig
 from backend.dispatcher import AgentOutputDispatcher
 from backend.errors import NotFoundError, ErrorCode, AppError
 from backend.logging import get_backend_logger, log_operation
@@ -92,7 +93,9 @@ class AgentFactory:
         if not agents_dir.exists():
             return
 
-        # Look for JSON config files in agent subdirectories
+        # Look for JSON config files in agent subdirectories.
+        # Agent.__post_init__ creates a name subdirectory under the UUID dir,
+        # so config may be at UUID/name/agent_config.json (one level deeper).
         dirs = []
         for d in sorted(agents_dir.iterdir()):
             if not d.is_dir():
@@ -100,6 +103,14 @@ class AgentFactory:
             config_path = d / "agent_config.json"
             if config_path.exists():
                 dirs.append((d, config_path))
+            else:
+                for sd in sorted(d.iterdir()):
+                    if not sd.is_dir():
+                        continue
+                    config_path = sd / "agent_config.json"
+                    if config_path.exists():
+                        dirs.append((sd, config_path))
+                        break
         if not dirs:
             return
 
@@ -136,6 +147,8 @@ class AgentFactory:
         skill_ids = config_dict.get("skillIds") or config_dict.get("skillNames") or []
         hook_names = config_dict.get("hookNames") or []
         hook_config = config_dict.get("hookConfig") or {}
+        timers_raw = config_dict.get("timers") or []
+        timers = [TimerConfig(**t) for t in timers_raw]
 
         # Build policy (camelCase, same as JSON)
         policy = dict(config_dict.get("toolPolicy") or {})
@@ -156,6 +169,21 @@ class AgentFactory:
         )
         agent = Agent(core_config)
         agent.policy = policy
+
+        # Restore session: prefer lastSessionId, otherwise create new
+        last_session_id = config_dict.get("lastSessionId")
+        restored = False
+        if last_session_id:
+            session_jsonl = agent.session_dir / last_session_id / f"{last_session_id}.jsonl"
+            if session_jsonl.exists():
+                try:
+                    agent.session = Session.load(last_session_id, agent.session_dir / last_session_id)
+                    restored = True
+                    logger.info("Restored last session '%s' for agent '%s'", last_session_id, name)
+                except Exception as e:
+                    logger.warning("Failed to restore session '%s' for agent '%s': %s", last_session_id, name, e)
+        if not restored:
+            agent.session = Session.create(agent.session_dir)
 
         # Build hook config (may raise — still no caches written)
         shared_hook_cfg = self._build_shared_hook_config(hook_config)
@@ -180,6 +208,7 @@ class AgentFactory:
             toolPolicy=dict(policy),
             hookNames=list(hook_names),
             hookConfig=dict(hook_config),
+            timers=timers,
         )
         logger.info("Loaded agent '%s' (id=%s)", name, agent_id)
 
@@ -256,6 +285,7 @@ class AgentFactory:
                     toolPolicy=dict(policy),
                     hookNames=list(config.hookNames),
                     hookConfig=dict(config.hookConfig or {}),
+                    timers=list(config.timers),
                 )
 
                 self._write_agent_json_full(agent_id, started=False)
@@ -324,10 +354,46 @@ class AgentFactory:
                         pass
             return True
 
+    def _diff_updates(self, agent_id: str, updates: dict) -> dict:
+        """Filter out fields whose values are identical to the stored config."""
+        cfg = self._agent_configs.get(agent_id)
+        if cfg is None:
+            return updates
+
+        scalar_fields = ("name", "modelId", "systemPrompt", "workingDir", "type")
+        list_fields = ("toolIds", "skillIds", "hookNames")
+
+        filtered = {}
+        for k, v in updates.items():
+            if k in scalar_fields:
+                if v != getattr(cfg, k, None):
+                    filtered[k] = v
+            elif k in list_fields:
+                stored = getattr(cfg, k, None) or []
+                if sorted(v) != sorted(stored):
+                    filtered[k] = v
+            elif k == "toolPolicy":
+                stored = getattr(cfg, k, None) or {}
+                if v != stored:
+                    filtered[k] = v
+            elif k == "hookConfig":
+                stored = getattr(cfg, k, None) or {}
+                if v != stored:
+                    filtered[k] = v
+            else:
+                filtered[k] = v
+        return filtered
+
     async def update(self, agent_id: str, updates: dict) -> Optional[Agent]:
         agent = self.agents.get(agent_id)
         if not agent:
             return None
+
+        # Diff: skip fields whose value hasn't changed
+        updates = self._diff_updates(agent_id, updates)
+        if not updates:
+            logger.info("Updating agent '%s': no changes detected, skipping", agent.name)
+            return agent
 
         changed_fields = list(updates.keys())
         logger.info("Updating agent '%s': fields=%s", agent.name, changed_fields)
@@ -412,19 +478,58 @@ class AgentFactory:
                 except Exception as e:
                     logger.warning(f"Agent '{agent.name}': failed to remove tools: {e}")
 
+            # Close MCP clients whose tools have all been removed
+            if removed_tids:
+                removed_mcp_servers: set[str] = set()
+                for tid in removed_tids:
+                    tpl = self._tool_factory.get(tid)
+                    if tpl and tpl.mcpServerId:
+                        removed_mcp_servers.add(tpl.mcpServerId)
+                if removed_mcp_servers:
+                    remaining_server_ids: set[str] = set()
+                    for tid in current_pool:
+                        tpl = self._tool_factory.get(tid)
+                        if tpl and tpl.mcpServerId:
+                            remaining_server_ids.add(tpl.mcpServerId)
+                    idle_servers = removed_mcp_servers - remaining_server_ids
+                    if idle_servers:
+                        mcp_bucket = self._mcp_clients.get(agent_id, {})
+                        for server_id in idle_servers:
+                            client = mcp_bucket.pop(server_id, None)
+                            if client:
+                                try:
+                                    await client.close()
+                                except Exception as e:
+                                    logger.warning(
+                                        "Failed to close MCP client for server '%s' after tool removal: %s",
+                                        server_id, e,
+                                    )
+
         # skillIds
         if "skillIds" in updates:
             new_skill_ids = list(updates["skillIds"])
             if cfg:
                 cfg.skillIds = new_skill_ids
 
+            # Determine added and removed skills
+            new_skill_map = {}
+            for sid in new_skill_ids:
+                inst = self._skill_factory.get_instance(sid)
+                if inst is not None:
+                    new_skill_map[inst.name] = inst
+
             existing_names = set(agent.skills.keys())
-            new_skills = [self._skill_factory.get_instance(sid) for sid in new_skill_ids
-                          if self._skill_factory.get_instance(sid) is not None
-                          and self._skill_factory.get_instance(sid).name not in existing_names]
-            if new_skills:
-                logger.info("Agent '%s': adding skills %s", agent.name, [s.name for s in new_skills])
-                agent.add_skills(new_skills)
+            target_names = set(new_skill_map.keys())
+
+            added_skills = [s for name, s in new_skill_map.items() if name not in existing_names]
+            removed_names = list(existing_names - target_names)
+
+            if added_skills:
+                logger.info("Agent '%s': adding skills %s", agent.name, [s.name for s in added_skills])
+                agent.add_skills(added_skills)
+            if removed_names:
+                logger.info("Agent '%s': removing skills %s", agent.name, removed_names)
+                agent.remove_skills(removed_names)
 
         # Hooks
         if "hookNames" in updates or "hookConfig" in updates:
@@ -442,6 +547,7 @@ class AgentFactory:
             for src in new_hook_names:
                 if src in HOOK_CREATOR:
                     HOOK_CREATOR[src](agent, shared_hook_cfg)
+            agent.hook.set_context(agent)
 
         # Persist config changes to disk
         self._write_agent_json_full(agent_id, started=agent_id in self._started)
@@ -482,7 +588,32 @@ class AgentFactory:
         if not dispatcher:
             dispatcher = AgentOutputDispatcher()
             self._dispatchers[agent_id] = dispatcher
-        agent.on_output(dispatcher.on_chunk)
+
+        # Wrap output callback: per-agent dispatcher + global dispatcher for agent_state.
+        # Global dispatcher allows all chat WS clients to receive state updates
+        # for every agent, regardless of which agent they are currently viewing.
+        global_disp = getattr(self, 'global_dispatcher', None)
+        team_factory = getattr(self, 'team_factory', None)
+
+        async def _wrapped_output(chunk):
+            await dispatcher.on_chunk(chunk)
+            if global_disp and chunk.get("type") == "agent_state":
+                await global_disp.on_chunk({**chunk, "agent_id": agent_id})
+                # Update team state when a member agent's state changes
+                if team_factory:
+                    for tid, team in team_factory.teams.items():
+                        if agent.name in team.agents:
+                            old_state = str(team.state).lower()
+                            team.update_state()
+                            new_state = str(team.state).lower()
+                            if new_state != old_state:
+                                await global_disp.on_chunk({
+                                    "type": "agent_state",
+                                    "agent_id": tid,
+                                    "state": new_state,
+                                })
+
+        agent.on_output(_wrapped_output)
 
         async def _run():
             try:
@@ -495,6 +626,14 @@ class AgentFactory:
         with log_operation(logger, "start_agent", agent_name=agent.name):
             task = asyncio.create_task(_run())
             self._tasks[agent_id] = task
+
+            # Register enabled timers
+            cfg = self._agent_configs.get(agent_id)
+            if cfg:
+                for timer in cfg.timers:
+                    if timer.enabled:
+                        agent.add_timer(timer.seconds, timer.name, timer.hint)
+
             self._update_json_started(agent_id, started=True)
             await asyncio.sleep(0)
 
@@ -504,6 +643,7 @@ class AgentFactory:
             raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{agent_id}' not found")
 
         with log_operation(logger, "stop_agent", agent_name=agent.name):
+            agent.clear_timers()
             await agent.stop()
 
             task = self._tasks.pop(agent_id, None)
@@ -598,6 +738,7 @@ class AgentFactory:
             raise NotFoundError(ErrorCode.SESSION_NOT_FOUND, f"Session '{session_id}' not found")
         with log_operation(logger, "switch_session", agent_name=agent.name):
             await agent.load_session(session_path)
+        self._update_last_session_id(agent_id)
 
     async def new_session(self, agent_id: str):
         agent = self.agents.get(agent_id)
@@ -605,6 +746,7 @@ class AgentFactory:
             raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{agent_id}' not found")
         with log_operation(logger, "new_session", agent_name=agent.name):
             await agent.new_session()
+        self._update_last_session_id(agent_id)
 
     def get_messages(self, agent_id: str) -> list[dict]:
         agent = self.agents.get(agent_id)
@@ -643,6 +785,135 @@ class AgentFactory:
 
     def get_dispatcher(self, agent_id: str) -> Optional[AgentOutputDispatcher]:
         return self._dispatchers.get(agent_id)
+
+    # ------------------------------------------------------------------
+    # Timer management
+    # ------------------------------------------------------------------
+
+    def list_timers(self, agent_id: str) -> list[dict]:
+        cfg = self._agent_configs.get(agent_id)
+        if not cfg:
+            return []
+        # Merge runtime running state if agent is running
+        agent = self.agents.get(agent_id)
+        running_names = set()
+        if agent and agent._running:
+            for t in agent.list_timers():
+                if t.get("running"):
+                    running_names.add(t["name"])
+        return [
+            {
+                "name": t.name,
+                "seconds": t.seconds,
+                "hint": t.hint,
+                "enabled": t.enabled,
+                "running": t.name in running_names,
+            }
+            for t in cfg.timers
+        ]
+
+    def add_timer(self, agent_id: str, name: str, seconds: float, hint: str = "", enabled: bool = True):
+        agent = self.agents.get(agent_id)
+        cfg = self._agent_configs.get(agent_id)
+        if not agent or not cfg:
+            return
+
+        # Auto-generate name if empty
+        if not name or not name.strip():
+            idx = len(cfg.timers) + 1
+            while any(t.name == f"timer_{idx}" for t in cfg.timers):
+                idx += 1
+            name = f"timer_{idx}"
+
+        # Reject duplicate name
+        if any(t.name == name for t in cfg.timers):
+            raise ValueError(f"Timer '{name}' already exists")
+
+        new_timer = TimerConfig(name=name, seconds=seconds, hint=hint, enabled=enabled)
+        cfg.timers.append(new_timer)
+
+        if agent._running and enabled:
+            agent.add_timer(seconds, name, hint)
+
+        self._write_agent_json_full(agent_id, started=agent_id in self._started)
+
+    def update_timer(self, agent_id: str, timer_name: str, seconds: float = None, hint: str = None, enabled: bool = None):
+        agent = self.agents.get(agent_id)
+        cfg = self._agent_configs.get(agent_id)
+        if not agent or not cfg:
+            return False
+
+        timer = None
+        for t in cfg.timers:
+            if t.name == timer_name:
+                timer = t
+                break
+        if timer is None:
+            return False
+
+        if seconds is not None:
+            timer.seconds = seconds
+        if hint is not None:
+            timer.hint = hint
+        if enabled is not None:
+            timer.enabled = enabled
+
+        if agent._running:
+            agent.update_timer(timer_name, seconds=timer.seconds, hint=timer.hint)
+            if timer.enabled:
+                agent.start_timer(timer_name)
+            else:
+                agent.stop_timer(timer_name)
+
+        self._write_agent_json_full(agent_id, started=agent_id in self._started)
+        return True
+
+    def start_timer(self, agent_id: str, timer_name: str) -> bool:
+        agent = self.agents.get(agent_id)
+        cfg = self._agent_configs.get(agent_id)
+        if not agent or not cfg:
+            return False
+
+        success = agent.start_timer(timer_name)
+
+        if success:
+            for t in cfg.timers:
+                if t.name == timer_name:
+                    t.enabled = True
+                    break
+            self._write_agent_json_full(agent_id, started=agent_id in self._started)
+
+        return success
+
+    def stop_timer(self, agent_id: str, timer_name: str) -> bool:
+        agent = self.agents.get(agent_id)
+        cfg = self._agent_configs.get(agent_id)
+        if not agent or not cfg:
+            return False
+
+        success = agent.stop_timer(timer_name)
+
+        if success:
+            for t in cfg.timers:
+                if t.name == timer_name:
+                    t.enabled = False
+                    break
+            self._write_agent_json_full(agent_id, started=agent_id in self._started)
+
+        return success
+
+    def cancel_timer(self, agent_id: str, timer_name: str) -> bool:
+        agent = self.agents.get(agent_id)
+        cfg = self._agent_configs.get(agent_id)
+        if not agent or not cfg:
+            return False
+
+        if agent._running:
+            agent.cancel_timer(timer_name)
+
+        cfg.timers = [t for t in cfg.timers if t.name != timer_name]
+        self._write_agent_json_full(agent_id, started=agent_id in self._started)
+        return True
 
     # ------------------------------------------------------------------
     # Internal: tool/skill helpers
@@ -804,6 +1075,7 @@ class AgentFactory:
                 "toolPolicy": dict(policy),
                 "hookNames": list(cfg.hookNames),
                 "hookConfig": dict(cfg.hookConfig or {}),
+                "timers": [t.model_dump() for t in cfg.timers],
                 "started": bool(started),
                 "lastSessionId": agent.session.id if getattr(agent, "session", None) else None,
             }
@@ -811,6 +1083,29 @@ class AgentFactory:
                 json.dump(new_data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.warning(f"Failed to write json for agent '{agent.name}': {e}")
+
+    def _update_last_session_id(self, agent_id: str):
+        """Update lastSessionId in memory config and persist to disk."""
+        agent = self.agents.get(agent_id)
+        cfg = self._agent_configs.get(agent_id)
+        if not agent or not cfg:
+            return
+        new_id = agent.session.id if getattr(agent, "session", None) else ""
+        if cfg.lastSessionId == new_id:
+            return
+        cfg.lastSessionId = new_id
+        # Persist to agent_config.json
+        config_path = agent.base_dir / "agent_config.json"
+        if not config_path.exists():
+            return
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                raw = json.loads(f.read()) or {}
+            raw["lastSessionId"] = new_id
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(raw, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Failed to update lastSessionId for '{agent.name}': {e}")
 
     def _update_json_started(self, agent_id: str, started: bool):
         agent = self.agents.get(agent_id)

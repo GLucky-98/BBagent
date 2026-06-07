@@ -1,10 +1,8 @@
 import logging
-import json
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
-from uuid import uuid4 as uuid
 
 
 class BackendFormatter(logging.Formatter):
@@ -18,37 +16,37 @@ class BackendFormatter(logging.Formatter):
     _RESET = "\033[0m"
 
     def format(self, record: logging.LogRecord) -> str:
-        entry = {
-            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-            "level": record.levelname,
-            "module": record.name,
-            "msg": record.getMessage(),
-        }
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        level = record.levelname.ljust(8)
+        module = record.name
+        msg = record.getMessage()
 
         op = getattr(record, "operation", None)
-        if op:
-            entry["op"] = op
         agent = getattr(record, "agent_name", None)
-        if agent:
-            entry["agent"] = agent
         dur = getattr(record, "duration_ms", None)
-        if dur is not None:
-            entry["dur_ms"] = dur
         status = getattr(record, "status", None)
+
+        parts = []
+        if op:
+            parts.append(f"op={op}")
+        if agent:
+            parts.append(f"agent={agent}")
+        if dur is not None:
+            parts.append(f"dur={dur}ms")
         if status:
-            entry["status"] = status
+            parts.append(f"status={status}")
+        extra = " ".join(parts)
+        if extra:
+            msg = f"{msg} [{extra}]"
+
+        color = self._LEVEL_COLORS.get(record.levelname, "")
+        reset = self._RESET
+        line = f"{color}{level}{reset} {ts} {module} {msg}"
 
         if record.exc_info and record.exc_info[1]:
-            entry["error"] = {
-                "type": type(record.exc_info[1]).__name__,
-                "msg": str(record.exc_info[1]),
-            }
+            line += f"\n{type(record.exc_info[1]).__name__}: {record.exc_info[1]}"
 
-        json_str = json.dumps(entry, ensure_ascii=False, default=str)
-        level_prefix = f"{record.levelname}:".ljust(10)
-        color = self._LEVEL_COLORS.get(record.levelname, "")
-        level_prefix = f"{color}{level_prefix}{self._RESET}"
-        return level_prefix + json_str
+        return line
 
 
 _BACKEND_HANDLER: Optional[logging.Handler] = None
@@ -80,6 +78,43 @@ def setup_backend_logging():
     root.addHandler(handler)
     root.setLevel(logging.DEBUG)
     root.propagate = False
+
+
+def get_uvicorn_log_config() -> dict:
+    """Return a log config dict for uvicorn that uses BackendFormatter."""
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "backend": {
+                "()": BackendFormatter,
+            },
+        },
+        "handlers": {
+            "backend_stream": {
+                "class": "logging.StreamHandler",
+                "formatter": "backend",
+                "stream": "ext://sys.stderr",
+            },
+        },
+        "loggers": {
+            "uvicorn": {
+                "handlers": ["backend_stream"],
+                "level": "INFO",
+                "propagate": False,
+            },
+            "uvicorn.error": {
+                "handlers": ["backend_stream"],
+                "level": "INFO",
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["backend_stream"],
+                "level": "INFO",
+                "propagate": False,
+            },
+        },
+    }
 
 
 @contextmanager

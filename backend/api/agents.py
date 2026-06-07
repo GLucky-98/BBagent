@@ -4,7 +4,6 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend.state import state_manager
 from backend.schemas import AgentConfig
-from backend.errors import ConflictError, ErrorCode
 from backend.logging import get_backend_logger
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -60,12 +59,6 @@ async def get_agent(agent_id: str):
 
 @router.post("")
 async def create_agent(config: AgentConfig):
-    for existing in state_manager.agent_factory.agents.values():
-        if existing.name == config.name:
-            raise ConflictError(
-                ErrorCode.AGENT_ALREADY_EXISTS,
-                f"Agent '{config.name}' already exists",
-            )
     agent = await state_manager.create_agent(config)
     agent_id = next(
         (i for i, a in state_manager.agent_factory.agents.items() if a is agent),
@@ -156,3 +149,68 @@ async def new_session(agent_id: str):
 async def get_messages(agent_id: str):
     _resolve_agent(agent_id)
     return state_manager.get_agent_messages(agent_id)
+
+
+# ------------------------------------------------------------------
+# Timer CRUD
+# ------------------------------------------------------------------
+
+@router.get("/{agent_id}/timers")
+async def list_timers(agent_id: str):
+    _resolve_agent(agent_id)
+    return state_manager.agent_factory.list_timers(agent_id)
+
+
+@router.post("/{agent_id}/timers")
+async def add_timer(agent_id: str, body: dict):
+    _resolve_agent(agent_id)
+
+    name = body.get("name", "")
+    seconds = body.get("seconds")
+    hint = body.get("hint", "")
+    enabled = body.get("enabled", True)
+
+    if seconds is None or seconds <= 0:
+        raise HTTPException(status_code=400, detail="seconds must be a positive number")
+
+    try:
+        state_manager.agent_factory.add_timer(agent_id, name=name, seconds=seconds, hint=hint, enabled=enabled)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return state_manager.agent_factory.list_timers(agent_id)
+
+
+@router.put("/{agent_id}/timers/{timer_name}")
+async def update_timer(agent_id: str, timer_name: str, body: dict):
+    _resolve_agent(agent_id)
+
+    success = state_manager.agent_factory.update_timer(
+        agent_id, timer_name,
+        seconds=body.get("seconds"),
+        hint=body.get("hint"),
+        enabled=body.get("enabled"),
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Timer '{timer_name}' not found")
+    return state_manager.agent_factory.list_timers(agent_id)
+
+
+@router.post("/{agent_id}/timers/{timer_name}/start")
+async def start_timer(agent_id: str, timer_name: str):
+    _resolve_agent(agent_id)
+    success = state_manager.agent_factory.start_timer(agent_id, timer_name)
+    return {"success": success}
+
+
+@router.post("/{agent_id}/timers/{timer_name}/stop")
+async def stop_timer(agent_id: str, timer_name: str):
+    _resolve_agent(agent_id)
+    success = state_manager.agent_factory.stop_timer(agent_id, timer_name)
+    return {"success": success}
+
+
+@router.delete("/{agent_id}/timers/{timer_name}")
+async def delete_timer(agent_id: str, timer_name: str):
+    _resolve_agent(agent_id)
+    state_manager.agent_factory.cancel_timer(agent_id, timer_name)
+    return state_manager.agent_factory.list_timers(agent_id)

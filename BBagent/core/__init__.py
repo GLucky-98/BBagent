@@ -24,7 +24,7 @@ from .message import (
 )
 from .model import Model, Model_Input, AnthropicModel, OpenAIModel
 from .skill import Skill, SkillMetadata, scan_skills
-from .team import AgentTeam, TeamConfig
+from .team import AgentTeam, TeamConfig, TeamMessage
 from .tool import (
     Tool,
     inline_refs,
@@ -73,6 +73,7 @@ __all__ = [
     "scan_skills",
     "AgentTeam",
     "TeamConfig",
+    "TeamMessage",
     "Tool",
     "inline_refs",
     "tool",

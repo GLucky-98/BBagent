@@ -17,6 +17,7 @@ from typing import Optional
 
 from backend.schemas import UIState
 from backend.logging import get_backend_logger
+from backend.dispatcher import AgentOutputDispatcher
 
 from backend.factories.model_factory import ModelFactory
 from backend.factories.prompt_factory import PromptFactory
@@ -62,6 +63,12 @@ class State:
             self.skill_factory, self.mcp_factory,
         )
         self.team_factory = TeamFactory(DATA_DIR, self.agent_factory)
+
+        # Global dispatcher for cross-agent state events.
+        # Chat WS subscribes once and receives agent_state for all agents.
+        self.global_dispatcher = AgentOutputDispatcher()
+        self.agent_factory.global_dispatcher = self.global_dispatcher
+        self.agent_factory.team_factory = self.team_factory
 
         # UI state (not factory-managed)
         self.ui_state: UIState = UIState()
@@ -241,8 +248,14 @@ class State:
     def list_skills(self):
         return self.skill_factory.list_all()
 
-    def save_imported_skills_dirs(self, dir_path: Path):
-        self.skill_factory.add_dir(dir_path)
+    def import_skills_from_dir(self, dir_path: Path) -> tuple[list, list[str]]:
+        return self.skill_factory.import_dir(dir_path)
+
+    def delete_skill(self, skill_id: str) -> bool:
+        return self.skill_factory.delete(skill_id)
+
+    def refresh_skill(self, skill_id: str):
+        return self.skill_factory.refresh(skill_id)
 
     # ------------------------------------------------------------------
     # Agent delegation
@@ -291,14 +304,14 @@ class State:
     def get_team_config(self, team_id: str):
         return self.team_factory.get_config(team_id)
 
-    async def create_team(self, config):
-        return await self.team_factory.create(config)
+    async def create_team(self, config, member_configs=None):
+        return await self.team_factory.create(config, member_configs=member_configs)
 
     def update_team(self, team_id: str, updates: dict):
         return self.team_factory.update(team_id, updates)
 
-    def delete_team(self, team_id: str) -> bool:
-        return self.team_factory.delete(team_id)
+    async def delete_team(self, team_id: str) -> bool:
+        return await self.team_factory.delete(team_id)
 
     # ------------------------------------------------------------------
     # Tool listing (for API)

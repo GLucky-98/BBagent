@@ -1,9 +1,41 @@
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
+from typing import Awaitable, Callable, List
 
-from .agent import Agent
+from .agent import Agent, AgentState
 from .input import EventType
+from .message import ContentBlock, Message
 from .tool import Tool
+
+
+@dataclass
+class TeamMessage:
+    from_agent: str
+    to_agent: str
+    content: str | List[ContentBlock]
+    type: str  # "direct" | "broadcast" | "user"
+    timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
+
+    def to_dict(self) -> dict:
+        return {
+            "from_agent": self.from_agent,
+            "to_agent": self.to_agent,
+            "content": Message._serialize_content(self.content),
+            "type": self.type,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'TeamMessage':
+        return cls(
+            from_agent=data['from_agent'],
+            to_agent=data['to_agent'],
+            content=Message._deserialize_content(data['content']),
+            type=data['type'],
+            timestamp=data.get('timestamp', 0),
+        )
 
 
 @dataclass
@@ -21,6 +53,9 @@ class AgentTeam:
         self.agents: dict[str, Agent] = {}
         self._contacts: dict[str, set[str]] = {}
         self.base_dir = Path(base_dir) if base_dir else None
+        self._team_messages: List[TeamMessage] = []
+        self._on_team_message: Callable[[dict], Awaitable[None]] | None = None
+        self.state = AgentState.Ready
 
     @classmethod
     def create(cls, config: TeamConfig) -> 'AgentTeam':
@@ -84,15 +119,15 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         if not visible:
             return
 
-        def send_message(to_agent: str, message: str) -> str:
+        async def send_message(to_agent: str, message: str) -> str:
             visible = team._get_visible_contacts(agent_name)
             if to_agent not in visible:
                 return f"Error: '{to_agent}' is not in your contacts"
-            team._send(agent_name, to_agent, message)
+            await team._send(agent_name, to_agent, message)
             return f"Message sent to {to_agent}"
 
-        def broadcast(message: str) -> str:
-            count = team._broadcast(agent_name, message)
+        async def broadcast(message: str) -> str:
+            count = await team._broadcast(agent_name, message)
             return f"Broadcast sent to {count} agents"
 
         send_msg_tool = Tool(
@@ -135,7 +170,23 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
 
         agent.add_tools([send_msg_tool, broadcast_tool])
 
-    def _send(self, from_agent: str, to_agent: str, content: str):
+    async def push_to_agent(self, agent_name: str, content: str | List[ContentBlock], source: str = "user"):
+        """从外部向指定 agent 推送消息，同时记录到 team messages"""
+        target = self.agents.get(agent_name)
+        if target is None:
+            raise ValueError(f"Agent '{agent_name}' not found in team")
+        target.input.push(
+            content,
+            source_id=f"team:{source}",
+            event_type=EventType.AGENT_MESSAGE,
+        )
+        await self._record_team_message(TeamMessage(
+            from_agent=source, to_agent=agent_name,
+            content=content,
+            type="user",
+        ))
+
+    async def _send(self, from_agent: str, to_agent: str, content: str | List[ContentBlock]):
         target = self.agents.get(to_agent)
         if target is None:
             raise ValueError(f"Agent '{to_agent}' not found in team")
@@ -144,8 +195,13 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             source_id=f"team:{from_agent}",
             event_type=EventType.AGENT_MESSAGE,
         )
+        await self._record_team_message(TeamMessage(
+            from_agent=from_agent, to_agent=to_agent,
+            content=content,
+            type="direct",
+        ))
 
-    def _broadcast(self, from_agent: str, content: str) -> int:
+    async def _broadcast(self, from_agent: str, content: str | List[ContentBlock]) -> int:
         count = 0
         visible = self._get_visible_contacts(from_agent)
         for name in visible:
@@ -157,14 +213,69 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
                     event_type=EventType.AGENT_MESSAGE,
                 )
                 count += 1
+        await self._record_team_message(TeamMessage(
+            from_agent=from_agent, to_agent=",".join(sorted(visible)),
+            content=content,
+            type="broadcast",
+        ))
         return count
+
+    async def _record_team_message(self, msg: TeamMessage):
+        self._team_messages.append(msg)
+        if self.base_dir:
+            path = self.base_dir / 'team_messages.jsonl'
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
+        if self._on_team_message:
+            try:
+                await self._on_team_message(msg.to_dict())
+            except Exception:
+                pass
 
     async def start(self):
         for agent in self.agents.values():
             await agent.start()
+        self.update_state()
 
     async def stop(self):
         for agent in self.agents.values():
             await agent.stop()
+        self.update_state()
+
+    def update_state(self):
+        """根据成员 agent 的真实 state 聚合计算 team state"""
+        if not self.agents:
+            self.state = AgentState.Ready
+            return
+        member_states = [a.state for a in self.agents.values()]
+        if any(s == AgentState.Error for s in member_states):
+            self.state = AgentState.Error
+        elif any(s == AgentState.Running for s in member_states):
+            self.state = AgentState.Running
+        elif any(s == AgentState.Waiting for s in member_states):
+            self.state = AgentState.Waiting
+        else:
+            self.state = AgentState.Ready
+
+    def get_team_messages(self) -> List[TeamMessage]:
+        return list(self._team_messages)
+
+    def load_team_messages(self, path: str | Path = None):
+        target = Path(path) if path else (self.base_dir / 'team_messages.jsonl' if self.base_dir else None)
+        if not target or not target.exists():
+            return
+        self._team_messages.clear()
+        with open(target, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    self._team_messages.append(TeamMessage.from_dict(json.loads(line)))
+
+    def clear_team_messages(self):
+        self._team_messages.clear()
+        if self.base_dir:
+            path = self.base_dir / 'team_messages.jsonl'
+            if path.exists():
+                path.write_text('', encoding='utf-8')
 
 

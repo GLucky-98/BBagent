@@ -184,12 +184,15 @@ export function BasedirTree() {
             Unable to load file tree
           </div>
         ) : (
-          <TreeNode
-            node={fileTree}
-            depth={0}
-            expandedPaths={expandedPaths}
-            onToggleExpand={toggleExpand}
-          />
+          fileTree.children?.map((child) => (
+            <TreeNode
+              key={child.path}
+              node={child}
+              depth={0}
+              expandedPaths={expandedPaths}
+              onToggleExpand={toggleExpand}
+            />
+          ))
         )}
       </div>
     </div>

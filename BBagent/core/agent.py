@@ -71,7 +71,7 @@ class Agent:
         self.session_dir = self.base_dir / 'session'
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
-        self.session = agent_config.session or Session.create(self.session_dir)
+        self.session = agent_config.session
 
         self.tools: dict[str, Tool] = {}
         self._mcp_clients: dict = {}
@@ -103,7 +103,40 @@ class Agent:
 
         self.state = AgentState.Ready
 
+    def _ensure_session(self):
+        if self.session is None:
+            self.session = Session.create(self.session_dir)
 
+    def set_session(self, session: Session):
+        self.session = session
+
+    def add_timer(self, seconds: float, name: str = "", hint: str = "") -> 'Agent':
+        self.input.every(seconds, name, hint)
+        return self
+
+    def list_timers(self) -> list[dict]:
+        return self.input.list_timers()
+
+    def update_timer(self, name: str, seconds: float = None, hint: str = None) -> bool:
+        for s, n, h in self.input._timer_configs:
+            if n == name:
+                new_seconds = seconds if seconds is not None else s
+                new_hint = hint if hint is not None else h
+                self.input.every(new_seconds, name, new_hint)
+                return True
+        return False
+
+    def start_timer(self, name: str) -> bool:
+        return self.input.start_timer(name)
+
+    def stop_timer(self, name: str) -> bool:
+        return self.input.stop_timer(name)
+
+    def cancel_timer(self, name: str) -> bool:
+        return self.input.cancel(name)
+
+    def clear_timers(self):
+        self.input.clear_timers()
 
     def change_name(self, name: str):
         self.name = name
@@ -140,7 +173,8 @@ class Agent:
 
     async def load_session(self, session_file_path: Path | str):
         await self.hook.trigger(HookType.NEW_SESSION)
-        self.session.save()
+        if self.session is not None:
+            self.session.save()
 
         src = Path(session_file_path)
         if not src.exists():
@@ -176,7 +210,8 @@ class Agent:
 
     async def new_session(self):
         await self.hook.trigger(HookType.NEW_SESSION)
-        self.session.save()
+        if self.session is not None:
+            self.session.save()
         self.session = Session.create(self.session_dir)
 
 
@@ -297,9 +332,19 @@ Your available skills are:
         self.skills.update(new_skills)
         self.skill_prompt = self._load_skill_prompt()
 
-        
-    
+    def remove_skills(self, skill_names: List[str]):
+        """移除指定名称的 skills，并刷新 skill_prompt。"""
+        if not skill_names:
+            return
+        for name in skill_names:
+            self.skills.pop(name, None)
+        if not self.skills:
+            self.skill_prompt = ''
+        else:
+            self.skill_prompt = self._load_skill_prompt()
+
     def construct_model_input(self) -> Model_Input:
+        self._ensure_session()
         tools = list(self.tools.values())
         prompt = self.system_prompt + self.team_prompt + self.teammate_prompt + self.skill_prompt
         messages = self.session.get_visible_context()
@@ -351,6 +396,7 @@ Your available skills are:
                             context={"stop_reason": stop_reason}
                         )
                         await self.hook.trigger(HookType.ON_MESSAGE, content)
+                        self._ensure_session()
                         self.session.add_message(content)
                         yield chunk
                         break
@@ -367,6 +413,7 @@ Your available skills are:
                     )
                     tool_results = await asyncio.gather(*tool_tasks)
                     yield {'type': 'tool_results', 'content': tool_results}
+                    self._ensure_session()
                     self.session.add_message(tool_results)
                 elif stop_reason == 'end_turn':
                     self.logger.info("Agent tool loop ended with end_turn")
@@ -393,6 +440,7 @@ Your available skills are:
     async def run(self, human_msg:HumanMessage):
         self.state = AgentState.Running
         self.logger.set_trace_id()
+        self._ensure_session()
         with self.logger.span("agent_run"):
             self.logger.info(
                 "Agent run started",
@@ -519,7 +567,31 @@ Your available skills are:
                 }
             )
             msg = event.to_human_message()
+            self._ensure_session()
             self.session.add_message(msg)
+
+            # Emit input event so the frontend can display non-direct-user
+            # messages (timer triggers, team agent messages, team user messages)
+            # in the chat window. Direct user messages (source_id="user") are
+            # added locally by the frontend, so they are skipped here.
+            if event.source_id != "user":
+                # Extract plain text from ContentBlock list or raw string
+                if isinstance(msg.content, str):
+                    text = msg.content
+                elif isinstance(msg.content, list):
+                    text = " ".join(
+                        b.text if hasattr(b, "text") else str(b)
+                        for b in msg.content
+                    )
+                else:
+                    text = str(msg.content)
+                await self._emit({
+                    "type": "input_event",
+                    "event_type": event.type.value,
+                    "source_id": event.source_id,
+                    "content": text,
+                })
+
             await self.hook.trigger(HookType.AFTER_INPUT)
             try:
                 async for chunk in self.stream_tool_loop():
@@ -605,6 +677,17 @@ Your available skills are:
         self.skills.update({s.name: s for s in skills})
         new_prompt = '\n'.join([f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in skills])
         self.skill_prompt += new_prompt
+
+    def remove_skills(self, skill_names: List[str]):
+        """移除指定名称的 skills，并刷新 skill_prompt。"""
+        if not skill_names:
+            return
+        for name in skill_names:
+            self.skills.pop(name, None)
+        if not self.skills:
+            self.skill_prompt = ''
+        else:
+            self.skill_prompt = self._load_skill_prompt()
 
     async def tool_execute(self, tool_use: ToolUseBlock) -> ToolMessage:
         tool = self.tools.get(tool_use.name)
