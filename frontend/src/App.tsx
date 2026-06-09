@@ -1,14 +1,15 @@
-import { useEffect } from "react";
+import { useEffect, lazy, Suspense } from "react";
 import { TopNav } from "./components/layout/TopNav";
-import { OnboardingView } from "./components/onboarding/OnboardingView";
 import { WorkspaceView } from "./components/workspace/WorkspaceView";
 import { AgentConfigDialog } from "./components/agents/AgentConfigDialog";
-import { SettingsPopover } from "./components/settings/SettingsPopover";
 import { ToastContainer } from "./components/ToastContainer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useAppStore } from "./store";
 import { useGlobalAgentState } from "./hooks/useGlobalAgentState";
 import type { SettingsTab } from "./types";
+
+const OnboardingView = lazy(() => import("./components/onboarding/OnboardingView").then(m => ({ default: m.OnboardingView })));
+const SettingsPopover = lazy(() => import("./components/settings/SettingsPopover").then(m => ({ default: m.SettingsPopover })));
 
 function App() {
   const activeAgentId = useAppStore((s) => s.activeAgentId);
@@ -32,7 +33,9 @@ function App() {
     <ErrorBoundary>
       <div className="flex flex-col h-screen w-screen overflow-hidden min-w-[920px] min-h-[600px]">
         <TopNav />
-        {isOnboarding ? <OnboardingView /> : <WorkspaceView />}
+        {isOnboarding ? (
+          <Suspense fallback={null}><OnboardingView /></Suspense>
+        ) : <WorkspaceView />}
         <AgentConfigDialog
           open={configDialog.open}
           onClose={closeConfigDialog}
@@ -44,11 +47,13 @@ function App() {
       </div>
 
       {isSettingsOpen && (
-        <SettingsPopover
-          activeTab={settingsActiveTab}
-          onTabChange={(tab: SettingsTab) => useAppStore.setState({ settingsActiveTab: tab })}
-          onClose={closeSettings}
-        />
+        <Suspense fallback={null}>
+          <SettingsPopover
+            activeTab={settingsActiveTab}
+            onTabChange={(tab: SettingsTab) => useAppStore.setState({ settingsActiveTab: tab })}
+            onClose={closeSettings}
+          />
+        </Suspense>
       )}
     </ErrorBoundary>
   );

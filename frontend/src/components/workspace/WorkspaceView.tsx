@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, lazy, Suspense } from "react";
 import { Bot } from "lucide-react";
 import { useAppStore } from "../../store";
 import { isTeam } from "../../types";
@@ -6,9 +6,10 @@ import { ChatWindow } from "../ChatWindow";
 import { TeamChatWindow } from "../TeamChatWindow";
 import { PanelA_FilePanel } from "./PanelA_FilePanel";
 import { PanelC_FilePreview } from "./PanelC_FilePreview";
-import { TeamGraphView } from "./TeamGraphView";
 import { SessionManagerPanel } from "./SessionManagerPanel";
 import { PanelSplitter } from "./Splitter";
+
+const TeamGraphView = lazy(() => import("./TeamGraphView").then(m => ({ default: m.TeamGraphView })));
 
 const PANEL_A_MIN = 200;
 const PANEL_A_MAX = 500;
@@ -96,7 +97,9 @@ export function WorkspaceView() {
             <PanelC_FilePreview ref={panelCRef} width={panelCWidth} />
           ) : showTeamGraph ? (
             <div ref={panelCRef} style={{ width: panelCWidth }} className="h-full border-l border-(--color-rule-soft)">
-              <TeamGraphView width={panelCWidth} />
+              <Suspense fallback={null}>
+                <TeamGraphView width={panelCWidth} />
+              </Suspense>
             </div>
           ) : null}
         </>

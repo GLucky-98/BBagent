@@ -14,7 +14,7 @@ const TurnDots = memo(function TurnDots({
   scrollContainerRef,
 }: {
   turns: Message[];
-  scrollContainerRef: React.RefObject<HTMLDivElement>;
+  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
