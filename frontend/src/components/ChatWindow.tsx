@@ -1,0 +1,1013 @@
+import { useState, useRef, useEffect, useMemo, memo, Component } from "react";
+import { flushSync } from "react-dom";
+import { Bot, User, Square, ChevronDown, ChevronRight, Plus, Timer, Sparkles, ArrowUp, Terminal, Brain, Wrench, FileText } from "lucide-react";
+import { useAppStore, useSelectedAgent, useAgentModel } from "../store";
+import { cn } from "../lib/utils";
+import { api } from "../lib/api";
+import type { Message, SessionInfo } from "../types";
+import { TimerPanel } from "./TimerPanel";
+import { MarkdownContent } from "./MarkdownContent";
+
+// ── Turn dots navigation ──
+const TurnDots = memo(function TurnDots({
+  turns,
+  scrollContainerRef,
+}: {
+  turns: Message[];
+  scrollContainerRef: React.RefObject<HTMLDivElement>;
+}) {
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const navRef = useRef<HTMLDivElement>(null);
+
+  // 使用 IntersectionObserver 跟踪当前可视区域内的 turn（替代 scroll 事件 O(n) DOM 查询）
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || turns.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let closestIdx = -1;
+        let minDist = Infinity;
+        const containerRect = el.getBoundingClientRect();
+
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const idx = turns.findIndex((t) => t.id === entry.target.getAttribute('data-message-id'));
+            if (idx !== -1) {
+              const dist = Math.abs(entry.boundingClientRect.top - containerRect.top - 60);
+              if (dist < minDist) {
+                minDist = dist;
+                closestIdx = idx;
+              }
+            }
+          }
+        }
+        if (closestIdx !== -1) {
+          setActiveIndex(closestIdx);
+        }
+      },
+      { root: el, rootMargin: '-60px 0px 0px 0px', threshold: 0 }
+    );
+
+    // 观察所有 turn 元素
+    const targets: Element[] = [];
+    for (let i = 0; i < turns.length; i++) {
+      const turnEl = el.querySelector(`[data-message-id="${turns[i].id}"]`);
+      if (turnEl) {
+        observer.observe(turnEl);
+        targets.push(turnEl);
+      }
+    }
+
+    // 初始计算
+    requestAnimationFrame(() => {
+      const containerRect = el.getBoundingClientRect();
+      for (let i = 0; i < turns.length; i++) {
+        const turnEl = targets[i];
+        if (!turnEl) continue;
+        const rect = turnEl.getBoundingClientRect();
+        const dist = Math.abs(rect.top - containerRect.top - 60);
+        if (dist < 60) {
+          setActiveIndex(i);
+          break;
+        }
+      }
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [scrollContainerRef, turns]);
+
+  const scrollToTurn = (index: number) => {
+    const el = scrollContainerRef.current?.querySelector(
+      `[data-message-id="${turns[index].id}"]`
+    );
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  const previewText = (msg: Message) => {
+    const text = msg.content || "";
+    return text.length > 50 ? text.slice(0, 50) + "…" : text;
+  };
+
+  if (turns.length < 2) return null;
+
+  return (
+    <div ref={navRef} className="w-10 shrink-0 flex flex-col items-center pt-4">
+      <div className="sticky top-[100px] flex flex-col items-center gap-1.5">
+        {turns.map((turn, i) => {
+          const dotClass = cn(
+            "w-2 h-2 rounded-full transition-all cursor-pointer",
+            i === activeIndex
+              ? "bg-(--color-primary) scale-125"
+              : "bg-(--color-border) hover:bg-(--color-ink-3)"
+          );
+
+          return (
+            <div
+              key={turn.id}
+              className="relative flex items-center justify-center w-6 h-6 group"
+              onMouseEnter={() => {
+                setHoveredIndex(i);
+                setTooltipVisible(true);
+              }}
+              onMouseLeave={() => {
+                setHoveredIndex(null);
+                setTooltipVisible(false);
+              }}
+            >
+              <div
+                className={dotClass}
+                onClick={() => scrollToTurn(i)}
+                title={`Turn ${i + 1}`}
+              />
+
+              {/* Tooltip */}
+              {hoveredIndex === i && tooltipVisible && (
+                <div className="absolute right-full mr-2 top-1/2 -translate-y-1/2 z-50">
+                  <div className="bg-(--color-foreground) text-(--color-background) text-[11px] leading-[1.4] rounded-md px-2.5 py-1.5 max-w-[200px] shadow-lg whitespace-normal break-words">
+                    <span className="font-semibold text-[10px] opacity-60">#{i + 1}</span>
+                    <p className="mt-0.5">{previewText(turn)}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+});
+
+const EMPTY_SESSIONS: SessionInfo[] = [];
+
+// ── Error boundary: fall back to plain text if markdown parsing throws ──
+const SafeMarkdown = memo(class SafeMarkdown extends Component<{ content: string; isStreaming?: boolean }> {
+  state = { error: false, prevContent: "" };
+
+  static getDerivedStateFromError() {
+    return { error: true };
+  }
+
+  componentDidUpdate(prevProps: { content: string }) {
+    // Reset error state when content changes (streaming continues)
+    if (prevProps.content !== this.props.content && this.state.error) {
+      this.setState({ error: false });
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{this.props.content}</p>;
+    }
+    return <MarkdownContent content={this.props.content} isStreaming={this.props.isStreaming} />;
+  }
+});
+
+// ── Single turn block (Apple-style: no bubble, avatar + name + content) ──
+const TurnBlock = memo(function TurnBlock({ message }: { message: Message }) {
+  const isInputEvent = message.chunkType === "input_event";
+  const isRealUser = message.role === "user" && !isInputEvent;
+  const isSystemNotification = message.role === "system" && !message.chunkType;
+  const ts = new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  if (isSystemNotification) {
+    return (
+      <div className="px-8 py-2 flex justify-center">
+        <span className="text-[11.5px] text-(--color-ink-3)">
+          {message.content}
+        </span>
+      </div>
+    );
+  }
+
+  const displayName = isRealUser ? "You" : isInputEvent && message.sourceAgent ? message.sourceAgent : "Assistant";
+
+  return (
+    <div className="py-5 w-full" data-message-id={message.id}>
+      <div className="mx-4 pb-5 border-b border-(--color-rule-soft) flex gap-3">
+        <div
+          className={cn(
+            "w-[22px] h-[22px] rounded-full flex items-center justify-center text-[10px] font-semibold shrink-0 mt-0.5",
+            isRealUser
+              ? "bg-(--color-foreground) text-white"
+              : "bg-gradient-to-br from-(--color-primary) to-blue-500 text-white"
+          )}
+        >
+          {isRealUser ? <User size={11} /> : <Sparkles size={11} />}
+        </div>
+        <div className="flex-1 min-w-0 overflow-x-clip">
+          <div className="flex items-baseline gap-2 mb-1.5">
+            <span className="text-[12.5px] font-semibold text-(--color-foreground)">
+              {displayName}
+            </span>
+            <span className="text-[11px] text-(--color-ink-3) tabular-nums">
+              {ts}
+            </span>
+          </div>
+          {isInputEvent && message.sourceAgent && (
+            <div className="mb-1">
+              <span className="inline-block text-[10px] font-medium px-2 py-0.5 rounded-full bg-(--color-secondary) text-(--color-ink-2)">
+                {message.sourceAgent}
+              </span>
+            </div>
+          )}
+          <div className="text-[14.5px] leading-[1.6] text-(--color-foreground) tracking-[-0.005em] min-w-0 break-words">
+            {isRealUser ? (
+              <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] min-w-0">{message.content}</p>
+            ) : (
+              <SafeMarkdown content={message.content} />
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+// ── Grouping helpers ──
+
+function sectionLabel(msg: Message): string {
+  switch (msg.chunkType) {
+    case "thinking": return "Thinking";
+    case "tool_use": return `Calling: ${msg.toolName || ""}`;
+    case "tool_result": return `Result: ${msg.toolName || ""}`;
+    case "error": return "Error";
+    default: return "";
+  }
+}
+
+function shouldDefaultExpand(msg: Message, isStreamingGroup: boolean): boolean {
+  // Text and standalone assistant messages are always visible.
+  if (!msg.chunkType || msg.chunkType === "text") return true;
+  // Non-text blocks (thinking, tool_use, tool_result) auto-expand only if
+  // this group is currently being streamed into.
+  if (isStreamingGroup) return true;
+  return false;
+}
+
+function isStandalone(msg: Message): boolean {
+  return msg.role === "user" || (msg.role === "system" && !msg.chunkType);
+}
+
+function buildSegments(messages: Message[]): Message[][] {
+  const segments: Message[][] = [];
+  for (const msg of messages) {
+    if (isStandalone(msg)) {
+      segments.push([msg]);
+    } else {
+      const last = segments[segments.length - 1];
+      if (last && last.length > 0 && !isStandalone(last[0])) {
+        last.push(msg);
+      } else {
+        segments.push([msg]);
+      }
+    }
+  }
+  return segments;
+}
+
+// ── A single collapsible section within a message group (Apple: header bar) ──
+const GroupSection = memo(function GroupSection({
+  msg, isExpanded, onToggle, showDivider, isStreaming = false,
+}: {
+  msg: Message; isExpanded: boolean; onToggle: () => void; showDivider: boolean; isStreaming?: boolean;
+}) {
+  const label = sectionLabel(msg);
+  const isText = !msg.chunkType || msg.chunkType === "text";
+
+  if (isText) {
+    return (
+      <div className={showDivider ? "mt-2" : ""}>
+        <SafeMarkdown content={msg.content} isStreaming={isStreaming} />
+      </div>
+    );
+  }
+
+  // ── Thinking: 斜体标签 + Brain 图标，保持灰色调但用虚线边框区分 ──
+  if (msg.chunkType === "thinking") {
+    return (
+      <div className={cn("my-2 rounded-lg border border-dashed border-(--color-border) bg-(--color-tint) min-w-0", showDivider && "mt-2")}>
+        <button
+          onClick={onToggle}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-(--color-secondary)/60 transition-colors"
+        >
+          <Brain size={12} className="text-(--color-ink-3) shrink-0" />
+          <span className="text-[11.5px] italic text-(--color-ink-3) tracking-tight">Thinking</span>
+          <span className="ml-auto text-(--color-ink-3) shrink-0">
+            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </span>
+        </button>
+        {isExpanded && (
+          <div className="border-t border-dashed border-(--color-border) px-3 py-2 overflow-x-auto">
+            <pre className="text-[12px] font-mono leading-[1.6] text-(--color-ink-3) whitespace-pre-wrap max-h-60 overflow-y-auto">
+              {msg.content}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Tool Use: Wrench 图标 + 工具名高亮 + 参数摘要 ──
+  if (msg.chunkType === "tool_use") {
+    const toolInput = msg.toolInput || {};
+    const inputKeys = Object.keys(toolInput);
+    const paramSummary = inputKeys.length > 0
+      ? inputKeys.map(k => {
+          const v = toolInput[k];
+          const vs = typeof v === "string" ? v : JSON.stringify(v, null, 0);
+          return vs.length > 50 ? `${k}: ${vs.slice(0, 47)}…` : `${k}: ${vs}`;
+        }).join("  ·  ")
+      : "";
+
+    return (
+      <div className={cn("my-2 rounded-lg border border-(--color-border) bg-(--color-tint) min-w-0", showDivider && "mt-2")}>
+        <button
+          onClick={onToggle}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-(--color-secondary)/60 transition-colors"
+        >
+          <Wrench size={12} className="text-(--color-ink-3) shrink-0" />
+          <span className="text-[11.5px] font-medium text-(--color-ink-2) font-mono tracking-tight">{msg.toolName || "tool"}</span>
+          {paramSummary && !isExpanded && (
+            <span className="text-[10.5px] text-(--color-ink-3) truncate max-w-[50%]">{paramSummary}</span>
+          )}
+          <span className="ml-auto text-(--color-ink-3) shrink-0">
+            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </span>
+        </button>
+        {isExpanded && (
+          <div className="border-t border-(--color-border) px-3 py-2 overflow-x-auto">
+            <pre className="text-[12px] font-mono leading-[1.6] text-(--color-ink-2) whitespace-pre max-h-60 overflow-y-auto">
+              {msg.content}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Tool Result: FileText 图标 + 工具名 ──
+  if (msg.chunkType === "tool_result") {
+    const displayContent = msg.content || "";
+
+    return (
+      <div className={cn("my-2 rounded-lg border border-(--color-border) bg-(--color-tint)/60 min-w-0", showDivider && "mt-2")}>
+        <button
+          onClick={onToggle}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-(--color-secondary)/60 transition-colors"
+        >
+          <FileText size={12} className="text-(--color-ink-3) shrink-0" />
+          <span className="text-[11.5px] font-medium text-(--color-ink-2) tracking-tight">Result: {msg.toolName || "tool"}</span>
+          {!isExpanded && displayContent.length <= 80 && (
+            <span className="text-[10.5px] text-(--color-ink-3) truncate max-w-[50%]">{displayContent}</span>
+          )}
+          <span className="ml-auto text-(--color-ink-3) shrink-0">
+            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </span>
+        </button>
+        {isExpanded && (
+          <div className="border-t border-(--color-border) px-3 py-2 overflow-x-auto">
+            <pre className="text-[12px] font-mono leading-[1.6] text-(--color-ink-2) whitespace-pre-wrap break-words max-h-60 overflow-y-auto">
+              {displayContent}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Error ──
+  return (
+    <div className={cn("my-2 rounded-lg border border-(--color-border) bg-(--color-tint) min-w-0", showDivider && "mt-2")}>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-(--color-secondary)/60 transition-colors"
+      >
+        <Terminal size={12} className="text-(--color-ink-3) shrink-0" />
+        <span className="text-[11.5px] font-medium text-(--color-ink-2) font-mono tracking-tight">{label}</span>
+        <span className="ml-auto text-(--color-ink-3) shrink-0">
+          {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </span>
+      </button>
+      {isExpanded && (
+        <div className="border-t border-(--color-border) px-3 py-2 overflow-x-auto">
+          <pre className="text-[12px] font-mono leading-[1.6] text-(--color-ink-2) whitespace-pre max-h-40 overflow-y-auto">
+            {msg.content}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+});
+
+// ── Composite group for adjacent non-user messages (Apple-style no-bubble) ──
+const TurnGroup = memo(function TurnGroup({
+  messages, isRunning, streamingMsgId, collapsedSections, onToggleSection,
+}: {
+  messages: Message[]; isRunning: boolean; streamingMsgId: string | null;
+  collapsedSections: Set<string>; onToggleSection: (id: string) => void;
+}) {
+  const timestamp = messages[messages.length - 1]?.timestamp ?? messages[0]?.timestamp;
+  const isStreamingGroup = isRunning && messages.some((m) => m.id === streamingMsgId);
+  const ts = new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  return (
+    <div className="py-5 w-full">
+      <div className="mx-4 pb-5 border-b border-(--color-rule-soft) flex gap-3">
+        <div className="w-[22px] h-[22px] rounded-full bg-gradient-to-br from-(--color-primary) to-blue-500 text-white flex items-center justify-center shrink-0 mt-0.5">
+          <Sparkles size={11} />
+        </div>
+        <div className="flex-1 min-w-0 overflow-x-clip">
+          <div className="flex items-baseline gap-2 mb-1.5">
+            <span className="text-[12.5px] font-semibold text-(--color-foreground)">Assistant</span>
+            <span className="text-[11px] text-(--color-ink-3) tabular-nums">{ts}</span>
+          </div>
+          <div className="text-[14.5px] leading-[1.6] text-(--color-foreground) tracking-[-0.005em] min-w-0 break-words">
+            {messages.map((msg, i) => {
+              const defaultExpanded = shouldDefaultExpand(msg, isStreamingGroup);
+              const userToggled = collapsedSections.has(msg.id);
+              const isExpanded = userToggled ? !defaultExpanded : defaultExpanded;
+              return (
+                <GroupSection
+                  key={msg.id}
+                  msg={msg}
+                  isExpanded={isExpanded}
+                  onToggle={() => onToggleSection(msg.id)}
+                  showDivider={i > 0}
+                  isStreaming={isStreamingGroup && (msg.id === streamingMsgId)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+export function ChatWindow() {
+  const selectedAgent = useSelectedAgent();
+  const agentModel = useAgentModel();
+  const addMessage = useAppStore((s) => s.addMessage);
+  const patchMessage = useAppStore((s) => s.patchMessage);
+  const agentState = useAppStore((s) => s.agentStates[selectedAgent?.id || ""] || selectedAgent?.state || "ready");
+  const isRunning = agentState === "running";
+  const setAgentState = useAppStore((s) => s.setAgentState);
+  const contextTokens = useAppStore((s) => s.agentContextTokens[selectedAgent?.id || ""] || 0);
+  const loadAgentSessions = useAppStore((s) => s.loadAgentSessions);
+  const agentSessions = useAppStore((s) => s.agentSessions[selectedAgent?.id || ""]) || EMPTY_SESSIONS;
+  const createNewSession = useAppStore((s) => s.createNewSession);
+  const loadAgentMessages = useAppStore((s) => s.loadAgentMessages);
+  const sessionPanelOpen = useAppStore((s) => s.sessionPanelOpen);
+  const toggleSessionPanel = useAppStore((s) => s.toggleSessionPanel);
+
+  const [input, setInput] = useState("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const subscribedAgentRef = useRef<string | null>(null);
+  const streamBufferRef = useRef("");
+  const currentAssistantMsgIdRef = useRef<string | null>(null);
+  const thinkingBufferRef = useRef("");
+  const currentThinkingMsgIdRef = useRef<string | null>(null);
+  const textFlushPendingRef = useRef(false);
+  const thinkingFlushPendingRef = useRef(false);
+
+  const [timerPanelOpen, setTimerPanelOpen] = useState(false);
+  const agentTimers = useAppStore((s) => s.agentTimers[selectedAgent?.id || ""]) || [];
+  const loadTimers = useAppStore((s) => s.loadTimers);
+
+  // Track which sections the user has manually collapsed.
+  // When a section is in this set, its default expand/collapse state is flipped.
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const toggleSection = (id: string) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  // 提取所有 turn（每轮对话由一个 user message 或 input_event 开始）
+  const turns = useMemo(() => {
+    if (!selectedAgent?.messages) return [];
+    return selectedAgent.messages.filter(
+      (m) => m.role === "user" || m.chunkType === "input_event"
+    );
+  }, [selectedAgent?.messages]);
+
+  const segments = useMemo(() => {
+    if (!selectedAgent?.messages) return [];
+    return buildSegments(selectedAgent.messages);
+  }, [selectedAgent?.messages]);
+
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isUserScrollingRef = useRef(false);
+
+  const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior }); };
+
+  // 检测用户是否主动向上滚动
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      isUserScrollingRef.current = distanceFromBottom > 60;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // 仅在非用户主动滚动时自动滚底
+  useEffect(() => {
+    if (!isUserScrollingRef.current) scrollToBottom();
+  }, [selectedAgent?.messages]);
+
+  // ── 注册 onWsChunk：由 useGlobalAgentState 的 shared WS 统一下发非 agent_state 消息 ──
+
+  useEffect(() => {
+    const handler = (chunk: Record<string, unknown>) => {
+      const agentId = subscribedAgentRef.current;
+      if (!agentId) return;
+
+      if (chunk.type === "text" && chunk.content) {
+        const content = chunk.content as string;
+        streamBufferRef.current += content;
+        const state = useAppStore.getState();
+        const currentMsgs = state.agents.find((a) => a.id === agentId)?.messages || [];
+        const existingMsg = currentAssistantMsgIdRef.current
+          ? currentMsgs.find((m) => m.id === currentAssistantMsgIdRef.current)
+          : null;
+        if (!existingMsg) {
+          const newId = (chunk.message_id as string) || crypto.randomUUID();
+          currentAssistantMsgIdRef.current = newId;
+          flushSync(() => addMessage(agentId, {
+            id: newId,
+            role: "assistant",
+            content: streamBufferRef.current,
+            timestamp: Date.now(),
+          }));
+        } else if (!textFlushPendingRef.current) {
+          textFlushPendingRef.current = true;
+          requestAnimationFrame(() => {
+            textFlushPendingRef.current = false;
+            flushSync(() => patchMessage(agentId, currentAssistantMsgIdRef.current!, { content: streamBufferRef.current }));
+          });
+        }
+      } else if (chunk.type === "thinking" && chunk.content) {
+        const content = chunk.content as string;
+        thinkingBufferRef.current += content;
+        const state = useAppStore.getState();
+        const currentMsgs = state.agents.find((a) => a.id === agentId)?.messages || [];
+        const existingMsg = currentThinkingMsgIdRef.current
+          ? currentMsgs.find((m) => m.id === currentThinkingMsgIdRef.current)
+          : null;
+        if (!existingMsg) {
+          const newId = crypto.randomUUID();
+          currentThinkingMsgIdRef.current = newId;
+          flushSync(() => addMessage(agentId, {
+            id: newId,
+            role: "system",
+            content: thinkingBufferRef.current,
+            timestamp: Date.now(),
+            chunkType: "thinking",
+          }));
+        } else if (!thinkingFlushPendingRef.current) {
+          thinkingFlushPendingRef.current = true;
+          requestAnimationFrame(() => {
+            thinkingFlushPendingRef.current = false;
+            flushSync(() => patchMessage(agentId, currentThinkingMsgIdRef.current!, { content: thinkingBufferRef.current }));
+          });
+        }
+      } else if (chunk.type === "completed_tool_use") {
+        const ct = chunk.content as Record<string, unknown> | undefined;
+        addMessage(agentId, {
+          id: crypto.randomUUID(),
+          role: "system",
+          content: JSON.stringify(ct?.input || {}, null, 2),
+          timestamp: Date.now(),
+          chunkType: "tool_use",
+          toolName: (ct?.name as string) || "",
+          toolInput: (ct?.input as Record<string, unknown>) || {},
+        });
+      } else if (chunk.type === "tool_results") {
+        const results = chunk.content;
+        if (Array.isArray(results)) {
+          for (const r of results) {
+            // ToolMessage 经过 _make_serializable 后是 dict: {role, id, name, content, timestamp}
+            const rDict = r as Record<string, unknown>;
+            const toolName = (rDict.name as string) || "";
+            const rawContent = rDict.content;
+            let contentStr: string;
+            if (typeof rawContent === "string") {
+              contentStr = rawContent;
+            } else if (Array.isArray(rawContent)) {
+              const textParts: string[] = [];
+              for (const block of rawContent as Record<string, unknown>[]) {
+                if (block.type === "text") {
+                  textParts.push(block.text as string || "");
+                }
+              }
+              contentStr = textParts.length > 0
+                ? textParts.join("\n")
+                : JSON.stringify(rawContent, null, 2);
+            } else {
+              contentStr = JSON.stringify(rawContent, null, 2);
+            }
+            addMessage(agentId, {
+              id: crypto.randomUUID(),
+              role: "system",
+              content: contentStr,
+              timestamp: Date.now(),
+              chunkType: "tool_result",
+              toolName,
+            });
+          }
+        }
+      } else if (chunk.type === "input_event") {
+        const sourceId = (chunk.source_id as string) || "";
+        let sourceTag: string;
+        if ((chunk.event_type as string) === "timer_trigger") {
+          sourceTag = `Timer: ${sourceId.replace("timer:", "")}`;
+        } else if (sourceId.startsWith("team:")) {
+          const sender = sourceId.slice(5);
+          sourceTag = sender === "user" ? "" : sender;
+        } else if (sourceId) {
+          sourceTag = sourceId;
+        } else {
+          sourceTag = (chunk.event_type as string) || "";
+        }
+        addMessage(agentId, {
+          id: crypto.randomUUID(),
+          role: "user",
+          content: chunk.content as string,
+          timestamp: Date.now(),
+          chunkType: "input_event",
+          sourceAgent: sourceTag || undefined,
+        });
+      } else if (chunk.type === "completed_message") {
+        // 用 completed_message 中的最终完整内容替换流式拼接的消息
+        const completedMsg = chunk.content as Record<string, unknown> | undefined;
+        if (completedMsg && currentAssistantMsgIdRef.current) {
+          // 提取最终文本内容
+          const rawContent = completedMsg.content;
+          let finalContent: string;
+          if (typeof rawContent === "string") {
+            finalContent = rawContent;
+          } else if (Array.isArray(rawContent)) {
+            const textParts: string[] = [];
+            for (const block of rawContent as Record<string, unknown>[]) {
+              if (block.type === "text") {
+                textParts.push(block.text as string || "");
+              }
+            }
+            finalContent = textParts.join("\n");
+          } else {
+            finalContent = streamBufferRef.current;
+          }
+          // 用最终内容替换流式消息（确保 markdown 渲染完整）
+          if (finalContent) {
+            flushSync(() => patchMessage(agentId, currentAssistantMsgIdRef.current!, { content: finalContent }));
+          }
+        }
+        streamBufferRef.current = "";
+        currentAssistantMsgIdRef.current = null;
+        thinkingBufferRef.current = "";
+        currentThinkingMsgIdRef.current = null;
+        textFlushPendingRef.current = false;
+        thinkingFlushPendingRef.current = false;
+      } else if (chunk.type === "interrupted") {
+        streamBufferRef.current = "";
+        currentAssistantMsgIdRef.current = null;
+        thinkingBufferRef.current = "";
+        currentThinkingMsgIdRef.current = null;
+        textFlushPendingRef.current = false;
+        thinkingFlushPendingRef.current = false;
+      } else if (chunk.type === "switched") {
+        setAgentState(agentId, (chunk.agent_state as "ready" | "waiting" | "running" | "error"));
+        if (typeof chunk.context_tokens === "number") {
+          useAppStore.getState().setAgentContextTokens(agentId, chunk.context_tokens);
+        }
+      } else if (chunk.type === "error") {
+        addMessage(agentId, {
+          id: crypto.randomUUID(),
+          role: "system",
+          content: `Error: ${chunk.content}`,
+          timestamp: Date.now(),
+          chunkType: "error",
+        });
+      }
+    };
+
+    useAppStore.setState({ onWsChunk: handler });
+
+    return () => {
+      useAppStore.setState({ onWsChunk: null });
+    };
+  }, [addMessage, patchMessage, setAgentState]);
+
+  // ── Agent switch: load history FIRST, then send switch_agent ──
+  useEffect(() => {
+    if (!selectedAgent) return;
+    const name = selectedAgent.name;
+    const id = selectedAgent.id;
+
+    // Clear stream buffer on agent switch. Agent state will be set by
+    // the switched chunk (which reads agent.state directly from backend).
+    streamBufferRef.current = "";
+    currentAssistantMsgIdRef.current = null;
+    thinkingBufferRef.current = "";
+    currentThinkingMsgIdRef.current = null;
+    setCollapsedSections(new Set());
+
+    // Load history BEFORE subscribing to WS replay.
+    // loadAgentMessages() replaces the entire message list — if replay chunks
+    // arrive before HTTP completes, they will be wiped by the replacement.
+    const init = async () => {
+      // 主动拉取一次 agent 当前状态，确保切换后立即显示正确状态
+      try {
+        const stateInfo = await api.getAgentState(id);
+        if (stateInfo?.state) {
+          setAgentState(id, stateInfo.state as "ready" | "waiting" | "running" | "error");
+        }
+      } catch {
+        // 静默失败，WS switched 消息会兜底
+      }
+
+      await loadAgentMessages(id);
+      loadAgentSessions(id);
+      loadTimers(id);
+
+      // Only send switch_agent if we're not already subscribed to this agent
+      const chatWs = useAppStore.getState().chatWs;
+      if (subscribedAgentRef.current !== id && chatWs?.readyState === WebSocket.OPEN) {
+        subscribedAgentRef.current = id;
+        chatWs.send(JSON.stringify({
+          type: "switch_agent",
+          agent_id: id,
+          agent_name: name,
+        }));
+      }
+    };
+    init();
+  }, [selectedAgent?.id]);
+
+  // ── Session switch: reload messages only (no WS switch needed) ──
+  useEffect(() => {
+    if (!selectedAgent) return;
+    streamBufferRef.current = "";
+    currentAssistantMsgIdRef.current = null;
+    thinkingBufferRef.current = "";
+    currentThinkingMsgIdRef.current = null;
+    setCollapsedSections(new Set());
+    loadAgentMessages(selectedAgent.id);
+  }, [selectedAgent?.currentSessionId]);
+
+  const handleSend = () => {
+    if (!input.trim() || !selectedAgent) return;
+    const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: input.trim(), timestamp: Date.now() };
+    addMessage(selectedAgent.id, userMessage);
+
+    const chatWs = useAppStore.getState().chatWs;
+    if (chatWs?.readyState === WebSocket.OPEN) {
+      chatWs.send(JSON.stringify({ type: "user_message", content: input.trim() }));
+    }
+    setInput("");
+  };
+
+  const handleInterrupt = () => {
+    const chatWs = useAppStore.getState().chatWs;
+    if (chatWs?.readyState === WebSocket.OPEN) {
+      chatWs.send(JSON.stringify({ type: "interrupt" }));
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Ignore Enter during IME composition (e.g. confirming Chinese characters).
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (isRunning) {
+        handleInterrupt();
+      } else {
+        handleSend();
+      }
+    }
+  };
+
+  const activeSession = agentSessions.find((s) => s.isActive);
+  const currentSessionId = selectedAgent?.currentSessionId || activeSession?.id || "";
+
+  if (!selectedAgent) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center bg-(--color-background) text-(--color-ink-2)">
+        <Bot size={36} className="mb-3 opacity-40" />
+        <p className="text-[15px] font-medium">No agent selected</p>
+        <p className="text-[12.5px] mt-1 text-(--color-ink-3)">Select an agent to start chatting</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+    <div className="flex-1 flex flex-col min-h-0 bg-(--color-background)">
+      <header className="flex items-center justify-between px-8 py-4 border-b border-(--color-rule-soft)">
+        <div>
+          <h2 className="text-[15px] font-semibold text-(--color-foreground) tracking-[-0.01em]">{selectedAgent.name}</h2>
+          <p className="text-[12px] text-(--color-ink-2) mt-0.5 flex items-center gap-1.5">
+            <span className={cn(
+              "w-2 h-2 rounded-full",
+              agentState === "waiting" && "bg-(--color-success)",
+              agentState === "running" && "bg-(--color-success) animate-halo",
+              agentState === "error" && "bg-(--color-danger)",
+              agentState === "ready" && "bg-(--color-ink-4)"
+            )} />
+            <span className="capitalize">{agentState}</span>
+            {agentModel && <span className="text-(--color-ink-3)">· {agentModel.name}</span>}
+            {selectedAgent.type === "team" && <span className="text-(--color-ink-3)">· Team</span>}
+          </p>
+        </div>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={toggleSessionPanel}
+            className={cn(
+              "flex items-center gap-1.5 px-3 h-7 text-[12.5px] font-medium rounded-l-full transition-colors",
+              sessionPanelOpen
+                ? "bg-(--color-primary) text-white"
+                : "bg-(--color-secondary) hover:bg-(--color-border) text-(--color-foreground)"
+            )}
+          >
+            <span className="font-mono text-[11.5px]">
+              {currentSessionId ? currentSessionId.substring(0, 19) : "No session"}
+            </span>
+          </button>
+          <button
+            onClick={() => { if (selectedAgent) createNewSession(selectedAgent.id); }}
+            className={cn(
+              "flex items-center justify-center w-7 h-7 text-[12.5px] font-medium rounded-r-full transition-colors border-l",
+              sessionPanelOpen
+                ? "bg-(--color-primary) text-white border-white/20"
+                : "bg-(--color-secondary) hover:bg-(--color-border) text-(--color-foreground) border-(--color-border)"
+            )}
+            title="New session"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+      </header>
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden">
+          {(!selectedAgent.messages || selectedAgent.messages.length === 0) ? (
+            <div className="h-full flex flex-col items-center justify-center text-(--color-ink-3)">
+              <div className="w-12 h-12 rounded-full bg-(--color-secondary) flex items-center justify-center mb-3">
+                <Sparkles size={18} className="text-(--color-ink-2)" />
+              </div>
+              <p className="text-[14px] font-medium text-(--color-ink-2)">Start a conversation</p>
+              <p className="text-[12px] mt-1 text-(--color-ink-3)">Send a message to begin</p>
+            </div>
+          ) : (
+            <div className="w-full max-w-[880px] mx-auto px-4">
+              <div className="flex">
+                <div className="flex-1 min-w-0">
+                  {segments.map((seg) => {
+                    if (seg.length === 1 && isStandalone(seg[0])) {
+                      return <TurnBlock key={seg[0].id} message={seg[0]} />;
+                    }
+                    return (
+                      <TurnGroup
+                        key={`group-${seg[0].id}`}
+                        messages={seg}
+                        isRunning={isRunning}
+                        streamingMsgId={currentAssistantMsgIdRef.current || currentThinkingMsgIdRef.current}
+                        collapsedSections={collapsedSections}
+                        onToggleSection={toggleSection}
+                      />
+                    );
+                  })}
+                </div>
+                {turns.length >= 2 && (
+                  <TurnDots turns={turns} scrollContainerRef={scrollContainerRef} />
+                )}
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      {timerPanelOpen && selectedAgent && (
+        <TimerPanel agentId={selectedAgent.id} />
+      )}
+      <div className="py-4 border-t border-(--color-rule-soft) bg-(--color-background)">
+        <div className="w-full max-w-[880px] mx-auto px-4">
+          {/* Context usage + Timer row */}
+          <div className="flex items-center gap-2 mb-2">
+            {/* Circular context usage indicator */}
+            {(() => {
+              const maxTokens = agentModel?.maxContextTokens || 0;
+              if (maxTokens <= 0) return null;
+              const ratio = Math.min(contextTokens / maxTokens, 1);
+              const pct = Math.round(ratio * 100);
+              const size = 20;
+              const radius = 7;
+              const circumference = 2 * Math.PI * radius;
+              const strokeColor = ratio >= 0.9
+                ? "#ef4444"
+                : ratio >= 0.7
+                  ? "#f59e0b"
+                  : "var(--color-primary)";
+              return (
+                <div className="relative group flex items-center justify-center h-7 w-7 rounded-md border border-(--color-border) bg-(--color-tint)" title={`${contextTokens.toLocaleString()} / ${maxTokens.toLocaleString()} tokens`}>
+                  <svg width={size} height={size} className="-rotate-90">
+                    <circle
+                      cx={size / 2}
+                      cy={size / 2}
+                      r={radius}
+                      fill="none"
+                      stroke="var(--color-secondary)"
+                      strokeWidth="2"
+                    />
+                    <circle
+                      cx={size / 2}
+                      cy={size / 2}
+                      r={radius}
+                      fill="none"
+                      stroke={strokeColor}
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeDasharray={circumference}
+                      strokeDashoffset={circumference * (1 - ratio)}
+                      className="transition-all duration-300"
+                    />
+                  </svg>
+                  <span className={cn(
+                    "absolute text-[7.5px] font-semibold tabular-nums",
+                    ratio >= 0.9 ? "text-red-500" : "text-(--color-ink-2)"
+                  )}>
+                    {pct}%
+                  </span>
+                  {/* Hover tooltip */}
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-(--color-foreground) text-white text-[10.5px] rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                    {contextTokens.toLocaleString()} / {maxTokens.toLocaleString()}
+                  </div>
+                </div>
+              );
+            })()}
+            <button
+              onClick={() => setTimerPanelOpen((v) => !v)}
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 h-7 text-[12px] rounded-md border border-(--color-border) bg-(--color-tint) transition-colors",
+                timerPanelOpen
+                  ? "bg-(--color-primary)/10 text-(--color-primary) border-(--color-primary)/20"
+                  : "text-(--color-ink-2) hover:bg-(--color-secondary)"
+              )}
+              title="Timers"
+            >
+              <Timer size={13} />
+              <span className="font-medium">Timer</span>
+              {agentTimers.length > 0 && (
+                <span className="font-medium tabular-nums text-[10.5px] bg-(--color-secondary) px-1.5 py-0.5 rounded-full">
+                  {agentTimers.length}
+                </span>
+              )}
+            </button>
+          </div>
+          <div className="flex items-end gap-2 bg-(--color-tint) border border-(--color-border) rounded-xl p-2 transition-all focus-within:bg-white focus-within:border-(--color-primary) focus-within:shadow-[0_0_0_3px_rgba(0,102,204,0.12)]">
+            <textarea value={input} onChange={(e) => {
+              setInput(e.target.value);
+              const el = e.target;
+              el.style.height = "auto";
+              el.style.height = Math.min(el.scrollHeight, 120) + "px";
+            }} onKeyDown={handleKeyDown}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const path = e.dataTransfer.getData("text/plain");
+                if (path) {
+                  setInput((prev) => prev ? prev + " " + path : path);
+                }
+              }}
+              placeholder="Message…" rows={1}
+              className="flex-1 bg-transparent border-0 outline-none resize-none text-[14.5px] leading-[1.5] text-(--color-foreground) placeholder:text-(--color-ink-3) px-2 py-1.5"
+              style={{ minHeight: "32px", maxHeight: "120px" }} />
+            {isRunning ? (
+              <button onClick={handleInterrupt}
+                className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 bg-(--color-danger) text-white transition-colors hover:opacity-90"
+                title="Stop">
+                <Square size={11} fill="currentColor" />
+              </button>
+            ) : (
+              <button onClick={handleSend} disabled={!input.trim() || agentState !== "waiting"}
+                className={cn("w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-colors", "bg-(--color-foreground) text-white", "hover:bg-black disabled:opacity-30 disabled:cursor-not-allowed")}
+                title="Send">
+                <ArrowUp size={14} strokeWidth={2.5} />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+    </>
+  );
+}
