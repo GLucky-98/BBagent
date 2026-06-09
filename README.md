@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/brand/logo.svg" alt="BBagent logo" width="520">
-</p>
-
 # BBagent
 
 > **Building Block Agent** — Stack Agents, Compose Teams
@@ -16,8 +12,6 @@
 BBagent 是一个自己实现的智能体开发框架：核心库不依赖 LangChain / AutoGen / CrewAI 等外部 Agent 封装库，后端基于 FastAPI，前端提供一个可运行多 Agent / Team 的 Web Workspace。
 
 它的目标不是把 Agent 包成黑盒，而是把 Agent、Team、Session、Tool、Hook、MCP、Skill 拆成可以组合、可以调试、可以长期演化的 building blocks。
-
-![BBagent — Stack Agents, Compose Teams](assets/brand/hero.svg)
 
 ## Why BBagent
 

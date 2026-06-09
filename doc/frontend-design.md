@@ -84,6 +84,7 @@ frontend/
 │   │   ├── common/
 │   │   │   ├── FolderPicker.tsx        # 可复用文件夹选择下拉组件
 │   │   │   ├── FolderPickerModal.tsx   # 全屏居中 Modal 文件夹选择器（用于 Import 流程）
+│   │   │   ├── TemplatePicker.tsx      # 模板文件选择器（目录树 + .json 文件选择）
 │   │   │   └── ConfirmDialog.tsx       # 通用确认对话框（Yes/No/Cancel）
 │   │   └── ErrorBoundary.tsx           # 全局错误边界组件
 │   ├── store/
@@ -1864,4 +1865,69 @@ const BUILTIN_TOOL_IDS: Record<string, string> = {
   ls: "20ae9084-3a2c-413b-bdbb-86f04fb9fdd3",
 };
 ```
+
+---
+
+## 13. Template Import/Export
+
+### 13.1 Overview
+
+Template import/export allows users to save agent/team configurations as portable JSON files and restore them as form pre-fills. Templates use **human-readable names** (no UUIDs), making them portable across instances.
+
+### 13.2 Template JSON Format
+
+**Agent template:**
+```json
+{
+  "type": "agent",
+  "name": "Architect",
+  "systemPrompt": "You are an architect...",
+  "tools": ["read", "write", "bash"],
+  "skills": ["code-review"],
+  "hooks": ["built_in.memory", "built_in.compress"],
+  "hookConfig": {},
+  "toolPolicy": { "maxReadSize": 30000 }
+}
+```
+
+**Team template:**
+```json
+{
+  "type": "team",
+  "name": "CodeTeam",
+  "teamDescription": "A software engineering team...",
+  "members": [ /* AgentTemplate[] */ ],
+  "contacts": { "Architect": { "Developer": "role desc" } }
+}
+```
+
+- `model` and `workingDir` fields are intentionally excluded (not portable)
+- `hookConfig` and `toolPolicy` model references (e.g., `submodelId`, `subAgentModel`) use model **names**
+- Type detection: explicit `type` field or `members` presence → team
+
+### 13.3 Export
+
+- **Trigger**: Download button (右上角) in agent/team edit dialog header
+- **Logic**: `agentToTemplate()` in `lib/utils.ts` maps UUIDs → names using current store data
+- **Output**: Browser download of `{name}_template.json`
+
+### 13.4 Import (From Template)
+
+- **Entry**: TypeSelection now has 3 options: Single Agent / Agent Team / From Template
+- **Flow**: 
+  1. Click "From Template" → opens `TemplatePicker` (file tree modal, reuses `getFileTree` API)
+  2. User navigates directories, selects a `.json` file
+  3. File content is fetched via `readFile`, parsed, and type-detected
+  4. `resolveTemplate()` maps names → UUIDs using current store data
+  5. Unmatched names produce warning toasts but don't block
+  6. Form opens with fields pre-filled; user reviews/modifies before creating
+
+### 13.5 Files
+
+| File | Role |
+|------|------|
+| `types/index.ts` | `AgentTemplate`, `TeamTemplate`, `Template`, `TemplateResolveResult` types |
+| `lib/utils.ts` | `agentToTemplate()`, `resolveTemplate()`, `detectTemplateType()`, `downloadJson()` |
+| `components/TemplatePicker.tsx` | File tree modal for selecting `.json` template files |
+| `components/agents/AgentConfigDialog.tsx` | Export button (edit mode header) + "From Template" option in TypeSelection + import flow |
 ```

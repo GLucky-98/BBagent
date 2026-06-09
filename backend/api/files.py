@@ -11,23 +11,36 @@ from backend.schemas import FileNode
 router = APIRouter()
 
 
-def _build_tree(path: Path) -> FileNode:
-    if path.is_file():
-        stat = path.stat()
+def _build_tree(path: Path, max_depth: int | None = None) -> FileNode:
+    if not path.is_dir():
+        stat = None
+        try:
+            stat = path.stat()
+        except OSError:
+            pass
         return FileNode(
             name=path.name,
             path=str(path),
             type="file",
-            size=stat.st_size,
+            size=stat.st_size if stat else None,
             extension=path.suffix.lstrip(".") if path.suffix else None,
-            modifiedAt=int(stat.st_mtime),
+            modifiedAt=int(stat.st_mtime) if stat else None,
         )
     children = []
-    try:
-        for child in sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
-            children.append(_build_tree(child))
-    except PermissionError:
-        pass
+    if max_depth is None or max_depth > 0:
+        next_depth = max_depth - 1 if max_depth is not None else None
+        try:
+            entries = sorted(
+                (c for c in path.iterdir() if not c.name.startswith(".")),
+                key=lambda x: (not x.is_dir(), x.name.lower()),
+            )
+            for child in entries:
+                try:
+                    children.append(_build_tree(child, next_depth))
+                except (PermissionError, OSError):
+                    pass
+        except (PermissionError, OSError):
+            pass
     return FileNode(
         name=path.name,
         path=str(path),
@@ -62,11 +75,11 @@ async def list_dirs(path: str = Query(default="~")):
 
 
 @router.get("/tree")
-async def get_tree(path: str = Query(...)):
+async def get_tree(path: str = Query(...), depth: int | None = Query(default=None)):
     target = Path(path).expanduser().resolve()
     if not target.exists():
         raise HTTPException(status_code=404, detail="Path not found")
-    return _build_tree(target).model_dump(mode="json")
+    return _build_tree(target, depth).model_dump(mode="json")
 
 
 @router.get("/read")

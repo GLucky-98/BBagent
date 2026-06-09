@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { X, Bot, Users, FileText, Settings, Copy } from "lucide-react";
+import { X, Bot, Users, FileText, Settings, Copy, Download, FileJson } from "lucide-react";
 import { useAppStore } from "../../store";
-import { cn } from "../../lib/utils";
+import { cn, agentToTemplate, resolveTemplate, detectTemplateType } from "../../lib/utils";
 import { GroupedPromptPicker } from "../GroupedPromptPicker";
+import { TemplatePicker } from "../TemplatePicker";
 import type {
   SingleAgent,
   HookDescriptor,
@@ -11,9 +12,11 @@ import type {
   ToolPolicy,
   CreateAgentPayload,
   CreateTeamPayload,
+  Template,
 } from "../../types";
 import { isTeam, isSingleAgent } from "../../types";
 import { FolderPicker } from "../FolderPicker";
+import { api } from "../../lib/api";
 
 // === Field defaults ===
 
@@ -444,21 +447,26 @@ function NumField({ label, value, onChange }: { label: string; value: number | u
 
 // === TypeSelection: pick between Single Agent and Team ===
 
-function TypeSelection({ onSelect }: { onSelect: (t: "agent" | "team") => void }) {
+function TypeSelection({ onSelect, onTemplate }: { onSelect: (t: "agent" | "team") => void; onTemplate: () => void }) {
   return (
     <div className="p-6">
       <h2 className="text-lg font-semibold mb-1">Create New Agent</h2>
       <p className="text-sm text-(--color-muted-foreground) mb-6">Choose the type of agent to create</p>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <button onClick={() => onSelect("agent")}
           className="p-6 rounded-xl border-2 border-(--color-border) hover:border-(--color-primary) hover:bg-(--color-primary)/5 transition-all flex flex-col items-center gap-3">
           <div className="w-12 h-12 rounded-full bg-(--color-primary)/10 flex items-center justify-center"><Bot size={24} className="text-(--color-primary)" /></div>
-          <div className="text-center"><p className="font-medium">Single Agent</p><p className="text-xs text-(--color-muted-foreground) mt-1">Create a standalone agent</p></div>
+          <div className="text-center"><p className="font-medium">Single Agent</p><p className="text-xs text-(--color-muted-foreground) mt-1">Standalone agent</p></div>
         </button>
         <button onClick={() => onSelect("team")}
           className="p-6 rounded-xl border-2 border-(--color-border) hover:border-(--color-primary) hover:bg-(--color-primary)/5 transition-all flex flex-col items-center gap-3">
           <div className="w-12 h-12 rounded-full bg-(--color-primary)/10 flex items-center justify-center"><Users size={24} className="text-(--color-primary)" /></div>
-          <div className="text-center"><p className="font-medium">Agent Team</p><p className="text-xs text-(--color-muted-foreground) mt-1">Create a team of agents</p></div>
+          <div className="text-center"><p className="font-medium">Agent Team</p><p className="text-xs text-(--color-muted-foreground) mt-1">Team of agents</p></div>
+        </button>
+        <button onClick={onTemplate}
+          className="p-6 rounded-xl border-2 border-(--color-border) hover:border-(--color-primary) hover:bg-(--color-primary)/5 transition-all flex flex-col items-center gap-3">
+          <div className="w-12 h-12 rounded-full bg-(--color-primary)/10 flex items-center justify-center"><FileJson size={24} className="text-(--color-primary)" /></div>
+          <div className="text-center"><p className="font-medium">From Template</p><p className="text-xs text-(--color-muted-foreground) mt-1">Import a JSON template</p></div>
         </button>
       </div>
     </div>
@@ -485,6 +493,7 @@ function SingleAgentForm({
   saving,
   saveError,
   defaultWorkingDir,
+  onExport,
 }: {
   initialData?: Partial<SingleAgentFormData>;
   onSave: (data: SingleAgentFormData) => void | Promise<void>;
@@ -492,6 +501,7 @@ function SingleAgentForm({
   saveError?: string | null;
   /** Pre-fill workingDir in create mode (e.g. from team's workingDir) */
   defaultWorkingDir?: string;
+  onExport?: () => void;
 }) {
   const models = useAppStore((s) => s.models);
   const tools = useAppStore((s) => s.tools);
@@ -567,6 +577,16 @@ function SingleAgentForm({
             {saveError && <p className="text-sm text-red-500 mt-1">{saveError}</p>}
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {onExport && initialData && (
+              <button
+                onClick={onExport}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-lg border border-(--color-border) hover:bg-(--color-secondary) text-sm transition-colors"
+                title="Export as template"
+              >
+                <Download size={16} />
+                Export
+              </button>
+            )}
             {!initialData && singleAgents.length > 0 && (
               <div className="relative">
                 <button
@@ -833,9 +853,11 @@ interface TeamFormData {
 function TeamForm({
   initialData,
   onSave,
+  onExport,
 }: {
   initialData?: { name: string; teamDescription: string; workingDir?: string; members: SingleAgentFormData[]; contacts: Record<string, Record<string, string>> };
   onSave: (data: TeamFormData) => void;
+  onExport?: () => void;
 }) {
   const models = useAppStore((s) => s.models);
   const tools = useAppStore((s) => s.tools);
@@ -893,8 +915,22 @@ function TeamForm({
   if (step === 0) {
     return (
       <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
-        <h2 className="text-lg font-semibold mb-1">Configure Team</h2>
-        <p className="text-sm text-(--color-muted-foreground) mb-6">Set up team info and description</p>
+        <div className="flex items-start justify-between pr-10">
+          <div>
+            <h2 className="text-lg font-semibold mb-1">Configure Team</h2>
+            <p className="text-sm text-(--color-muted-foreground)">Set up team info and description</p>
+          </div>
+          {onExport && initialData && (
+            <button
+              onClick={onExport}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-lg border border-(--color-border) hover:bg-(--color-secondary) text-sm transition-colors shrink-0"
+              title="Export as template"
+            >
+              <Download size={16} />
+              Export
+            </button>
+          )}
+        </div>
         <div><label className="block text-sm font-medium mb-1.5">Team Name <span className="text-red-500">*</span></label>
           <input type="text" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="My Agent Team"
             disabled={!!initialData?.name}
@@ -1126,10 +1162,14 @@ function agentToFormData(agent: SingleAgent): SingleAgentFormData {
 
 export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentConfigDialogProps) {
   const agents = useAppStore((s) => s.agents);
+  const models = useAppStore((s) => s.models);
+  const tools = useAppStore((s) => s.tools);
+  const skills = useAppStore((s) => s.skills);
   const addAgent = useAppStore((s) => s.createAgentApi);
   const addTeam = useAppStore((s) => s.createTeamApi);
   const updateAgent = useAppStore((s) => s.updateAgent);
   const updateTeam = useAppStore((s) => s.updateTeam);
+  const addToast = useAppStore((s) => s.addToast);
   const [localType, setLocalType] = useState<"agent" | "team" | "">(type);
 
   useEffect(() => {
@@ -1140,25 +1180,154 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Template import state
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const [importedFormData, setImportedFormData] = useState<{
+    type: "agent" | "team";
+    agentData?: SingleAgentFormData;
+    teamData?: {
+      name: string;
+      teamDescription: string;
+      workingDir: string;
+      members: SingleAgentFormData[];
+      contacts: Record<string, Record<string, string>>;
+    };
+  } | null>(null);
+
+  const handleTemplatePicked = async (filePath: string) => {
+    try {
+      const data = await api.readFile(filePath);
+      const jsonStr = typeof data.content === "string" ? data.content : JSON.stringify(data.content ?? data);
+      const obj = JSON.parse(jsonStr);
+      const tplType = detectTemplateType(obj);
+      if (!tplType) {
+        addToast("Unrecognized template format", "warning");
+        return;
+      }
+      const template = obj as Template;
+      const resolved = resolveTemplate(
+        template,
+        models,
+        tools,
+        skills,
+      );
+      if (resolved.warnings.length > 0) {
+        for (const w of resolved.warnings) {
+          addToast(w, "warning");
+        }
+      }
+      if (resolved.type === "agent") {
+        setImportedFormData({
+          type: "agent",
+          agentData: {
+            name: resolved.name,
+            modelId: "",
+            systemPrompt: resolved.systemPrompt,
+            workingDir: "",
+            toolIds: resolved.toolIds,
+            skillIds: resolved.skillIds,
+            hookNames: resolved.hookNames,
+            toolPolicy: resolved.toolPolicy as ToolPolicy,
+            hookConfig: resolved.hookConfig,
+          },
+        });
+        setLocalType("agent");
+      } else if (resolved.type === "team" && resolved.members) {
+        setImportedFormData({
+          type: "team",
+          teamData: {
+            name: resolved.name,
+            teamDescription: resolved.teamDescription ?? "",
+            workingDir: "",
+            members: resolved.members.map((m) => ({
+              name: m.name,
+              modelId: "",
+              systemPrompt: m.systemPrompt,
+              workingDir: "",
+              toolIds: m.toolIds,
+              skillIds: m.skillIds,
+              hookNames: m.hookNames,
+              toolPolicy: m.toolPolicy as ToolPolicy,
+              hookConfig: m.hookConfig,
+            })),
+            contacts: resolved.contacts ?? {},
+          },
+        });
+        setLocalType("team");
+      }
+    } catch (e) {
+      addToast(`Failed to parse template: ${e instanceof Error ? e.message : String(e)}`, "warning");
+    }
+  };
+
+  // Export helper — saves template JSON to ./templates/ directory
+  const handleExportAgent = async () => {
+    if (existingAgent && isSingleAgent(existingAgent)) {
+      const tpl = agentToTemplate(existingAgent, models, tools, skills);
+      const jsonStr = JSON.stringify(tpl, null, 2);
+      const filePath = `./templates/${existingAgent.name}_template.json`;
+      try {
+        await api.writeFile(filePath, jsonStr);
+        addToast(`Template exported to ${filePath}`, "info");
+      } catch (e) {
+        addToast(`Export failed: ${e instanceof Error ? e.message : String(e)}`, "warning");
+      }
+    }
+  };
+
+  const handleExportTeam = async () => {
+    if (existingAgent && isTeam(existingAgent)) {
+      const memberTemplates = existingAgent.members.map((m) =>
+        agentToTemplate(m, models, tools, skills)
+      );
+      const tpl = {
+        type: "team",
+        name: existingAgent.name,
+        teamDescription: existingAgent.teamDescription ?? "",
+        members: memberTemplates,
+        contacts: existingAgent.contacts ?? {},
+      };
+      const jsonStr = JSON.stringify(tpl, null, 2);
+      const filePath = `./templates/${existingAgent.name}_template.json`;
+      try {
+        await api.writeFile(filePath, jsonStr);
+        addToast(`Template exported to ${filePath}`, "info");
+      } catch (e) {
+        addToast(`Export failed: ${e instanceof Error ? e.message : String(e)}`, "warning");
+      }
+    }
+  };
+
   if (!open) return null;
 
   if (!localType && mode === "create") {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center">
-        <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={onClose} />
-        <div className="relative w-full max-w-lg bg-(--color-background) rounded-2xl shadow-[-8px_8px_24px_rgba(0,0,0,0.08)] overflow-hidden">
-          <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-(--color-secondary) transition-colors z-10"><X size={18} /></button>
-          <TypeSelection onSelect={(t) => setLocalType(t)} />
+      <>
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={onClose} />
+          <div className="relative w-full max-w-2xl bg-(--color-background) rounded-2xl shadow-[-8px_8px_24px_rgba(0,0,0,0.08)] overflow-hidden">
+            <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-(--color-secondary) transition-colors z-10"><X size={18} /></button>
+            <TypeSelection
+              onSelect={(t) => { setLocalType(t); setImportedFormData(null); }}
+              onTemplate={() => setTemplatePickerOpen(true)}
+            />
+          </div>
         </div>
-      </div>
+        <TemplatePicker
+          open={templatePickerOpen}
+          onClose={() => setTemplatePickerOpen(false)}
+          onSelect={handleTemplatePicked}
+        />
+      </>
     );
   }
+
+  const hasImportData = importedFormData !== null;
 
   const handleSingleSave = async (data: SingleAgentFormData) => {
     setError(null);
     setSaving(true);
     try {
-      // Sync workingDir into toolPolicy.cwd so backend always has cwd
       const toolPolicyWithCwd = { ...data.toolPolicy, cwd: data.workingDir };
       const payload: CreateAgentPayload = {
         name: data.name,
@@ -1225,15 +1394,16 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
         <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-(--color-secondary) transition-colors z-10"><X size={18} /></button>
         {effectiveType === "agent" && (
           <SingleAgentForm
-            initialData={existingAgent && isSingleAgent(existingAgent) ? agentToFormData(existingAgent) : undefined}
+            initialData={hasImportData ? importedFormData.agentData : (existingAgent && isSingleAgent(existingAgent) ? agentToFormData(existingAgent) : undefined)}
             onSave={handleSingleSave}
             saving={saving}
             saveError={error}
+            onExport={mode === "edit" && existingAgent && isSingleAgent(existingAgent) ? handleExportAgent : undefined}
           />
         )}
         {effectiveType === "team" && existingAgent && isTeam(existingAgent) && (
           <TeamForm
-            initialData={{
+            initialData={hasImportData ? importedFormData.teamData : {
               name: existingAgent.name,
               teamDescription: existingAgent.teamDescription ?? "",
               workingDir: existingAgent.workingDir ?? existingAgent.baseDir ?? "",
@@ -1250,10 +1420,15 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
               })),
               contacts: existingAgent.contacts ?? {},
             }}
-            onSave={handleTeamSave} />
+            onSave={handleTeamSave}
+            onExport={mode === "edit" ? handleExportTeam : undefined}
+          />
         )}
         {effectiveType === "team" && !existingAgent && (
-          <TeamForm onSave={handleTeamSave} />
+          <TeamForm
+            initialData={hasImportData ? importedFormData.teamData : undefined}
+            onSave={handleTeamSave}
+          />
         )}
       </div>
     </div>

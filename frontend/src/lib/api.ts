@@ -91,7 +91,11 @@ export const api = {
   getTeamMessages: (id: string) => request(`/teams/${id}/messages`),
 
   // Files
-  getFileTree: (path: string) => request(`/files/tree?path=${encodeURIComponent(path)}`),
+  getFileTree: (path: string, depth?: number) => {
+    const params = new URLSearchParams({ path });
+    if (depth !== undefined) params.set("depth", String(depth));
+    return request(`/files/tree?${params.toString()}`);
+  },
   readFile: (path: string) => request(`/files/read?path=${encodeURIComponent(path)}`),
   writeFile: (path: string, content: string) => request("/files/write", { method: "POST", body: JSON.stringify({ path, content }) }),
   listDirs: (path: string) => request(`/files/dirs?path=${encodeURIComponent(path)}`),

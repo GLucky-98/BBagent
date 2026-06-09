@@ -250,3 +250,46 @@ export interface TurnInfo {
   endTimestamp: number;
   messageCount: number;
 }
+
+// === Template types for import/export ===
+
+// Human-readable agent template (no UUIDs — just names)
+export interface AgentTemplate {
+  type: "agent";
+  name: string;
+  systemPrompt: string;
+  tools: string[];
+  skills: string[];
+  hooks: string[];
+  hookConfig: Record<string, unknown>;
+  toolPolicy: Record<string, unknown>;
+}
+
+// Human-readable team template (no UUIDs — just names)
+export interface TeamTemplate {
+  type: "team";
+  name: string;
+  teamDescription: string;
+  members: AgentTemplate[];
+  contacts: Record<string, Record<string, string>>;
+}
+
+export type Template = AgentTemplate | TeamTemplate;
+
+// Resolved result — names mapped to IDs, with warnings for unmatched names
+export interface TemplateResolveResult {
+  type: "agent" | "team";
+  warnings: string[];
+  // Agent form data
+  name: string;
+  systemPrompt: string;
+  toolIds: string[];
+  skillIds: string[];
+  hookNames: string[];
+  hookConfig: Record<string, unknown>;
+  toolPolicy: Record<string, unknown>;
+  // Team-only fields
+  teamDescription?: string;
+  members?: TemplateResolveResult[];
+  contacts?: Record<string, Record<string, string>>;
+}
