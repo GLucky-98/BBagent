@@ -63,7 +63,7 @@ export function OnboardingStep({
         onClick={onAction}
         disabled={status === "completed"}
         className={cn(
-          "shrink-0 px-3 h-7 text-[12px] font-medium rounded-md transition-colors",
+          "shrink-0 w-20 h-7 text-[12px] font-medium rounded-md transition-colors",
           status === "completed"
             ? "text-(--color-success) cursor-default"
             : "bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90"

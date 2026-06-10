@@ -94,6 +94,7 @@ function SessionRow({
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (session.is_active) return;
     if (!confirm(`Delete session ${session.session_id.substring(0, 16)}...?`)) return;
     setDeleting(true);
     try {
@@ -144,7 +145,7 @@ function SessionRow({
         <button
           onClick={handleDelete}
           disabled={deleting || session.is_active}
-          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-100 text-red-400 transition-opacity shrink-0 disabled:opacity-30"
+          className="p-1 rounded text-red-400 hover:bg-red-100 hover:text-red-600 transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-red-400"
           title={session.is_active ? "Cannot delete active session" : "Delete session"}
         >
           {deleting ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}

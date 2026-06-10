@@ -13,6 +13,7 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from "d3-force";
+import type { SimulationNodeDatum, SimulationLinkDatum } from "d3-force";
 import "@xyflow/react/dist/style.css";
 import { LayoutGrid, Network, X, MoreHorizontal } from "lucide-react";
 import { useAppStore } from "../../store";
@@ -97,10 +98,10 @@ function layoutWithForce(
     target: e.target,
   }));
 
-  const simulation = forceSimulation(simNodes as d3.SimulationNodeDatum[])
+  const simulation = forceSimulation(simNodes as SimulationNodeDatum[])
     .force(
       "link",
-      forceLink(simLinks as d3.SimulationLinkDatum<d3.SimulationNodeDatum>[])
+      forceLink(simLinks as SimulationLinkDatum<SimulationNodeDatum>[])
         .id((d: any) => d.id)
         .distance(160),
     )

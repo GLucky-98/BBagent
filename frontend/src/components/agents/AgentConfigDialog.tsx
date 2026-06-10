@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Bot, Users, FileText, Settings, Copy, Download, FileJson } from "lucide-react";
+import { X, Bot, Users, FileText, Settings, Copy, Download, FileJson, AlertCircle } from "lucide-react";
 import { useAppStore } from "../../store";
 import { cn, agentToTemplate, resolveTemplate, detectTemplateType } from "../../lib/utils";
 import { GroupedPromptPicker } from "../GroupedPromptPicker";
@@ -26,7 +26,7 @@ const DEFAULT_TOOL_POLICY: ToolPolicy = {
   bashDefaultTimeout: 60,
 };
 
-const DEFAULT_HOOK_NAMES: string[] = ["built_in.memory", "built_in.compress"];
+const DEFAULT_HOOK_NAMES: string[] = ["built_in.compress"];
 
 // === HookConfigDialog: dynamic form driven by hooksDescriptor ===
 
@@ -911,6 +911,11 @@ function TeamForm({
     setEditingMemberIdx(null);
   };
 
+  const membersWithInvalidModel = members.filter((m) =>
+    !m.modelId || !models.some((mod) => mod.id === m.modelId)
+  );
+  const hasInvalidMemberModel = membersWithInvalidModel.length > 0;
+
   // Step 0: Team info
   if (step === 0) {
     return (
@@ -1006,50 +1011,70 @@ function TeamForm({
           {members.length === 0 && (
             <p className="text-sm text-(--color-muted-foreground) text-center py-8">No agents yet. Click &quot;Add Agent&quot; to get started.</p>
           )}
-          {members.map((m, i) => (
-            <div key={`${m.name}-${i}`} className="flex items-center justify-between p-3 rounded-lg border border-(--color-border) bg-(--color-secondary)/20">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium truncate">{m.name}</p>
-                <p className="text-xs text-(--color-muted-foreground)">{models.find((mod) => mod.id === m.modelId)?.name ?? "No model"}</p>
-                <div className="flex items-center gap-1 mt-1 flex-wrap">
-                  {m.toolIds.map((tn: string) => {
-                    const tool = tools.find((t) => t.id === tn);
-                    return (
-                      <span key={tn} className="px-1.5 py-0.5 text-[10px] rounded bg-(--color-muted)/30 text-(--color-muted-foreground)">{tool?.name ?? tn}</span>
-                    );
-                  })}
-                  {m.skillIds.map((sn: string) => {
-                    const skill = skills.find((s) => (s.id || s.name) === sn);
-                    return (
-                      <span key={sn} className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700">{skill?.name ?? sn}</span>
-                    );
-                  })}
-                  {m.hookNames.map((hn: string) => (
-                    <span key={hn} className="px-1.5 py-0.5 text-[10px] rounded bg-violet-100 text-violet-700">{hn}</span>
-                  ))}
+          {members.map((m, i) => {
+            const model = models.find((mod) => mod.id === m.modelId);
+            const modelStatus = !m.modelId
+              ? "Model required"
+              : model
+                ? model.name
+                : "Model unavailable";
+            const modelInvalid = !model;
+            return (
+              <div key={`${m.name}-${i}`} className="flex items-center justify-between p-3 rounded-lg border border-(--color-border) bg-(--color-secondary)/20">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{m.name}</p>
+                  <p className={cn(
+                    "text-xs",
+                    modelInvalid ? "text-amber-700 font-medium" : "text-(--color-muted-foreground)"
+                  )}>
+                    {modelStatus}
+                  </p>
+                  <div className="flex items-center gap-1 mt-1 flex-wrap">
+                    {m.toolIds.map((tn: string) => {
+                      const tool = tools.find((t) => t.id === tn);
+                      return (
+                        <span key={tn} className="px-1.5 py-0.5 text-[10px] rounded bg-(--color-muted)/30 text-(--color-muted-foreground)">{tool?.name ?? tn}</span>
+                      );
+                    })}
+                    {m.skillIds.map((sn: string) => {
+                      const skill = skills.find((s) => (s.id || s.name) === sn);
+                      return (
+                        <span key={sn} className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700">{skill?.name ?? sn}</span>
+                      );
+                    })}
+                    {m.hookNames.map((hn: string) => (
+                      <span key={hn} className="px-1.5 py-0.5 text-[10px] rounded bg-violet-100 text-violet-700">{hn}</span>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex gap-1 shrink-0 ml-2">
+                  <button onClick={() => { setEditingMemberIdx(i); setMemberError(""); }}
+                    className="px-2 py-1 text-xs rounded hover:bg-(--color-secondary)">Edit</button>
+                  <button onClick={() => {
+                    const updated = members.filter((_, j) => j !== i);
+                    setMembers(updated);
+                    setContacts(syncContacts(updated, contacts));
+                  }}
+                    className="px-2 py-1 text-xs rounded hover:bg-red-50 text-(--color-danger)">Remove</button>
                 </div>
               </div>
-              <div className="flex gap-1 shrink-0 ml-2">
-                <button onClick={() => { setEditingMemberIdx(i); setMemberError(""); }}
-                  className="px-2 py-1 text-xs rounded hover:bg-(--color-secondary)">Edit</button>
-                <button onClick={() => {
-                  const updated = members.filter((_, j) => j !== i);
-                  setMembers(updated);
-                  setContacts(syncContacts(updated, contacts));
-                }}
-                  className="px-2 py-1 text-xs rounded hover:bg-red-50 text-(--color-danger)">Remove</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+        {hasInvalidMemberModel && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>Select a valid model for every team member before configuring contacts.</span>
+          </div>
+        )}
         <button onClick={() => { setEditingMemberIdx(members.length); setMemberError(""); }}
           className="w-full py-2.5 rounded-lg border-2 border-dashed border-(--color-border) hover:border-(--color-primary) hover:bg-(--color-primary)/5 transition-all text-sm text-(--color-muted-foreground)">
           + Add Agent
         </button>
         <div className="flex gap-2 mt-4">
           <button onClick={() => setStep(0)} className="flex-1 py-2 rounded-lg border border-(--color-border) hover:bg-(--color-secondary) text-sm">Back</button>
-          <button onClick={() => { setStep(2); setContacts(syncContacts(members, contacts)); }} disabled={members.length === 0}
-            className="flex-1 py-2.5 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90 disabled:opacity-50">Next: Configure Contacts</button>
+          <button onClick={() => { setStep(2); setContacts(syncContacts(members, contacts)); }} disabled={members.length === 0 || hasInvalidMemberModel}
+            className="flex-1 py-2.5 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed">Next: Configure Contacts</button>
         </div>
       </div>
     );

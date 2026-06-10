@@ -13,6 +13,36 @@ BBagent 是一个自己实现的智能体开发框架：核心库不依赖 LangC
 
 它的目标不是把 Agent 包成黑盒，而是把 Agent、Team、Session、Tool、Hook、MCP、Skill 拆成可以组合、可以调试、可以长期演化的 building blocks。
 
+## Key Features
+
+| 能力 | 说明 |
+|---|---|
+| Composable Agent Core | Agent、Session、Tool、Hook、MCP、Skill 都是仓库内直接实现的可组合模块 |
+| AgentTeam | 通过 `contacts` 描述多 Agent 通讯图，运行时注入 `send_message` / `broadcast` |
+| Session Fork | Session 是可保存、加载、跨 Agent 传递和分叉的全局上下文资产 |
+| Web Workspace | 用 React + FastAPI 管理 Model、Agent、Team、Skill、MCP、Prompt 和运行会话 |
+| Built-in Tools | 内置 read/write/edit/bash/grep/find/ls/sub_agent 等 coding agent 原子工具 |
+| Hooks & Memory | 支持上下文压缩、长期记忆等生命周期扩展能力 |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI["React Web Workspace"] --> API["FastAPI Backend"]
+    API --> State["State Manager & Factories"]
+    State --> Data["data/ runtime configs and sessions"]
+    State --> Core["bbagent Core"]
+    Core --> Agent["Agent"]
+    Core --> Team["AgentTeam"]
+    Core --> Session["Session"]
+    Agent --> Model["Model Providers"]
+    Agent --> Tools["Tools"]
+    Agent --> Hooks["Hooks"]
+    Agent --> MCP["MCP Clients"]
+    Agent --> Skills["Skills"]
+    Team --> Agent
+```
+
 ## Why BBagent
 
 ### 1. AgentTeam 自由搭建
@@ -33,19 +63,23 @@ Reviewer -> Architect
 
 仓库里预置了一个 `CodeTeam` 示例，包含 `Analyst / Architect / Developer / Reviewer / Tester / Documenter` 六个成员。
 
+![CodeTeam team chat and graph view](assets/readme/team.png)
+
 ### 2. Session 是全局上下文资产
 
 在 BBagent 里，`Session` 不是某个 Agent 私有的聊天记录，而是一个可以保存、加载、传递、fork 的上下文资产。
 
 你可以让 Agent A 先分析问题，再把同一个 Session 交给 Agent B 继续处理；也可以在某个 turn 分叉出多条探索路线。这个设计适合长任务、多 Agent 协作、方案对比和可回放调试。
 
+![Session history and fork controls](assets/readme/sessionfork.png)
+
 ### 3. 核心库小而可改
 
-核心实现位于 [`BBagent/`](BBagent/)，Agent 循环、消息结构、Tool、Hook、MCP、Skill、Team 都在仓库内直接实现。你可以把它作为独立 Python 包嵌入自己的项目，也可以直接阅读和修改核心流程。
+核心实现位于 [`bbagent/`](bbagent/)，Agent 循环、消息结构、Tool、Hook、MCP、Skill、Team 都在仓库内直接实现。你可以把它作为独立 Python 包嵌入自己的项目，也可以直接阅读和修改核心流程。
 
 ```python
-from BBagent.core.agent import Agent, AgentConfig
-from BBagent.core.message import Session
+from bbagent.core.agent import Agent, AgentConfig
+from bbagent.core.message import Session
 ```
 
 ### 4. Web Workspace
@@ -108,15 +142,26 @@ BBagent 预置两个 Hook 子系统：
 
 ## Quickstart
 
-### 1. 安装 Python 包
+### 1. 准备环境
+
+- Python 3.10+
+- Node.js 和 npm（仅在需要重新构建前端时使用）
+
+### 2. 安装 Python 包
 
 ```bash
 git clone https://github.com/LILG98/BBagent.git
 cd BBagent
-pip install -e .
+pip install -e ".[web]"
 ```
 
-### 2. 构建前端
+如果要启用内置长期记忆相关能力，可以安装：
+
+```bash
+pip install -e ".[web,memory]"
+```
+
+### 3. 构建前端
 
 如果 `frontend/dist` 已存在，可以跳过这一步。否则先构建前端静态文件：
 
@@ -127,23 +172,25 @@ npm run build
 cd ..
 ```
 
-### 3. 启动 Web 应用
+### 4. 启动 Web 应用
 
 ```bash
 python run.py
 ```
 
-服务默认监听 `http://localhost:8000`。
+服务默认监听 `http://localhost:8000`，健康检查接口是 `http://localhost:8000/health`。
 
-启动后进入 Settings 配置至少一个模型。OpenAI 兼容、Anthropic、Ollama / vLLM 一类兼容 `/v1/chat/completions` 的服务都可以通过模型配置接入。
+启动后进入 Settings 配置至少一个模型。OpenAI 兼容、Anthropic、Ollama / vLLM 一类兼容 `/v1/chat/completions` 的服务都可以通过模型配置接入；兼容服务通常需要填写 `baseUrl`、`apiKey` 和实际 `modelName`。
 
-### 4. 查看预置示例
+![BBagent onboarding screen](assets/readme/onboarding.png)
 
-仓库的 `data/` 目录中包含一些预置配置：
+### 5. 查看示例模板
 
-- `GL`：通用单 Agent 示例
-- `Analyst / Architect / Developer / Reviewer / Tester / Documenter`：CodeTeam 成员
-- `CodeTeam`：一个多 Agent 协作 Team 示例
+仓库提供了一个可导入的 Team 模板：
+
+- [`templates/CodeTeam_template.json`](templates/CodeTeam_template.json)：包含 `Analyst / Architect / Developer / Reviewer / Tester / Documenter` 六个成员的多 Agent 协作示例。
+
+首次启动后端时会自动创建 `data/` 目录。你在 Web Workspace 中创建或导入的 Model、Agent、Team、Skill、MCP、Prompt、Session 和日志会持久化到这里。
 
 ## Use Core Library
 
@@ -152,9 +199,9 @@ python run.py
 ```python
 import asyncio
 
-from BBagent.core.agent import Agent, AgentConfig
-from BBagent.core.message import HumanMessage
-from BBagent.core.model import AnthropicModel
+from bbagent.core.agent import Agent, AgentConfig
+from bbagent.core.message import HumanMessage
+from bbagent.core.model import AnthropicModel
 
 
 model = AnthropicModel(
@@ -181,7 +228,7 @@ asyncio.run(main())
 ### Add Built-in Tools
 
 ```python
-from BBagent.built_in_tool import create_coding_tools
+from bbagent.built_in_tool import create_coding_tools
 
 tools = await create_coding_tools()
 agent.add_tools(list(tools.values()))
@@ -190,7 +237,7 @@ agent.add_tools(list(tools.values()))
 ### Add Built-in Hooks
 
 ```python
-from BBagent.built_in_hook import HOOK_CREATOR
+from bbagent.built_in_hook import HOOK_CREATOR
 
 HOOK_CREATOR["built_in.compress"](agent)
 HOOK_CREATOR["built_in.memory"](agent)
@@ -202,7 +249,7 @@ HOOK_CREATOR["built_in.memory"](agent)
 ### Build a Team
 
 ```python
-from BBagent.core.team import AgentTeam, TeamConfig
+from bbagent.core.team import AgentTeam, TeamConfig
 
 team = AgentTeam.create(TeamConfig(
     name="CodeTeam",
@@ -232,24 +279,27 @@ Team 运行后，成员之间会通过注入的 `send_message` / `broadcast` 工
 
 ```text
 BBagent/
-├── BBagent/                 # Core Python library
+├── bbagent/                 # Core Python library
 │   ├── core/                # Agent, Team, Message/Session, Tool, Hook, MCP, Skill, Model
 │   ├── built_in_tool/       # read/write/edit/bash/grep/find/ls/sub_agent
 │   └── built_in_hook/       # context compression and memory hooks
 ├── backend/                 # FastAPI app, REST APIs, WebSocket APIs, state factories
 ├── frontend/                # React + TypeScript + Vite Web Workspace
-├── data/                    # Local persisted agents, teams, models, tools, prompts, skills, MCPs
+├── data/                    # Runtime directory, auto-created on first launch
 ├── doc/                     # Design docs and implementation notes
-├── test/                    # Tests and test notes
 ├── run.py                   # One-command backend launcher
 └── pyproject.toml           # Python package metadata
 ```
 
-## Docs
+## Developer Notes
 
-- [Frontend Design](doc/frontend-design.md)
-- [Backend Design](doc/backend-design.md)
-- [API Mapping](doc/api-mapping.md)
+- [Frontend Design](doc/frontend-design.md)：Web Workspace 的页面结构、组件组织和交互设计。
+- [Backend Design](doc/backend-design.md)：FastAPI 后端、状态管理、工厂层和运行时数据目录。
+- [API Mapping](doc/api-mapping.md)：前后端 REST / WebSocket API 对照。
+- 新增 Tool：参考 [`bbagent/core/tool.py`](bbagent/core/tool.py) 和 [`bbagent/built_in_tool/`](bbagent/built_in_tool/)。
+- 新增 Hook：参考 [`bbagent/core/hook.py`](bbagent/core/hook.py) 和 [`bbagent/built_in_hook/`](bbagent/built_in_hook/)。
+- 新增 Skill：参考 [`bbagent/core/skill.py`](bbagent/core/skill.py)，Skill 以文件夹式能力包组织 prompt、工具和配置。
+- 接入 MCP：参考 [`bbagent/core/mcp.py`](bbagent/core/mcp.py) 和后端 MCP 配置接口。
 
 ## License
 
