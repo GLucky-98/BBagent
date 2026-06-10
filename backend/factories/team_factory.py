@@ -11,8 +11,8 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from BBagent.core.agent import Agent
-from BBagent.core.team import AgentTeam, TeamConfig as CoreTeamConfig
+from bbagent.core.agent import Agent
+from bbagent.core.team import AgentTeam, TeamConfig as CoreTeamConfig
 
 from backend.schemas import TeamConfig, AgentConfig
 from backend.factories import _next_id

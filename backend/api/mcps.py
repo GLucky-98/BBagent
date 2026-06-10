@@ -85,7 +85,7 @@ async def import_mcps(req: ImportRequest):
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=400, detail="Not a valid directory")
 
-    from BBagent.core.mcp import parse_config_dict
+    from bbagent.core.mcp import parse_config_dict
 
     logger.info(f"Importing MCP servers from: {target}")
 

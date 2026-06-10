@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
-from BBagent.core.mcp import (
+from bbagent.core.mcp import (
     MCPClient,
     MCPServerConfig as CoreMCPServerConfig,
     parse_config_dict as _parse_mcp_dict,

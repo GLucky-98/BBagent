@@ -14,7 +14,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from BBagent.core.message import Session, Turn, HumanMessage, Message
+from bbagent.core.message import Session, Turn, HumanMessage, Message
 
 from backend.errors import NotFoundError, ErrorCode, ConflictError
 from backend.logging import get_backend_logger

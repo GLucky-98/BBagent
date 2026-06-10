@@ -22,13 +22,13 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from BBagent.core.agent import Agent, AgentConfig as CoreAgentConfig
-from BBagent.core.message import Session
-from BBagent.core.mcp import MCPClient
-from BBagent.core.tool import Tool
-from BBagent.built_in_tool import TOOL_CREATOR
-from BBagent.built_in_tool.policy import Policy
-from BBagent.built_in_hook import HOOK_CREATOR, BuiltinHookConfig
+from bbagent.core.agent import Agent, AgentConfig as CoreAgentConfig
+from bbagent.core.message import Session
+from bbagent.core.mcp import MCPClient
+from bbagent.core.tool import Tool
+from bbagent.built_in_tool import TOOL_CREATOR
+from bbagent.built_in_tool.policy import Policy
+from bbagent.built_in_hook import HOOK_CREATOR, BuiltinHookConfig
 
 from backend.schemas import AgentConfig, TimerConfig
 from backend.dispatcher import AgentOutputDispatcher

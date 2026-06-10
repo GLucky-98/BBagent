@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from BBagent.core.model import Model
+from bbagent.core.model import Model
 
 from backend.schemas import ModelConfig
 from backend.errors import NotFoundError, ErrorCode

@@ -10,7 +10,7 @@ the canonical BuiltinHookConfig dataclass so they stay in sync.
 """
 from fastapi import APIRouter
 
-from BBagent.built_in_hook import HOOK_CREATOR, BuiltinHookConfig
+from bbagent.built_in_hook import HOOK_CREATOR, BuiltinHookConfig
 
 from backend.schemas import (
     HookDescriptor,

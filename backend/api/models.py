@@ -2,8 +2,8 @@ from fastapi import APIRouter, HTTPException
 
 from backend.state import state_manager
 from backend.schemas import ModelConfig, ModelTestRequest
-from BBagent.core.model import Model, Model_Input
-from BBagent.core.message import TextBlock, HumanMessage
+from bbagent.core.model import Model, Model_Input
+from bbagent.core.message import TextBlock, HumanMessage
 
 router = APIRouter()
 

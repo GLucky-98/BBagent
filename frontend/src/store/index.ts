@@ -198,7 +198,7 @@ export interface AppState {
 }
 
 // Builtin tool UUIDs must match backend's BUILTIN_TOOL_IDS
-// (BBagent/built_in_tool/__init__.py). Used as the React key / id when the
+// (bbagent/built_in_tool/__init__.py). Used as the React key / id when the
 // API listTools() response is not yet available.
 const BUILTIN_TOOL_IDS: Record<string, string> = {
   bash: "5a40e5e1-6931-4126-b142-581379f4f2eb",

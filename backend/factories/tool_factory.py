@@ -9,8 +9,8 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from BBagent.built_in_tool import TOOL_CREATOR
-from BBagent.core.tool import Tool
+from bbagent.built_in_tool import TOOL_CREATOR
+from bbagent.core.tool import Tool
 
 from backend.schemas import ToolConfig
 from backend.factories import _builtin_tool_id, _mcp_tool_id, _safe_filename

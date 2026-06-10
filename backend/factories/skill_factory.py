@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from BBagent.core.skill import Skill, scan_skills, parse_skill_md
+from bbagent.core.skill import Skill, scan_skills, parse_skill_md
 
 from backend.schemas import SkillConfig
 from backend.factories import _skill_id, _safe_filename

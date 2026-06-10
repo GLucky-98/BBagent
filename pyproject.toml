@@ -77,11 +77,11 @@ Documentation = "https://github.com/LILG98/BBagent#readme"
 bbagent-server = "run:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["BBagent"]
+packages = ["bbagent"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "BBagent",
+    "bbagent",
     "backend",
     "run.py",
     "README.md",
@@ -92,7 +92,7 @@ include = [
 ]
 
 [tool.hatch.version]
-path = "BBagent/__init__.py"
+path = "bbagent/__init__.py"
 
 [tool.ruff]
 line-length = 110
@@ -155,9 +155,9 @@ module = ["BBagent.built_in_hook.memory.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]
-source = ["BBagent", "backend"]
+source = ["bbagent", "backend"]
 omit = [
-    "BBagent/built_in_hook/memory/*",
+    "bbagent/built_in_hook/memory/*",
 ]
 
 [tool.coverage.report]
