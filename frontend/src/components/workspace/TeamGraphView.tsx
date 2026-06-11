@@ -5,7 +5,6 @@ import {
   Controls,
   Handle,
   Position,
-  getBezierPath,
   MarkerType,
   EdgeLabelRenderer,
   type Node,
@@ -45,6 +44,8 @@ interface TeamNodeData extends Record<string, unknown> {
   label: string;
   state: AgentState;
   color: string;
+  anchorPosition: Position;
+  anchorOffset: { x: number; y: number };
   contactOutCount: number;
   contactInCount: number;
   sentCount: number;
@@ -76,6 +77,8 @@ interface TeamEdgeData extends Record<string, unknown> {
   latestTs?: number;
   latestMessage?: RecentMessage;
   recentMessages: RecentMessage[];
+  sourceAnchor: { x: number; y: number };
+  targetAnchor: { x: number; y: number };
   thickness: number;
   pulseCount: number;
   relationFocus: RelationFocus;
@@ -158,10 +161,9 @@ const FOCUS_COLOR: Record<Exclude<RelationFocus, null>, string> = {
   bidirectional: "#8b5cf6",
 };
 
-const NODE_WIDTH = 148;
-const NODE_HEIGHT = 70;
-const NODE_GAP_X = 54;
-const NODE_GAP_Y = 112;
+const NODE_WIDTH = 96;
+const NODE_HEIGHT = 92;
+const AVATAR_SIZE = 58;
 const MSG_PAGE_SIZE = 30;
 
 function getNodeColor(index: number): string {
@@ -195,6 +197,23 @@ function relationId(source: string, target: string, bidirectional = false) {
   return bidirectional
     ? `relation-${pairKey(source, target)}`
     : `relation-${source}->${target}`;
+}
+
+function anchorPositionForAngle(angle: number): Position {
+  const x = Math.cos(angle);
+  const y = Math.sin(angle);
+  if (Math.abs(x) >= Math.abs(y)) {
+    return x >= 0 ? Position.Left : Position.Right;
+  }
+  return y >= 0 ? Position.Top : Position.Bottom;
+}
+
+function innerAnchorOffsetForAngle(angle: number) {
+  const radius = AVATAR_SIZE / 2;
+  return {
+    x: NODE_WIDTH / 2 - Math.cos(angle) * radius,
+    y: radius - Math.sin(angle) * radius,
+  };
 }
 
 function getMessageTargets(
@@ -300,90 +319,34 @@ function buildRelations(
 
 function buildLayout(
   members: SingleAgent[],
-  relations: TeamRelation[],
   width: number,
   height: number,
 ) {
-  const oneWayRelations = relations.filter(
-    (relation) => !relation.bidirectional && !relation.activityOnly,
-  );
-  const adjacency = new Map<string, string[]>();
-  const indegree = new Map<string, number>();
-
-  for (const member of members) {
-    adjacency.set(member.id, []);
-    indegree.set(member.id, 0);
-  }
-
-  for (const relation of oneWayRelations) {
-    adjacency.get(relation.source)?.push(relation.target);
-    indegree.set(relation.target, (indegree.get(relation.target) || 0) + 1);
-  }
-
-  const levels = new Map<string, number>();
-  const roots = members
-    .filter((member) => (indegree.get(member.id) || 0) === 0)
-    .map((member) => member.id);
-
-  if (oneWayRelations.length > 0 && roots.length > 0) {
-    const queue = roots.map((id) => ({ id, level: 0 }));
-    for (const root of roots) levels.set(root, 0);
-
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      for (const next of adjacency.get(current.id) || []) {
-        const nextLevel = current.level + 1;
-        if (!levels.has(next) || nextLevel > (levels.get(next) || 0)) {
-          levels.set(next, nextLevel);
-          queue.push({ id: next, level: nextLevel });
-        }
-      }
-    }
-
-    for (const member of members) {
-      if (!levels.has(member.id)) levels.set(member.id, 0);
-    }
-
-    const byLevel = new Map<number, SingleAgent[]>();
-    for (const member of members) {
-      const level = levels.get(member.id) || 0;
-      byLevel.set(level, [...(byLevel.get(level) || []), member]);
-    }
-
-    const layout = new Map<string, { x: number; y: number }>();
-    const maxLevel = Math.max(...Array.from(byLevel.keys()), 0);
-    const totalHeight = maxLevel * (NODE_HEIGHT + NODE_GAP_Y) + NODE_HEIGHT;
-    const startY = Math.max(36, (height - totalHeight) / 2);
-
-    for (const [level, levelMembers] of byLevel.entries()) {
-      const totalWidth =
-        levelMembers.length * NODE_WIDTH +
-        Math.max(0, levelMembers.length - 1) * NODE_GAP_X;
-      const startX = Math.max(24, (width - totalWidth) / 2);
-      levelMembers.forEach((member, index) => {
-        layout.set(member.id, {
-          x: startX + index * (NODE_WIDTH + NODE_GAP_X),
-          y: startY + level * (NODE_HEIGHT + NODE_GAP_Y),
-        });
-      });
-    }
-    return layout;
-  }
-
-  const layout = new Map<string, { x: number; y: number }>();
+  const layout = new Map<string, { x: number; y: number; angle: number; anchorPosition: Position; anchorOffset: { x: number; y: number } }>();
   const cx = Math.max(width / 2 - NODE_WIDTH / 2, 80);
   const cy = Math.max(height / 2 - NODE_HEIGHT / 2, 80);
-  const radius = Math.max(
-    120,
-    Math.min(width, height) * 0.32,
-    members.length * 18,
+  const availableRadius = Math.max(
+    128,
+    Math.min(
+      (width - NODE_WIDTH) / 2 - 16,
+      (height - NODE_HEIGHT) / 2 - 16,
+    ),
   );
+  const desiredRadius = Math.max(
+    168,
+    Math.min(width, height) * 0.43,
+    members.length * 24,
+  );
+  const radius = Math.min(desiredRadius, availableRadius);
 
   members.forEach((member, index) => {
     const angle = (Math.PI * 2 * index) / Math.max(members.length, 1) - Math.PI / 2;
     layout.set(member.id, {
       x: cx + radius * Math.cos(angle),
       y: cy + radius * Math.sin(angle),
+      angle,
+      anchorPosition: anchorPositionForAngle(angle),
+      anchorOffset: innerAnchorOffsetForAngle(angle),
     });
   });
   return layout;
@@ -419,7 +382,7 @@ function buildTeamMapData({
   );
 
   const relations = buildRelations(members, contacts, messageTargets);
-  const layout = buildLayout(members, relations, dimensions.width, dimensions.height);
+  const layout = buildLayout(members, dimensions.width, dimensions.height);
 
   const contactOut = new Map<string, number>();
   const contactIn = new Map<string, number>();
@@ -492,8 +455,20 @@ function buildTeamMapData({
   members.forEach((member, index) => colorById.set(member.id, getNodeColor(index)));
 
   const nodeSummaries: Record<string, TeamNodeData> = {};
+  const anchorById = new Map<string, { x: number; y: number }>();
   const nodes: Node<TeamNodeData>[] = members.map((member, index) => {
-    const position = layout.get(member.id) || { x: 0, y: 0 };
+    const layoutPosition = layout.get(member.id);
+    const position = layoutPosition
+      ? { x: layoutPosition.x, y: layoutPosition.y }
+      : { x: 0, y: 0 };
+    const anchorOffset = layoutPosition?.anchorOffset || {
+      x: NODE_WIDTH / 2,
+      y: AVATAR_SIZE,
+    };
+    anchorById.set(member.id, {
+      x: position.x + anchorOffset.x,
+      y: position.y + anchorOffset.y,
+    });
     const selected = selectedNodeId === member.id;
     const dimmed =
       !!selection &&
@@ -503,6 +478,8 @@ function buildTeamMapData({
       label: member.name,
       state: getState(agentStates[member.id] || member.state),
       color: colorById.get(member.id) || getNodeColor(index),
+      anchorPosition: layoutPosition?.anchorPosition || Position.Bottom,
+      anchorOffset,
       contactOutCount: contactOut.get(member.id) || 0,
       contactInCount: contactIn.get(member.id) || 0,
       sentCount: sent.get(member.id) || 0,
@@ -517,6 +494,8 @@ function buildTeamMapData({
       type: "teamAgentNode",
       data,
       position,
+      sourcePosition: data.anchorPosition,
+      targetPosition: data.anchorPosition,
     };
   });
 
@@ -605,6 +584,8 @@ function buildTeamMapData({
       latestTs: latestMessage?.timestamp,
       latestMessage,
       recentMessages,
+      sourceAnchor: anchorById.get(relation.source) || { x: 0, y: 0 },
+      targetAnchor: anchorById.get(relation.target) || { x: 0, y: 0 },
       thickness,
       pulseCount: mode === "activity" && hasActivity ? Math.min(4, Math.max(1, Math.ceil(activityIntensity * 4))) : 0,
       relationFocus,
@@ -618,6 +599,8 @@ function buildTeamMapData({
       id: relation.id,
       source: relation.source,
       target: relation.target,
+      sourceHandle: "table-source",
+      targetHandle: "table-target",
       type: "teamContactEdge",
       data,
       zIndex: selected || relationFocus || active ? 20 : 0,
@@ -646,82 +629,80 @@ function buildTeamMapData({
 
 function TeamAgentNode({ data }: { data: TeamNodeData }) {
   const statusColor = STATE_COLOR[data.state];
-  const statusBg = STATE_BG[data.state];
   const initials = data.label.slice(0, 2).toUpperCase();
-  const hasActivity = data.sentCount + data.receivedCount > 0;
+  const activityCount = data.sentCount + data.receivedCount;
 
   return (
     <div
       className={cn(
-        "w-[148px] rounded-md border bg-white shadow-sm transition-all duration-200",
-        data.selected && "shadow-md ring-2 ring-(--color-primary)/25",
+        "relative w-[96px] h-[92px] flex flex-col items-center transition-all duration-200",
         data.dimmed && "opacity-35",
       )}
-      style={{ borderColor: data.selected ? data.color : "var(--color-rule-soft)" }}
     >
       <Handle
         type="target"
-        position={Position.Top}
-        className="!w-1.5 !h-1.5 !bg-slate-300 !border-0"
+        id="table-target"
+        position={data.anchorPosition}
+        className="!w-2 !h-2 !border-0 !bg-transparent"
+        style={{
+          left: data.anchorOffset.x,
+          top: data.anchorOffset.y,
+          transform: "translate(-50%, -50%)",
+        }}
       />
       <Handle
         type="source"
-        position={Position.Bottom}
-        className="!w-1.5 !h-1.5 !bg-slate-300 !border-0"
-      />
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!w-1.5 !h-1.5 !bg-slate-300 !border-0"
-      />
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!w-1.5 !h-1.5 !bg-slate-300 !border-0"
+        id="table-source"
+        position={data.anchorPosition}
+        className="!w-2 !h-2 !border-0 !bg-transparent"
+        style={{
+          left: data.anchorOffset.x,
+          top: data.anchorOffset.y,
+          transform: "translate(-50%, -50%)",
+        }}
       />
 
-      <div className="flex items-center gap-2 px-2.5 py-2">
-        <div
-          className="w-8 h-8 rounded-md flex items-center justify-center text-[11px] font-semibold text-white shrink-0"
-          style={{ backgroundColor: data.color }}
-        >
-          {initials}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-semibold text-slate-800 truncate">
-            {data.label}
-          </div>
-          <div className="flex items-center gap-1.5 mt-1">
-            <span
-              className={cn(
-                "w-1.5 h-1.5 rounded-full shrink-0",
-                data.state === "running" && "animate-halo-green-yellow",
-              )}
-              style={{ backgroundColor: statusColor }}
-            />
-            <span
-              className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
-              style={{ color: statusColor, backgroundColor: statusBg }}
-            >
-              {STATE_LABEL[data.state]}
-            </span>
-          </div>
-        </div>
+      <div
+        className={cn(
+          "relative w-[58px] h-[58px] rounded-full flex items-center justify-center text-[14px] font-semibold text-white shadow-sm border-[3px] border-white transition-all duration-200",
+          data.selected && "shadow-md ring-4 ring-(--color-primary)/20",
+        )}
+        style={{ backgroundColor: data.color }}
+      >
+        {initials}
+        <span
+          className={cn(
+            "absolute right-[2px] top-[2px] w-3 h-3 rounded-full border-2 border-white",
+            data.state === "running" && "animate-halo-green-yellow",
+          )}
+          style={{ backgroundColor: statusColor }}
+          title={STATE_LABEL[data.state]}
+        />
+        {activityCount > 0 && (
+          <span className="absolute -bottom-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-white border border-(--color-rule-soft) text-[9px] font-semibold text-slate-600 shadow-sm flex items-center justify-center tabular-nums">
+            {activityCount > 99 ? "99+" : activityCount}
+          </span>
+        )}
       </div>
-
-      <div className="grid grid-cols-2 border-t border-(--color-rule-soft) text-[10px] text-slate-500">
-        <div className="px-2 py-1.5 border-r border-(--color-rule-soft)">
-          <span className="tabular-nums font-semibold text-slate-700">
-            {data.contactOutCount}
-          </span>{" "}
-          out
-        </div>
-        <div className="px-2 py-1.5">
-          <span className="tabular-nums font-semibold text-slate-700">
-            {hasActivity ? data.sentCount + data.receivedCount : 0}
-          </span>{" "}
-          msgs
-        </div>
+      <span
+        className={cn(
+          "absolute w-2 h-2 rounded-full border-2 border-white bg-slate-400 shadow-sm pointer-events-none",
+          data.selected && "bg-(--color-primary)",
+        )}
+        style={{
+          left: data.anchorOffset.x,
+          top: data.anchorOffset.y,
+          transform: "translate(-50%, -50%)",
+        }}
+      />
+      <div
+        className={cn(
+          "mt-2 max-w-[92px] rounded-full border bg-white px-2 py-0.5 text-center text-[11px] font-semibold text-slate-700 shadow-sm truncate",
+          data.selected && "border-(--color-primary) text-(--color-primary)",
+        )}
+        title={data.label}
+      >
+        {data.label}
       </div>
     </div>
   );
@@ -729,25 +710,18 @@ function TeamAgentNode({ data }: { data: TeamNodeData }) {
 
 function TeamContactEdge({
   id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  sourcePosition,
-  targetPosition,
   data,
   markerStart,
   markerEnd,
 }: EdgeProps<Edge<TeamEdgeData>>) {
   if (!data) return null;
-  const [edgePath, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
-    sourcePosition,
-    targetX,
-    targetY,
-    targetPosition,
-  });
+  const sourceX = data.sourceAnchor.x;
+  const sourceY = data.sourceAnchor.y;
+  const targetX = data.targetAnchor.x;
+  const targetY = data.targetAnchor.y;
+  const edgePath = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
+  const labelX = (sourceX + targetX) / 2;
+  const labelY = (sourceY + targetY) / 2;
   const opacity = data.dimmed
     ? 0.18
     : data.mode === "structure"
@@ -760,7 +734,7 @@ function TeamContactEdge({
   const dash = data.activityOnly || (data.mode !== "structure" && data.messageCount === 0)
     ? "5 5"
     : undefined;
-  const labelRaised = data.selected || data.relationFocus || data.active;
+  const showLabel = !!data.relationFocus;
 
   return (
     <>
@@ -819,18 +793,18 @@ function TeamContactEdge({
           </circle>
         )}
       </g>
-      {data.label && !data.dimmed && (
+      {showLabel && data.label && !data.dimmed && (
         <EdgeLabelRenderer>
           <div
             className={cn(
               "nodrag nopan pointer-events-none absolute rounded bg-white px-1.5 py-0.5 text-[9px] font-semibold text-slate-600 border max-w-[128px] truncate",
-              labelRaised ? "shadow-md ring-2 ring-white" : "shadow-sm opacity-90",
+              "shadow-md ring-2 ring-white",
             )}
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
               color: data.mode === "structure" ? "#475569" : data.color,
-              borderColor: labelRaised ? data.color : "#e2e8f0",
-              zIndex: labelRaised ? 80 : 5,
+              borderColor: data.color,
+              zIndex: 80,
             }}
           >
             {data.mode === "activity" && data.messageCount > 0 ? `${data.messageCount} msg` : data.label}

@@ -177,12 +177,6 @@
       "Developer": "开发执行方",
       "Analyst": "需求方"
     },
-    "Documenter": {
-      "Architect": "架构信息源",
-      "Tester": "测试用例源",
-      "Developer": "实现细节源",
-      "Reviewer": "审查意见源"
-    },
     "Tester": {
       "Architect": "架构相关疑问方",
       "Developer": "被测试方"

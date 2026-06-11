@@ -294,10 +294,16 @@ class State:
     def get_agent_sessions(self, agent_id: str) -> list[dict]:
         return self.agent_factory.get_sessions(agent_id)
 
+    def _assert_agent_session_mutation_allowed(self, agent_id: str):
+        for team in self.team_factory.teams.values():
+            self.team_factory.conversations.assert_member_session_switch_allowed(team, agent_id)
+
     async def switch_agent_session(self, agent_id: str, session_id: str):
+        self._assert_agent_session_mutation_allowed(agent_id)
         return await self.agent_factory.switch_session(agent_id, session_id)
 
     async def new_agent_session(self, agent_id: str):
+        self._assert_agent_session_mutation_allowed(agent_id)
         return await self.agent_factory.new_session(agent_id)
 
     def get_agent_messages(self, agent_id: str) -> list[dict]:
@@ -345,8 +351,8 @@ class State:
     async def create_team(self, config, member_configs=None):
         return await self.team_factory.create(config, member_configs=member_configs)
 
-    def update_team(self, team_id: str, updates: dict):
-        return self.team_factory.update(team_id, updates)
+    async def update_team(self, team_id: str, updates: dict):
+        return await self.team_factory.update(team_id, updates)
 
     async def delete_team(self, team_id: str) -> bool:
         return await self.team_factory.delete(team_id)

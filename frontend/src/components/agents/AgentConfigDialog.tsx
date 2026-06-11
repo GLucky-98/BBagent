@@ -4,6 +4,7 @@ import { useAppStore } from "../../store";
 import { cn, agentToTemplate, resolveTemplate, detectTemplateType } from "../../lib/utils";
 import { GroupedPromptPicker } from "../GroupedPromptPicker";
 import { TemplatePicker } from "../TemplatePicker";
+import { ConfirmDialog } from "../ConfirmDialog";
 import type {
   SingleAgent,
   HookDescriptor,
@@ -476,6 +477,7 @@ function TypeSelection({ onSelect, onTemplate }: { onSelect: (t: "agent" | "team
 // === SingleAgentForm: the per-agent configuration panel ===
 
 export interface SingleAgentFormData {
+  id?: string;
   name: string;
   modelId: string;
   systemPrompt: string;
@@ -848,6 +850,7 @@ interface TeamFormData {
   workingDir: string;
   members: SingleAgentFormData[];
   contacts: Record<string, Record<string, string>>;
+  deleteRemovedMemberIds: string[];
 }
 
 function TeamForm({
@@ -871,6 +874,8 @@ function TeamForm({
   const [members, setMembers] = useState<SingleAgentFormData[]>(initialData?.members ?? []);
   const [contacts, setContacts] = useState<Record<string, Record<string, string>>>(initialData?.contacts ?? {});
   const [editingMemberIdx, setEditingMemberIdx] = useState<number | null>(null);
+  const [removeMemberIdx, setRemoveMemberIdx] = useState<number | null>(null);
+  const [deleteRemovedMemberIds, setDeleteRemovedMemberIds] = useState<string[]>([]);
 
   const [showPromptPicker, setShowPromptPicker] = useState(false);
 
@@ -891,6 +896,33 @@ function TeamForm({
   };
 
   const [memberError, setMemberError] = useState("");
+
+  const removeMember = (deleteFiles: boolean) => {
+    if (removeMemberIdx === null) return;
+    const member = members[removeMemberIdx];
+    const updated = members.filter((_, j) => j !== removeMemberIdx);
+    setMembers(updated);
+    setContacts(syncContacts(updated, contacts));
+    if (deleteFiles && member?.id) {
+      setDeleteRemovedMemberIds((ids) => (ids.includes(member.id!) ? ids : [...ids, member.id!]));
+    }
+    setRemoveMemberIdx(null);
+  };
+
+  const removeMemberDialog = (
+    <ConfirmDialog
+      open={removeMemberIdx !== null}
+      title="Remove Team Member"
+      message={`Remove "${removeMemberIdx !== null ? members[removeMemberIdx]?.name : ""}" from this team? You can also delete this agent's files from disk.`}
+      confirmLabel="Remove and Delete Files"
+      secondaryLabel="Remove Only"
+      cancelLabel="Cancel"
+      variant="danger"
+      onConfirm={() => removeMember(true)}
+      onSecondary={() => removeMember(false)}
+      onCancel={() => setRemoveMemberIdx(null)}
+    />
+  );
 
   const handleMemberSave = (data: SingleAgentFormData) => {
     const isEditing = editingMemberIdx != null && editingMemberIdx < members.length;
@@ -1050,11 +1082,7 @@ function TeamForm({
                 <div className="flex gap-1 shrink-0 ml-2">
                   <button onClick={() => { setEditingMemberIdx(i); setMemberError(""); }}
                     className="px-2 py-1 text-xs rounded hover:bg-(--color-secondary)">Edit</button>
-                  <button onClick={() => {
-                    const updated = members.filter((_, j) => j !== i);
-                    setMembers(updated);
-                    setContacts(syncContacts(updated, contacts));
-                  }}
+                  <button onClick={() => setRemoveMemberIdx(i)}
                     className="px-2 py-1 text-xs rounded hover:bg-red-50 text-(--color-danger)">Remove</button>
                 </div>
               </div>
@@ -1076,6 +1104,7 @@ function TeamForm({
           <button onClick={() => { setStep(2); setContacts(syncContacts(members, contacts)); }} disabled={members.length === 0 || hasInvalidMemberModel}
             className="flex-1 py-2.5 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed">Next: Configure Contacts</button>
         </div>
+        {removeMemberDialog}
       </div>
     );
   }
@@ -1153,9 +1182,10 @@ function TeamForm({
       </div>
       <div className="flex gap-2 mt-4 pt-4 border-t border-(--color-border) shrink-0">
         <button onClick={() => setStep(1)} className="flex-1 py-2 rounded-lg border border-(--color-border) hover:bg-(--color-secondary) text-sm">Back</button>
-        <button onClick={() => onSave({ name: teamName, teamDescription: teamDesc, workingDir: teamWorkingDir, members, contacts })}
+        <button onClick={() => onSave({ name: teamName, teamDescription: teamDesc, workingDir: teamWorkingDir, members, contacts, deleteRemovedMemberIds })}
           className="flex-1 py-2.5 rounded-lg border border-(--color-border) bg-(--color-primary) text-(--color-primary-foreground) hover:opacity-90">Create Team</button>
       </div>
+      {removeMemberDialog}
     </div>
   );
 }
@@ -1403,7 +1433,10 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
     };
 
     if (mode === "edit" && existingAgent) {
-      updateTeam(existingAgent.id, payload);
+      updateTeam(existingAgent.id, {
+        ...payload,
+        deleteRemovedMemberIds: data.deleteRemovedMemberIds,
+      });
     } else {
       addTeam(payload);
     }
@@ -1433,6 +1466,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
               teamDescription: existingAgent.teamDescription ?? "",
               workingDir: existingAgent.workingDir ?? existingAgent.baseDir ?? "",
               members: existingAgent.members.map((m) => ({
+                id: m.id,
                 name: m.name,
                 modelId: m.modelId,
                 systemPrompt: m.systemPrompt,

@@ -89,6 +89,13 @@ export const api = {
   startTeam: (id: string) => request(`/teams/${id}/start`, { method: "POST" }),
   stopTeam: (id: string) => request(`/teams/${id}/stop`, { method: "POST" }),
   getTeamMessages: (id: string) => request(`/teams/${id}/messages`),
+  listTeamConversations: (id: string) => request(`/teams/${id}/conversations`),
+  createTeamConversation: (id: string, name?: string) =>
+    request(`/teams/${id}/conversations`, { method: "POST", body: JSON.stringify({ name }) }),
+  loadTeamConversation: (id: string, conversationId: string) =>
+    request(`/teams/${id}/conversations/${conversationId}/load`, { method: "POST" }),
+  deleteTeamConversation: (id: string, conversationId: string) =>
+    request(`/teams/${id}/conversations/${conversationId}`, { method: "DELETE" }),
 
   // Files
   getFileTree: (path: string, depth?: number) => {

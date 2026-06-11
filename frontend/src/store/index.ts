@@ -21,6 +21,8 @@ import type {
   TimerConfig,
   GlobalSessionIndex,
   SessionDetail,
+  TeamConversation,
+  TeamConversationResult,
 } from "../types";
 import { isTeam, isSingleAgent } from "../types";
 import { api } from "../lib/api";
@@ -165,8 +167,15 @@ export interface AppState {
 
   // Team messages (per team, keyed by team id)
   teamMessages: Record<string, TeamChatMessage[]>;
+  teamConversations: Record<string, TeamConversation[]>;
+  activeTeamConversationIds: Record<string, string>;
+  teamConversationPanelOpen: boolean;
   addTeamMessage: (teamId: string, msg: TeamChatMessage) => void;
   loadTeamMessages: (teamId: string) => Promise<void>;
+  loadTeamConversations: (teamId: string) => Promise<void>;
+  createTeamConversation: (teamId: string) => Promise<void>;
+  loadTeamConversation: (teamId: string, conversationId: string) => Promise<void>;
+  deleteTeamConversation: (teamId: string, conversationId: string) => Promise<void>;
 
   loadAll: () => Promise<void>;
   createAgentApi: (payload: CreateAgentPayload) => Promise<void>;
@@ -188,6 +197,8 @@ export interface AppState {
   toggleSessionPanel: () => void;
   toggleTeamGraph: () => void;
   closeTeamGraph: () => void;
+  toggleTeamConversationPanel: () => void;
+  closeTeamConversationPanel: () => void;
 
   // Team message scroll target — ListView click → TeamChatWindow scroll
   teamScrollTarget: { timestamp: number; fromAgent: string; toAgent: string } | null;
@@ -255,6 +266,73 @@ const defaultTools: Tool[] = [
   },
 ];
 
+const normalizeTeamMessages = (messages: Record<string, unknown>[] = []): TeamChatMessage[] =>
+  messages.map((m) => ({
+    fromAgent: m.from_agent as string,
+    toAgent: m.to_agent as string,
+    content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+    type: m.type as "direct" | "broadcast" | "user",
+    timestamp: m.timestamp as number,
+  }));
+
+type AppStateSetter = (partial: Partial<AppState> | ((state: AppState) => Partial<AppState>)) => void;
+
+const applyConversationMessages = (
+  teamId: string,
+  result: TeamConversationResult,
+  setState: AppStateSetter
+) => {
+  setState((state: AppState) => {
+    const conversation = result.conversation;
+    const memberSessions = conversation.memberSessions || {};
+    const team = state.agents.find((a) => a.id === teamId && isTeam(a)) as Team | undefined;
+    const memberIdsByName = new Map((team?.members || []).map((member) => [member.name, member.id]));
+    const updatedMessages = result.messages ? normalizeTeamMessages(result.messages) : state.teamMessages[teamId] || [];
+    const existingConversations = state.teamConversations[teamId] || [];
+    const hasConversation = existingConversations.some((item) => item.id === conversation.id);
+    const nextConversations = (hasConversation ? existingConversations : [conversation, ...existingConversations]).map((item) => ({
+      ...item,
+      active: item.id === conversation.id,
+      ...(item.id === conversation.id ? conversation : {}),
+    }));
+
+    return {
+      teamMessages: {
+        ...state.teamMessages,
+        [teamId]: updatedMessages,
+      },
+      activeTeamConversationIds: {
+        ...state.activeTeamConversationIds,
+        [teamId]: conversation.id,
+      },
+      teamConversations: {
+        ...state.teamConversations,
+        [teamId]: nextConversations,
+      },
+      agents: state.agents.map((agent) => {
+        if (agent.id === teamId && isTeam(agent)) {
+          return {
+            ...agent,
+            members: agent.members.map((member) => ({
+              ...member,
+              currentSessionId: memberSessions[member.name] || member.currentSessionId,
+            })),
+          };
+        }
+        const memberName = [...memberIdsByName.entries()].find(([, id]) => id === agent.id)?.[0];
+        if (memberName && isSingleAgent(agent)) {
+          return {
+            ...agent,
+            currentSessionId: memberSessions[memberName] || agent.currentSessionId,
+            messages: result.messages ? [] : agent.messages,
+          };
+        }
+        return agent;
+      }),
+    };
+  });
+};
+
 export const useAppStore = create<AppState>((set, get) => ({
   agents: [],
   activeAgentId: null,
@@ -263,11 +341,26 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Team messages
   teamMessages: {},
+  teamConversations: {},
+  activeTeamConversationIds: {},
+  teamConversationPanelOpen: false,
   addTeamMessage: (teamId, msg) =>
     set((state) => ({
       teamMessages: {
         ...state.teamMessages,
         [teamId]: [...(state.teamMessages[teamId] || []), msg],
+      },
+      teamConversations: {
+        ...state.teamConversations,
+        [teamId]: (state.teamConversations[teamId] || []).map((conversation) =>
+          conversation.active || conversation.id === state.activeTeamConversationIds[teamId]
+            ? {
+                ...conversation,
+                messageCount: (conversation.messageCount || 0) + 1,
+                updatedAt: msg.timestamp,
+              }
+            : conversation
+        ),
       },
     })),
   loadTeamMessages: async (teamId) => {
@@ -275,13 +368,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const messages = await api.getTeamMessages(teamId);
       set((state) => {
         const existing = state.teamMessages[teamId] || [];
-        const httpMsgs = (messages || []).map((m: Record<string, unknown>) => ({
-          fromAgent: m.from_agent as string,
-          toAgent: m.to_agent as string,
-          content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-          type: m.type as "direct" | "broadcast" | "user",
-          timestamp: m.timestamp as number,
-        }));
+        const httpMsgs = normalizeTeamMessages(messages || []);
         // 合并策略：HTTP 消息为基准，保留在此期间通过 WS 实时到达的更新消息
         // （timestamp > HTTP 最新消息的时间戳，说明是 HTTP 请求期间 WS 推送的）
         const latestHttpTs = httpMsgs.length > 0 ? httpMsgs[httpMsgs.length - 1].timestamp : 0;
@@ -297,6 +384,83 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.error("Failed to load team messages:", e);
     }
   },
+  loadTeamConversations: async (teamId) => {
+    try {
+      const conversations = (await api.listTeamConversations(teamId)) as TeamConversation[];
+      const active = conversations.find((conversation) => conversation.active);
+      set((state) => ({
+        teamConversations: { ...state.teamConversations, [teamId]: conversations || [] },
+        activeTeamConversationIds: active
+          ? { ...state.activeTeamConversationIds, [teamId]: active.id }
+          : state.activeTeamConversationIds,
+      }));
+    } catch (e) {
+      console.error("Failed to load team conversations:", e);
+    }
+  },
+  createTeamConversation: async (teamId) => {
+    const team = get().agents.find((a) => a.id === teamId);
+    const name = team ? `Conversation ${new Date().toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : undefined;
+    try {
+      const result = (await api.createTeamConversation(teamId, name)) as TeamConversationResult;
+      applyConversationMessages(teamId, { ...result, messages: [] }, set);
+      await Promise.all([
+        get().loadTeamConversations(teamId),
+        get().loadTeamMessages(teamId),
+        get().loadGlobalSessions(),
+        ...((team && isTeam(team) ? team.members : []).flatMap((member) => [
+          get().loadAgentSessions(member.id),
+          get().loadAgentMessages(member.id),
+        ])),
+      ]);
+      for (const warning of result.warnings || []) get().addToast(warning, "warning");
+      get().addToast("Team conversation created", "info");
+    } catch (e: any) {
+      get().addToast(`Create conversation failed: ${e.message || e}`, "warning");
+    }
+  },
+  loadTeamConversation: async (teamId, conversationId) => {
+    const team = get().agents.find((a) => a.id === teamId);
+    try {
+      const result = (await api.loadTeamConversation(teamId, conversationId)) as TeamConversationResult;
+      applyConversationMessages(teamId, result, set);
+      await Promise.all([
+        get().loadTeamConversations(teamId),
+        get().loadGlobalSessions(),
+        ...((team && isTeam(team) ? team.members : []).flatMap((member) => [
+          get().loadAgentSessions(member.id),
+          get().loadAgentMessages(member.id),
+        ])),
+      ]);
+      for (const warning of result.warnings || []) get().addToast(warning, "warning");
+      get().addToast("Team conversation loaded", "info");
+    } catch (e: any) {
+      get().addToast(`Load conversation failed: ${e.message || e}`, "warning");
+    }
+  },
+  deleteTeamConversation: async (teamId, conversationId) => {
+    const team = get().agents.find((a) => a.id === teamId);
+    try {
+      const result = await api.deleteTeamConversation(teamId, conversationId);
+      if (result.active) {
+        const activeResult = result.active as TeamConversationResult;
+        applyConversationMessages(teamId, activeResult.messages ? activeResult : { ...activeResult, messages: [] }, set);
+        for (const warning of activeResult.warnings || []) get().addToast(warning, "warning");
+      }
+      await Promise.all([
+        get().loadTeamConversations(teamId),
+        get().loadTeamMessages(teamId),
+        get().loadGlobalSessions(),
+        ...((team && isTeam(team) ? team.members : []).flatMap((member) => [
+          get().loadAgentSessions(member.id),
+          get().loadAgentMessages(member.id),
+        ])),
+      ]);
+      get().addToast("Team conversation deleted", "info");
+    } catch (e: any) {
+      get().addToast(`Delete conversation failed: ${e.message || e}`, "warning");
+    }
+  },
 
   setActiveAgentId: (id) => {
     const agent = id ? get().agents.find((a) => a.id === id) : null;
@@ -308,6 +472,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       baseDirPath: agent?.baseDir || "",
       previewFile: null,
       teamGraphOpen: isTeamAgent ? true : false,
+      teamConversationPanelOpen: false,
     });
   },
 
@@ -343,10 +508,73 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   updateTeam: async (id, updates) => {
     const result = await api.updateTeam(id, updates);
-    set((state) => ({
-      agents: state.agents.map((a) => (a.id === id ? { ...a, ...result, messages: a.messages } : a)),
-      workingDirPath: state.activeAgentId === id && result.workingDir ? result.workingDir : state.workingDirPath,
+    const memberAgents: SingleAgent[] = ((result.members || []) as Record<string, unknown>[]).map((m) => ({
+      id: m.id as string,
+      name: m.name as string,
+      type: "single" as const,
+      baseDir: (m.baseDir as string) || "",
+      workingDir: (m.workingDir as string) || (result.workingDir as string) || "",
+      modelId: (m.modelId as string) || "",
+      systemPrompt: (m.systemPrompt as string) || "",
+      toolIds: (m.toolIds as string[]) || [],
+      skillIds: (m.skillIds as string[]) || [],
+      hookNames: (m.hookNames as string[]) || [],
+      hookConfig: (m.hookConfig as Record<string, unknown>) || {},
+      toolPolicy: (m.toolPolicy as ToolPolicy) || {},
+      messages: [],
+      state: (m.state as "ready" | "waiting" | "running" | "error") || "ready",
+      sessions: [],
+      currentSessionId: (m.currentSessionId as string) || "",
     }));
+    const resultMemberIds = new Set(memberAgents.map((m) => m.id));
+
+    set((state) => {
+      const existingTeam = state.agents.find((a) => a.id === id && isTeam(a)) as Team | undefined;
+      const previousMemberIds = new Set((existingTeam?.members || []).map((m) => m.id));
+      const memberById = new Map(memberAgents.map((member) => [member.id, member]));
+      const nextTeamMemberIds = new Set(state.teamMemberIds);
+      for (const memberId of previousMemberIds) nextTeamMemberIds.delete(memberId);
+      for (const memberId of resultMemberIds) nextTeamMemberIds.add(memberId);
+
+      const nextAgentStates = { ...state.agentStates };
+      nextAgentStates[id] = result.state || nextAgentStates[id] || "ready";
+      for (const member of memberAgents) {
+        nextAgentStates[member.id] = member.state || "ready";
+      }
+
+      const seenMembers = new Set<string>();
+      const agents = state.agents.map((a) => {
+        if (a.id === id && isTeam(a)) {
+          return {
+            ...a,
+            ...result,
+            type: "team" as const,
+            members: memberAgents,
+            contacts: result.contacts || {},
+            messages: a.messages,
+          };
+        }
+        const updatedMember = memberById.get(a.id);
+        if (updatedMember) {
+          seenMembers.add(a.id);
+          return { ...a, ...updatedMember, messages: a.messages };
+        }
+        return a;
+      });
+
+      for (const member of memberAgents) {
+        if (!seenMembers.has(member.id) && !agents.some((a) => a.id === member.id)) {
+          agents.push(member);
+        }
+      }
+
+      return {
+        agents,
+        teamMemberIds: nextTeamMemberIds,
+        agentStates: nextAgentStates,
+        workingDirPath: state.activeAgentId === id && result.workingDir ? result.workingDir : state.workingDirPath,
+      };
+    });
   },
   removeAgent: async (id, deleteFiles) => {
     const agent = get().agents.find((a) => a.id === id);
@@ -412,7 +640,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
 
   previewFile: null,
-  openFilePreview: (file) => set({ previewFile: file }),
+  openFilePreview: (file) => set({ previewFile: file, sessionPanelOpen: false, teamConversationPanelOpen: false, teamGraphOpen: false }),
   closeFilePreview: () => set({ previewFile: null }),
 
   models: [],
@@ -1106,19 +1334,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       const next = !s.sessionPanelOpen;
       // 打开 session 面板时关闭文件预览，反之亦然
-      return { sessionPanelOpen: next, previewFile: next ? null : s.previewFile };
+      return {
+        sessionPanelOpen: next,
+        previewFile: next ? null : s.previewFile,
+        teamConversationPanelOpen: next ? false : s.teamConversationPanelOpen,
+        teamGraphOpen: next ? false : s.teamGraphOpen,
+      };
     });
   },
 
   toggleTeamGraph: () => {
     set((s) => {
       const next = !s.teamGraphOpen;
-      return { teamGraphOpen: next, previewFile: next ? null : s.previewFile, sessionPanelOpen: next ? false : s.sessionPanelOpen };
+      return {
+        teamGraphOpen: next,
+        previewFile: next ? null : s.previewFile,
+        sessionPanelOpen: next ? false : s.sessionPanelOpen,
+        teamConversationPanelOpen: next ? false : s.teamConversationPanelOpen,
+      };
     });
   },
 
   closeTeamGraph: () => {
     set({ teamGraphOpen: false });
+  },
+
+  toggleTeamConversationPanel: () => {
+    set((s) => {
+      const next = !s.teamConversationPanelOpen;
+      return {
+        teamConversationPanelOpen: next,
+        previewFile: next ? null : s.previewFile,
+        sessionPanelOpen: next ? false : s.sessionPanelOpen,
+        teamGraphOpen: next ? false : s.teamGraphOpen,
+      };
+    });
+  },
+
+  closeTeamConversationPanel: () => {
+    set({ teamConversationPanelOpen: false });
   },
 
   teamScrollTarget: null,

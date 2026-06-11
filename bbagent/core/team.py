@@ -241,10 +241,6 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
 
     async def _record_team_message(self, msg: TeamMessage):
         self._team_messages.append(msg)
-        if self.base_dir:
-            path = self.base_dir / 'team_messages.jsonl'
-            with open(path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + '\n')
         if self._on_team_message:
             try:
                 await self._on_team_message(msg.to_dict())
@@ -296,5 +292,4 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             path = self.base_dir / 'team_messages.jsonl'
             if path.exists():
                 path.write_text('', encoding='utf-8')
-
 

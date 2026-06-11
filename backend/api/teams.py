@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from backend.state import state_manager
 from backend.schemas import TeamConfig, CreateTeamRequest
-from backend.errors import ConflictError, ErrorCode
+from backend.errors import AppError, ConflictError, ErrorCode
 from backend.logging import get_backend_logger
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -20,6 +20,18 @@ def _resolve_team(team_id: str) -> str:
             detail=f"Team '{team_id}' not found",
         )
     return team_id
+
+
+def _team_member_payloads(member_ids: list[str]) -> list[dict]:
+    members = []
+    for mid in member_ids:
+        agent_cfg = state_manager.get_agent_config(mid)
+        if agent_cfg:
+            member = agent_cfg.model_dump(mode="json")
+            agent_state = state_manager.agent_factory.get_state(mid)
+            member["state"] = agent_state.get("state", "ready")
+            members.append(member)
+    return members
 
 
 @router.get("")
@@ -87,16 +99,7 @@ async def create_team(req: CreateTeamRequest):
     data["state"] = state_manager.team_factory.get_state(team_id)
 
     # Include full member agent details so the frontend can populate the team
-    member_ids = data.get("memberIds", [])
-    members = []
-    for mid in member_ids:
-        agent_cfg = state_manager.get_agent_config(mid)
-        if agent_cfg:
-            m = agent_cfg.model_dump(mode="json")
-            agent_state = state_manager.agent_factory.get_state(mid)
-            m["state"] = agent_state.get("state", "ready")
-            members.append(m)
-    data["members"] = members
+    data["members"] = _team_member_payloads(data.get("memberIds", []))
 
     return data
 
@@ -104,11 +107,12 @@ async def create_team(req: CreateTeamRequest):
 @router.put("/{team_id}")
 async def update_team(team_id: str, updates: dict):
     _resolve_team(team_id)
-    team = state_manager.update_team(team_id, updates)
+    team = await state_manager.update_team(team_id, updates)
     if not team:
         return {"error": {"code": "TEAM_NOT_FOUND", "message": f"Team '{team_id}' not found"}}
     data = state_manager.get_team_config(team_id).model_dump(mode="json")
     data["state"] = state_manager.team_factory.get_state(team_id)
+    data["members"] = _team_member_payloads(data.get("memberIds", []))
     return data
 
 
@@ -126,7 +130,49 @@ async def get_team_messages(team_id: str):
     team = state_manager.team_factory.teams.get(team_id)
     if not team:
         return []
-    return [msg.to_dict() for msg in team.get_team_messages()]
+    state_manager.team_factory.conversations.ensure_loaded(team_id, team)
+    return state_manager.team_factory.conversations.get_messages(team)
+
+
+@router.get("/{team_id}/conversations")
+async def list_team_conversations(team_id: str):
+    _resolve_team(team_id)
+    team = state_manager.team_factory.teams[team_id]
+    state_manager.team_factory.conversations.ensure_loaded(team_id, team)
+    return state_manager.team_factory.conversations.list_conversations(team)
+
+
+@router.post("/{team_id}/conversations")
+async def create_team_conversation(team_id: str, body: dict | None = None):
+    _resolve_team(team_id)
+    team = state_manager.team_factory.teams[team_id]
+    try:
+        return await state_manager.team_factory.conversations.create_conversation(
+            team,
+            (body or {}).get("name"),
+        )
+    except AppError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.post("/{team_id}/conversations/{conversation_id}/load")
+async def load_team_conversation(team_id: str, conversation_id: str):
+    _resolve_team(team_id)
+    team = state_manager.team_factory.teams[team_id]
+    try:
+        return await state_manager.team_factory.conversations.load_conversation(team, conversation_id)
+    except AppError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.delete("/{team_id}/conversations/{conversation_id}")
+async def delete_team_conversation(team_id: str, conversation_id: str):
+    _resolve_team(team_id)
+    team = state_manager.team_factory.teams[team_id]
+    try:
+        return await state_manager.team_factory.conversations.delete_conversation(team, conversation_id)
+    except AppError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
 
 
 @router.post("/{team_id}/start")
@@ -135,6 +181,11 @@ async def start_team(team_id: str):
     team = state_manager.team_factory.teams.get(team_id)
     if not team:
         return {"error": {"code": "TEAM_NOT_FOUND", "message": f"Team '{team_id}' not found"}}
+
+    try:
+        await state_manager.team_factory.conversations.align_active_sessions(team)
+    except AppError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
 
     agent_id_by_name = {a.name: aid for aid, a in state_manager.agent_factory.agents.items()}
     for agent_name in team.agents:

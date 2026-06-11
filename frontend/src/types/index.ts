@@ -70,6 +70,24 @@ export interface TeamChatMessage {
   timestamp: number;
 }
 
+export interface TeamConversation {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  memberSessions: Record<string, string>;
+  missingSessions?: Record<string, string>;
+  messageCount: number;
+  active?: boolean;
+}
+
+export interface TeamConversationResult {
+  conversation: TeamConversation;
+  messages?: Record<string, unknown>[];
+  memberSessionStatus?: Record<string, Record<string, unknown>>;
+  warnings?: string[];
+}
+
 export interface SessionInfo {
   id: string;
   timestamp: string;
@@ -162,7 +180,9 @@ export interface CreateTeamPayload {
 
 // 更新 payload（所有字段可选）
 export type UpdateAgentPayload = Partial<CreateAgentPayload>;
-export type UpdateTeamPayload = Partial<CreateTeamPayload>;
+export type UpdateTeamPayload = Partial<CreateTeamPayload> & {
+  deleteRemovedMemberIds?: string[];
+};
 
 // === Hook descriptor (returned by GET /api/hooks) ===
 

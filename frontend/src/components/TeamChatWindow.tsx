@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Bot, User, Radio, X, ChevronDown, Check, Sparkles, ArrowUp, Network } from "lucide-react";
+import { Bot, User, Radio, X, ChevronDown, Check, Sparkles, ArrowUp, Network, Plus, MessageSquare } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
 import type { TeamChatMessage, Team } from "../types";
@@ -61,12 +61,25 @@ export function TeamChatWindow() {
   const addTeamMessage = useAppStore((s) => s.addTeamMessage);
   const loadTeamMessages = useAppStore((s) => s.loadTeamMessages);
   const toggleTeamGraph = useAppStore((s) => s.toggleTeamGraph);
+  const teamConversationPanelOpen = useAppStore((s) => s.teamConversationPanelOpen);
+  const toggleTeamConversationPanel = useAppStore((s) => s.toggleTeamConversationPanel);
+  const createTeamConversation = useAppStore((s) => s.createTeamConversation);
+  const loadTeamConversations = useAppStore((s) => s.loadTeamConversations);
+  const teamConversations = useAppStore((s) => s.teamConversations);
+  const activeTeamConversationIds = useAppStore((s) => s.activeTeamConversationIds);
+  const agentStates = useAppStore((s) => s.agentStates);
   const teamScrollTarget = useAppStore((s) => s.teamScrollTarget);
   const clearTeamScrollTarget = useAppStore((s) => s.clearTeamScrollTarget);
 
   const team = agents.find((a): a is Team => a.id === activeAgentId && isTeam(a));
   const members = team?.members || [];
   const messages = team ? (teamMessages[team.id] || []) : [];
+  const conversations = team ? (teamConversations[team.id] || []) : [];
+  const activeConversationId = team ? activeTeamConversationIds[team.id] : "";
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId)
+    || conversations.find((conversation) => conversation.active);
+  const teamState = team ? (agentStates[team.id] || team.state) : "ready";
+  const canChangeConversation = teamState === "ready";
 
   const [input, setInput] = useState("");
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
@@ -121,9 +134,10 @@ export function TeamChatWindow() {
   // 加载历史消息
   useEffect(() => {
     if (team) {
+      loadTeamConversations(team.id);
       loadTeamMessages(team.id);
     }
-  }, [team?.id]);
+  }, [team?.id, loadTeamConversations, loadTeamMessages]);
 
   const connectWs = useCallback((teamRef: string) => {
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
@@ -225,6 +239,39 @@ export function TeamChatWindow() {
             <p className="text-[12px] text-(--color-ink-2) mt-0.5">
               {members.length} members: {members.map((m) => m.name).join(", ")}
             </p>
+          </div>
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={toggleTeamConversationPanel}
+              className={cn(
+                "flex items-center gap-1.5 px-3 h-7 text-[12.5px] font-medium rounded-l-full transition-colors",
+                teamConversationPanelOpen
+                  ? "bg-(--color-primary) text-white"
+                  : "bg-(--color-secondary) hover:bg-(--color-border) text-(--color-foreground)"
+              )}
+              title="Team conversations"
+            >
+              <MessageSquare size={13} />
+              <span className="max-w-[150px] truncate">
+                {activeConversation?.name || (activeConversationId ? activeConversationId.substring(0, 12) : "Conversation")}
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                if (team && canChangeConversation) createTeamConversation(team.id);
+              }}
+              disabled={!canChangeConversation}
+              className={cn(
+                "flex items-center justify-center w-7 h-7 text-[12.5px] font-medium rounded-r-full transition-colors border-l",
+                teamConversationPanelOpen
+                  ? "bg-(--color-primary) text-white border-white/20"
+                  : "bg-(--color-secondary) hover:bg-(--color-border) text-(--color-foreground) border-(--color-border)",
+                !canChangeConversation && "opacity-40 cursor-not-allowed hover:bg-(--color-secondary)"
+              )}
+              title={canChangeConversation ? "New team conversation" : `Team must be ready; current state is ${teamState}`}
+            >
+              <Plus size={13} />
+            </button>
           </div>
           <button
             onClick={toggleTeamGraph}

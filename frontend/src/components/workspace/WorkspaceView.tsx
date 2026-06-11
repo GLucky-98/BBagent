@@ -7,6 +7,7 @@ import { TeamChatWindow } from "../TeamChatWindow";
 import { PanelA_FilePanel } from "./PanelA_FilePanel";
 import { PanelC_FilePreview } from "./PanelC_FilePreview";
 import { SessionManagerPanel } from "./SessionManagerPanel";
+import { TeamConversationPanel } from "./TeamConversationPanel";
 import { PanelSplitter } from "./Splitter";
 
 const TeamGraphView = lazy(() => import("./TeamGraphView").then(m => ({ default: m.TeamGraphView })));
@@ -26,6 +27,7 @@ export function WorkspaceView() {
   const previewFile = useAppStore((s) => s.previewFile);
   const sessionPanelOpen = useAppStore((s) => s.sessionPanelOpen);
   const teamGraphOpen = useAppStore((s) => s.teamGraphOpen);
+  const teamConversationPanelOpen = useAppStore((s) => s.teamConversationPanelOpen);
   const [panelAWidth, setPanelAWidth] = useState(PANEL_A_DEFAULT);
   const [panelCWidth, setPanelCWidth] = useState(PANEL_C_DEFAULT);
   const panelARef = useRef<HTMLDivElement>(null);
@@ -44,11 +46,12 @@ export function WorkspaceView() {
   // When a teammate is selected, activeAgentId is the mate's UUID → ChatWindow handles it.
   const showTeamChat = activeAgent?.type === "team" && !activeTeamMemberName;
 
-  // 右侧面板：SessionManagerPanel / FilePreview / TeamGraphView 互斥显示
+  // 右侧面板：SessionManagerPanel / TeamConversationPanel / FilePreview / TeamGraphView 互斥显示
   // 选中 team 且无 member 选中时，根据 teamGraphOpen 状态显示 TeamGraphView
   const isTeamTab = !!showTeamChat && isTeam(activeAgent) && activeAgent.members.length > 0;
   const showTeamGraph = isTeamTab && teamGraphOpen;
-  const showRightPanel = sessionPanelOpen || !!previewFile || showTeamGraph;
+  const showTeamConversations = isTeamTab && teamConversationPanelOpen;
+  const showRightPanel = sessionPanelOpen || showTeamConversations || !!previewFile || showTeamGraph;
 
   if (!activeAgentId) {
     return (
@@ -93,6 +96,8 @@ export function WorkspaceView() {
           />
           {sessionPanelOpen ? (
             <SessionManagerPanel width={panelCWidth} />
+          ) : showTeamConversations ? (
+            <TeamConversationPanel width={panelCWidth} />
           ) : previewFile ? (
             <PanelC_FilePreview ref={panelCRef} width={panelCWidth} />
           ) : showTeamGraph ? (

@@ -16,6 +16,7 @@ from bbagent.core.team import AgentTeam, TeamConfig as CoreTeamConfig
 
 from backend.schemas import TeamConfig, AgentConfig
 from backend.factories import _next_id
+from backend.factories.team_conversation_factory import TeamConversationManager
 from backend.logging import get_backend_logger, log_operation
 from backend.dispatcher import AgentOutputDispatcher
 
@@ -30,6 +31,7 @@ class TeamFactory:
         self._team_meta: dict[str, dict] = {}  # team_id -> persisted config dict
         self._started: set[str] = set()  # team_ids that have been started
         self._dispatchers: dict[str, AgentOutputDispatcher] = {}
+        self.conversations = TeamConversationManager(agent_factory)
 
     # ------------------------------------------------------------------
     # Dispatchers
@@ -55,6 +57,7 @@ class TeamFactory:
         dispatcher = self._ensure_dispatcher(team_id)
 
         async def on_team_message(msg_dict: dict):
+            self.conversations.record_message(team, msg_dict)
             await dispatcher.on_chunk(self._team_message_payload(msg_dict))
 
         team._on_team_message = on_team_message
@@ -127,11 +130,11 @@ class TeamFactory:
         )
         team = AgentTeam.create(core_config)
         team.base_dir = team_dir
-        team.load_team_messages()
 
         self.teams[team_id] = team
         self._team_meta[team_id] = raw
         self._wire_team_dispatcher(team_id, team)
+        self.conversations.ensure_loaded(team_id, team)
         if raw.get("started", False):
             self._started.add(team_id)
 
@@ -241,6 +244,7 @@ class TeamFactory:
         self.teams[team_id] = team
         self._team_meta[team_id] = team_data
         self._wire_team_dispatcher(team_id, team)
+        await self.conversations.create_conversation(team, "Conversation")
         return team, team_id
 
     def _persist_team_meta(self, team_id: str):
@@ -254,6 +258,134 @@ class TeamFactory:
         if config_path.parent.exists():
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(meta, f, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def _clear_team_runtime(agent: Agent) -> None:
+        team_tool_names = [
+            name
+            for name, tool in list(agent.tools.items())
+            if getattr(tool, "source", None) == "team"
+        ]
+        if team_tool_names:
+            agent.remove_tools(team_tool_names)
+        agent.team_prompt = ""
+        agent.teammate_prompt = ""
+
+    @staticmethod
+    def _normalize_contacts(
+        contacts: dict[str, dict[str, str]] | None,
+        member_names: set[str],
+    ) -> dict[str, dict[str, str]]:
+        result: dict[str, dict[str, str]] = {}
+        for name in member_names:
+            raw_contacts = (contacts or {}).get(name, {})
+            result[name] = {
+                other: role
+                for other, role in raw_contacts.items()
+                if other in member_names and other != name
+            }
+        return result
+
+    @staticmethod
+    def _member_update_payload(config: AgentConfig) -> dict:
+        return {
+            "name": config.name,
+            "modelId": config.modelId,
+            "systemPrompt": config.systemPrompt,
+            "workingDir": config.workingDir,
+            "toolIds": list(config.toolIds),
+            "skillIds": list(config.skillIds),
+            "toolPolicy": dict(config.toolPolicy or {}),
+            "hookNames": list(config.hookNames),
+            "hookConfig": dict(config.hookConfig or {}),
+        }
+
+    def _rebuild_runtime_team(self, team_id: str) -> AgentTeam:
+        old_team = self.teams[team_id]
+        meta = self._team_meta.get(team_id, {})
+        base_dir = old_team.base_dir
+        team_messages = old_team.get_team_messages()
+
+        for agent in old_team.agents.values():
+            self._clear_team_runtime(agent)
+
+        agents: dict[str, Agent] = {}
+        for aid in meta.get("memberIds", []):
+            agent = self._agent_factory.agents.get(aid)
+            if agent:
+                agents[agent.name] = agent
+
+        team = AgentTeam.create(
+            CoreTeamConfig(
+                name=meta.get("name", old_team.name),
+                team_description=meta.get("teamDescription", old_team.team_description),
+                agents=agents,
+                contacts=meta.get("contacts", {}),
+            )
+        )
+        team.base_dir = base_dir
+        team._team_messages = team_messages
+        self.teams[team_id] = team
+        self._wire_team_dispatcher(team_id, team)
+        return team
+
+    async def _sync_members(
+        self,
+        team_id: str,
+        member_updates: list[dict],
+        meta: dict,
+        delete_removed_member_ids: set[str] | None = None,
+    ) -> None:
+        old_member_ids = list(meta.get("memberIds", []))
+        member_id_by_name: dict[str, str] = {}
+        for aid in old_member_ids:
+            agent = self._agent_factory.agents.get(aid)
+            if agent:
+                member_id_by_name[agent.name] = aid
+
+        new_member_ids: list[str] = []
+        seen_names: set[str] = set()
+        created_ids: list[str] = []
+        try:
+            for raw_member in member_updates:
+                member_cfg = AgentConfig(**raw_member)
+                member_cfg.name = member_cfg.name.strip()
+                if not member_cfg.name:
+                    raise ValueError("Team member name cannot be empty")
+                if member_cfg.name in seen_names:
+                    raise ValueError(f"Duplicate member name '{member_cfg.name}' in team '{meta.get('name', team_id)}'")
+                seen_names.add(member_cfg.name)
+
+                existing_id = member_id_by_name.get(member_cfg.name)
+                if existing_id:
+                    await self._agent_factory.update(
+                        existing_id,
+                        self._member_update_payload(member_cfg),
+                    )
+                    new_member_ids.append(existing_id)
+                    continue
+
+                if meta.get("workingDir") and not member_cfg.workingDir:
+                    member_cfg.workingDir = meta["workingDir"]
+                agent = await self._agent_factory.create(member_cfg)
+                created_ids.append(member_cfg.id)
+                self._clear_team_runtime(agent)
+                new_member_ids.append(member_cfg.id)
+        except Exception:
+            for aid in created_ids:
+                try:
+                    await self._agent_factory.delete(aid)
+                except Exception:
+                    pass
+            raise
+
+        meta["memberIds"] = new_member_ids
+        meta["contacts"] = self._normalize_contacts(meta.get("contacts", {}), seen_names)
+
+        delete_requested = delete_removed_member_ids or set()
+        removed_ids = set(old_member_ids) - set(new_member_ids)
+        for aid in sorted(removed_ids & delete_requested):
+            await self._agent_factory.delete(aid)
 
     def start(self, team_id: str):
         self._started.add(team_id)
@@ -277,7 +409,7 @@ class TeamFactory:
         team.update_state()
         return str(team.state).lower()
 
-    def update(self, team_id: str, updates: dict) -> Optional[AgentTeam]:
+    async def update(self, team_id: str, updates: dict) -> Optional[AgentTeam]:
         team = self.teams.get(team_id)
         if not team:
             return None
@@ -287,11 +419,25 @@ class TeamFactory:
             team.team_description = updates["teamDescription"]
             meta["teamDescription"] = updates["teamDescription"]
         if "name" in updates:
+            team.name = updates["name"]
             meta["name"] = updates["name"]
         if "workingDir" in updates:
             meta["workingDir"] = updates["workingDir"]
         if "contacts" in updates:
             meta["contacts"] = updates["contacts"]
+        if "members" in updates:
+            delete_removed_member_ids = set(updates.get("deleteRemovedMemberIds") or [])
+            await self._sync_members(
+                team_id,
+                updates["members"] or [],
+                meta,
+                delete_removed_member_ids,
+            )
+            team = self._rebuild_runtime_team(team_id)
+        elif "contacts" in updates:
+            member_names = set(team.agents.keys())
+            meta["contacts"] = self._normalize_contacts(meta.get("contacts", {}), member_names)
+            team = self._rebuild_runtime_team(team_id)
 
         # Persist updated meta
         if team.base_dir:
