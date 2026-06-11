@@ -8,6 +8,7 @@ for automatic lifecycle management.
 """
 
 from .memory import Memory, MemoryManager
+from .runtime import MemoryRuntime
 from .embedding import Embedding, OllamaEmbedding
 from .memory_tool import (
     create_add_memory_tool,
@@ -28,7 +29,7 @@ from .memory_hook import (
 
 
 __all__ = [
-    "Memory", "MemoryManager",
+    "Memory", "MemoryManager", "MemoryRuntime",
     "Embedding", "OllamaEmbedding",
     "create_add_memory_tool", "create_delete_memory_tool", "create_inject_memories_tool",
     "inject_memory_context",

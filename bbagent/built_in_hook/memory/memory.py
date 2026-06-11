@@ -181,6 +181,21 @@ class MemoryManager:
             return True
         return False
 
+    def get_mutation_count(self) -> int:
+        state = self._load_cleanup_state()
+        return state.get("mutation_count", 0)
+
+    def should_clean(self, threshold: int) -> bool:
+        if threshold < 0:
+            return False
+        return self.get_mutation_count() >= threshold
+
+    def reset_mutation_count(self):
+        state = self._load_cleanup_state()
+        state["mutation_count"] = 0
+        state["last_cleanup"] = datetime.now().isoformat()
+        self._save_cleanup_state(state)
+
     async def _add_to_chroma(self, memory: Memory, embedding: list[float] = None):
         if embedding is None:
             embedding = await self.embedding.get_embedding(memory.content)

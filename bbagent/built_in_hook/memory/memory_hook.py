@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta
 
 from ...core.hook import HookContext
-from ...core.message import HumanMessage, TextBlock, Turn
+from ...core.message import HumanMessage, TextBlock, Turn, Session
 from ...core.message import Message
 from ...core.agent import SubAgent
 from ...core.logger import AgentLogger
@@ -12,6 +12,7 @@ from ...core.model import Model
 
 from .memory import MemoryManager
 from .memory_tool import create_add_memory_tool, create_delete_memory_tool, inject_memory_context
+from .runtime import MemoryRuntime
 
 HARD_CLEAN_STALE_DAYS = 30
 
@@ -172,6 +173,7 @@ async def extract_memories(
     subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
     extract_user_prompt: str = EXTRACT_USER_PROMPT,
     logger: AgentLogger = None,
+    runtime: MemoryRuntime = None,
 ):
     from ...built_in_tool import create_write_tool, Policy
 
@@ -187,6 +189,7 @@ async def extract_memories(
     add_memory_tool = create_add_memory_tool(
         memory_manager, lambda: session_id,
         prompt=subagent_add_memory_tool_prompt,
+        runtime=runtime,
     )
     policy = Policy(cwd=str(memory_manager.memory_dir))
     write_tool = create_write_tool(policy)
@@ -295,10 +298,11 @@ async def clean_memory(
     clean_prompt: str = CLEAN_SYSTEM_PROMPT,
     clean_user_prompt: str = CLEAN_USER_PROMPT,
     logger: AgentLogger = None,
-):
+    runtime: MemoryRuntime = None,
+) -> bool:
     from ...built_in_tool import create_read_tool, Policy
 
-    delete_tool = create_delete_memory_tool(memory_manager)
+    delete_tool = create_delete_memory_tool(memory_manager, runtime=runtime)
     policy = Policy(cwd=str(memory_manager.memory_dir))
     read_tool = create_read_tool(policy)
 
@@ -323,11 +327,11 @@ async def clean_memory(
                 f"Memory clean SubAgent failed: {e}",
                 context={"error": str(e)},
             )
-        return
+        return False
 
     if logger:
         logger.info("Memory clean SubAgent completed")
-    return
+    return True
 
 
 def _hard_clean_memories(memory_manager: MemoryManager, logger: logging.Logger = None) -> int:
@@ -409,6 +413,7 @@ async def do_extract_turns(
     subagent_add_memory_tool_prompt: str,
     extract_user_prompt: str,
     logger: AgentLogger = None,
+    runtime: MemoryRuntime = None,
 ):
     merge_threshold = int(max_context_tokens * merge_ratio)
     small_threshold = min(int(merge_threshold / 3), small_turn_cap)
@@ -427,6 +432,7 @@ async def do_extract_turns(
             subagent_add_memory_tool_prompt=subagent_add_memory_tool_prompt,
             extract_user_prompt=extract_user_prompt,
             logger=logger,
+            runtime=runtime,
         )
         if logger:
             logger.info(
@@ -440,6 +446,7 @@ async def do_extract_turns(
 def create_memory_hook(
     memory_manager: MemoryManager,
     submodel: Model,
+    runtime: MemoryRuntime = None,
     extract_prompt: str = EXTRACT_SYSTEM_PROMPT,
     clean_prompt: str = CLEAN_SYSTEM_PROMPT,
     subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
@@ -455,6 +462,8 @@ def create_memory_hook(
     inject_user_prompt: str = INJECT_USER_PREFIX,
     clean_mutation_threshold: int = 50,
 ):
+    if runtime is None:
+        runtime = MemoryRuntime()
 
     async def extract_memory_before_compress(ctx: HookContext):
         if not ctx.get('compression_needed', False):
@@ -482,7 +491,56 @@ def create_memory_hook(
             submodel, memory_manager,
             extract_prompt, subagent_add_memory_tool_prompt, extract_user_prompt,
             agent.logger,
+            runtime=runtime,
         )
+
+    async def _extract_new_session_job(
+        agent,
+        session,
+        indexed_turns: list[tuple[int, Turn]],
+        max_context_tokens: int,
+        logger: AgentLogger,
+    ):
+        indexes = [idx for idx, _ in indexed_turns]
+        turns = [turn for _, turn in indexed_turns]
+        try:
+            await do_extract_turns(
+                turns, session.id,
+                max_context_tokens, merge_ratio, small_turn_cap,
+                submodel, memory_manager,
+                extract_prompt, subagent_add_memory_tool_prompt, extract_user_prompt,
+                logger,
+                runtime=runtime,
+            )
+            for idx in indexes:
+                if idx < len(session.turns):
+                    session.turns[idx].memory_extracted = True
+
+            active_session = getattr(agent, "session", None)
+            if active_session is not None and active_session.id == session.id:
+                for idx in indexes:
+                    if idx < len(active_session.turns):
+                        active_session.turns[idx].memory_extracted = True
+            elif session.dir is not None:
+                try:
+                    latest = Session.load(session.id, session.dir)
+                    for idx in indexes:
+                        if idx < len(latest.turns):
+                            latest.turns[idx].memory_extracted = True
+                    latest.save()
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to persist memory extraction metadata for session {session.id}: {e}",
+                        context={"session_id": session.id, "error": str(e)},
+                    )
+            runtime.mark_turns_completed(session.id, indexes)
+            if logger:
+                logger.info(
+                    f"Background memory extraction completed for session {session.id}",
+                    context={"session_id": session.id, "turn_count": len(indexes)},
+                )
+        finally:
+            runtime.release_turns(session.id, indexes)
 
     async def extract_memory_before_new_session(ctx: HookContext):
         agent = ctx.agent
@@ -490,39 +548,42 @@ def create_memory_hook(
         if not session:
             return
 
-        unextracted = [t for t in session.turns if not t.memory_extracted]
-        if not unextracted:
+        indexed = [
+            (idx, turn)
+            for idx, turn in enumerate(session.turns)
+            if not turn.memory_extracted
+        ]
+        claimed = runtime.claim_turns(session.id, indexed)
+        if not claimed:
             agent.logger.debug("No unextracted turns to extract for new session")
             return
 
         agent.logger.info(
-            f"Extracting memories from {len(unextracted)} turns (new session)",
-            context={"turn_count": len(unextracted)},
+            f"Queued memory extraction from {len(claimed)} turns (new session)",
+            context={"turn_count": len(claimed), "session_id": session.id},
         )
 
-        try:
-            await do_extract_turns(
-                unextracted, session.id,
-                agent.model.max_context_tokens, merge_ratio, small_turn_cap,
-                submodel, memory_manager,
-                extract_prompt, subagent_add_memory_tool_prompt, extract_user_prompt,
+        runtime.schedule(
+            _extract_new_session_job(
+                agent,
+                session,
+                claimed,
+                agent.model.max_context_tokens,
                 agent.logger,
-            )
-        except Exception as e:
-            agent.logger.warning(
-                f"Memory extraction on new session failed: {e}",
-                context={"error": str(e)},
-            )
+            ),
+            name=f"memory_extract:{session.id}",
+        )
 
-    async def clean_memory_hook(ctx: HookContext):
-        logger = ctx.agent.logger
-        hard_deleted = _hard_clean_memories(memory_manager, logger)
-        if hard_deleted > 0:
-            memory_manager.decrement_mutation_count(hard_deleted)
+    async def _clean_memory_job(logger: AgentLogger):
+        async with runtime.store_lock:
+            hard_deleted = _hard_clean_memories(memory_manager, logger)
+            if hard_deleted > 0:
+                memory_manager.decrement_mutation_count(hard_deleted)
 
-        mutation_state = memory_manager._load_cleanup_state()
-        mutation_count = mutation_state.get("mutation_count", 0)
-        if not memory_manager.check_and_reset_mutation(clean_mutation_threshold):
+            mutation_count = memory_manager.get_mutation_count()
+            should_clean = memory_manager.should_clean(clean_mutation_threshold)
+
+        if not should_clean:
             logger.debug(
                 f"AI clean skipped: mutation count {mutation_count}/{clean_mutation_threshold}",
                 context={"current_count": mutation_count, "threshold": clean_mutation_threshold},
@@ -534,18 +595,25 @@ def create_memory_hook(
             context={"current_count": mutation_count, "threshold": clean_mutation_threshold},
         )
 
-        try:
-            await clean_memory(
-                submodel, memory_manager,
-                clean_prompt=clean_prompt,
-                clean_user_prompt=clean_user_prompt,
-                logger=logger,
-            )
-        except Exception as e:
-            logger.warning(
-                f"AI memory clean SubAgent failed: {e}",
-                context={"error": str(e)},
-            )
+        ok = await clean_memory(
+            submodel, memory_manager,
+            clean_prompt=clean_prompt,
+            clean_user_prompt=clean_user_prompt,
+            logger=logger,
+            runtime=runtime,
+        )
+        if ok:
+            async with runtime.store_lock:
+                memory_manager.reset_mutation_count()
+
+    async def clean_memory_hook(ctx: HookContext):
+        logger = ctx.agent.logger
+        scheduled = runtime.schedule_clean(
+            _clean_memory_job(logger),
+            name="memory_clean",
+        )
+        if scheduled:
+            logger.debug("Queued memory clean job")
 
     _last_inject_hash: str = ""
 
@@ -584,6 +652,7 @@ def create_memory_hook(
             vector_weight=inject_vector_weight,
             max_candidates=max_candidates,
             logger=agent.logger,
+            runtime=runtime,
         )
 
         if not context:

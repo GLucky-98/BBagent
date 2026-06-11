@@ -17,6 +17,7 @@ from bbagent.core.team import AgentTeam, TeamConfig as CoreTeamConfig
 from backend.schemas import TeamConfig, AgentConfig
 from backend.factories import _next_id
 from backend.logging import get_backend_logger, log_operation
+from backend.dispatcher import AgentOutputDispatcher
 
 logger = get_backend_logger("state.team_factory")
 
@@ -28,6 +29,40 @@ class TeamFactory:
         self.teams: dict[str, AgentTeam] = {}  # team_id -> AgentTeam
         self._team_meta: dict[str, dict] = {}  # team_id -> persisted config dict
         self._started: set[str] = set()  # team_ids that have been started
+        self._dispatchers: dict[str, AgentOutputDispatcher] = {}
+
+    # ------------------------------------------------------------------
+    # Dispatchers
+    # ------------------------------------------------------------------
+
+    def _ensure_dispatcher(self, team_id: str) -> AgentOutputDispatcher:
+        dispatcher = self._dispatchers.get(team_id)
+        if dispatcher is None:
+            dispatcher = AgentOutputDispatcher()
+            self._dispatchers[team_id] = dispatcher
+        return dispatcher
+
+    @staticmethod
+    def _team_message_payload(msg_dict: dict) -> dict:
+        data = dict(msg_dict)
+        inner_type = data.pop("type", None)
+        payload = {"type": "team_message", **data}
+        if inner_type is not None:
+            payload["msg_type"] = inner_type
+        return payload
+
+    def _wire_team_dispatcher(self, team_id: str, team: AgentTeam) -> None:
+        dispatcher = self._ensure_dispatcher(team_id)
+
+        async def on_team_message(msg_dict: dict):
+            await dispatcher.on_chunk(self._team_message_payload(msg_dict))
+
+        team._on_team_message = on_team_message
+
+    def get_dispatcher(self, team_id: str) -> AgentOutputDispatcher | None:
+        if team_id not in self.teams:
+            return None
+        return self._ensure_dispatcher(team_id)
 
     # ------------------------------------------------------------------
     # Load
@@ -96,6 +131,7 @@ class TeamFactory:
 
         self.teams[team_id] = team
         self._team_meta[team_id] = raw
+        self._wire_team_dispatcher(team_id, team)
         if raw.get("started", False):
             self._started.add(team_id)
 
@@ -204,6 +240,7 @@ class TeamFactory:
 
         self.teams[team_id] = team
         self._team_meta[team_id] = team_data
+        self._wire_team_dispatcher(team_id, team)
         return team, team_id
 
     def _persist_team_meta(self, team_id: str):
@@ -283,6 +320,7 @@ class TeamFactory:
         del self.teams[team_id]
         self._team_meta.pop(team_id, None)
         self._started.discard(team_id)
+        self._dispatchers.pop(team_id, None)
         # 删除 teams/{id}/ 目录（team.base_dir 的父目录）
         if team.base_dir:
             team_root = team.base_dir.parent

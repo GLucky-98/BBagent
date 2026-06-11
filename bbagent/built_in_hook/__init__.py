@@ -1,5 +1,6 @@
 from .memory import (
     MemoryManager,
+    MemoryRuntime,
     Embedding,
     OllamaEmbedding,
     create_add_memory_tool,
@@ -130,11 +131,13 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
         logger=agent.logger,
         embedding=embedding_model,
     )
+    memory_runtime = MemoryRuntime(logger=agent.logger)
 
     add_tool = create_add_memory_tool(
         memory_manager,
         lambda: agent.session.id,
         prompt=config.add_memory_tool_prompt,
+        runtime=memory_runtime,
     )
     agent.add_tools([add_tool])
 
@@ -143,6 +146,7 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
      clean_memory_hook,
      inject_memory_hook) = create_memory_hook(
         memory_manager, submodel,
+        runtime=memory_runtime,
         extract_prompt=config.extract_prompt,
         clean_prompt=config.clean_prompt,
         subagent_add_memory_tool_prompt=config.extract_subagent_add_memory_tool_prompt,
@@ -210,4 +214,5 @@ __all__ = [
     "extract_memories",
     "MEMORY_SYSTEM_PROMPT",
     "BuiltinHookConfig",
+    "MemoryRuntime",
 ]

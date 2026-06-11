@@ -1,4 +1,6 @@
+import asyncio
 import re
+from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -25,22 +27,20 @@ async def team_chat_ws(websocket: WebSocket, team_ref: str):
         return
 
     team = state_manager.team_factory.teams[team_id]
+    dispatcher = state_manager.team_factory.get_dispatcher(team_id)
+    if dispatcher is None:
+        await websocket.close(code=4004, reason="Team dispatcher not found")
+        return
 
-    # 注册 team_message 回调，将 TeamMessage 实时推送给前端
-    async def on_team_message(msg_dict: dict):
-        try:
-            # TeamMessage.to_dict() 中的 "type" 改名为 "msg_type" 避免和外层冲突
-            inner_type = msg_dict.pop("type", None)
-            payload = {"type": "team_message", **msg_dict}
-            if inner_type is not None:
-                payload["msg_type"] = inner_type
-            await websocket.send_json(payload)
-        except Exception:
-            pass
+    subscriber_id = f"team_ws:{team_id}:{uuid4().hex[:8]}"
+    queue = dispatcher.subscribe(subscriber_id, replay=False)
 
-    team._on_team_message = on_team_message
+    async def forwarder():
+        while True:
+            chunk = await queue.get()
+            await websocket.send_json(chunk)
 
-    try:
+    async def receiver():
         async for msg in websocket.iter_json():
             msg_type = msg.get("type")
             if msg_type != "user_message":
@@ -69,10 +69,30 @@ async def team_chat_ws(websocket: WebSocket, team_ref: str):
                     "type": "system",
                     "content": "Use @agent_name to direct your message to a team member.",
                 })
+
+    forwarder_task = asyncio.create_task(forwarder())
+    receiver_task = asyncio.create_task(receiver())
+
+    try:
+        done, _ = await asyncio.wait(
+            {forwarder_task, receiver_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            exc = task.exception()
+            if exc is not None and not isinstance(exc, WebSocketDisconnect):
+                raise exc
     except WebSocketDisconnect:
         pass
     finally:
-        team._on_team_message = None
+        dispatcher.unsubscribe(subscriber_id)
+        for task in (forwarder_task, receiver_task):
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
 
 def _parse_mentions(text: str) -> list[str]:

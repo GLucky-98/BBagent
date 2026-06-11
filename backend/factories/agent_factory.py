@@ -846,7 +846,7 @@ class AgentFactory:
         for turn in agent.session.turns:
             for msg in turn.messages:
                 msg_dict = msg.to_dict()
-                ts = msg_dict.get("timestamp", 0)
+                ts = msg_dict.get("timestamp", 0) * 1000  # 秒 → 毫秒，统一前端时间格式
 
                 # ── ToolMessage: 直接输出 tool_result ──
                 if msg_dict.get("role") == "tool":
@@ -872,12 +872,20 @@ class AgentFactory:
                     if content.strip():
                         result.append({"role": display_role, "content": content, "source_agent": agent.name, "timestamp": ts})
                 elif isinstance(content, list):
-                    for block in content:
-                        bt = block.get("type", "")
-                        if bt == "text":
-                            text = block.get("text", "")
-                            if text.strip():
-                                result.append({"role": display_role, "content": text, "source_agent": agent.name, "timestamp": ts})
+                    # HumanMessage (role=="user"): 合并所有 text block，避免拆成多条用户消息
+                    if msg_dict.get("role") == "user":
+                        merged = "\n".join(
+                            b.get("text", "") for b in content if b.get("type") == "text"
+                        )
+                        if merged.strip():
+                            result.append({"role": "user", "content": merged, "source_agent": agent.name, "timestamp": ts})
+                    else:
+                        for block in content:
+                            bt = block.get("type", "")
+                            if bt == "text":
+                                text = block.get("text", "")
+                                if text.strip():
+                                    result.append({"role": display_role, "content": text, "source_agent": agent.name, "timestamp": ts})
 
                 # tool_calls: 仅从 tool_calls 字段输出（content 中的 tooluse 已在上面处理，避免重复）
                 for tc in msg_dict.get("tool_calls", []):

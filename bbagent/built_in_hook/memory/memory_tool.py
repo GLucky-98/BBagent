@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, TYPE_CHECKING
 
 from ...core.tool import Tool
 from ...core.message import HumanMessage
@@ -6,6 +6,9 @@ from ...core.agent import SubAgent
 from ...core.logger import AgentLogger
 from ...core.model import Model
 from .memory import Memory, MemoryManager
+
+if TYPE_CHECKING:
+    from .runtime import MemoryRuntime
 
 
 ADD_MEMORY_TOOL_DESCRIPTION = (
@@ -23,7 +26,12 @@ ADD_MEMORY_TOOL_DESCRIPTION = (
     '- Multiple discoveries → combine into one call with a list of strings'
 )
 
-def create_add_memory_tool(memory_manager: MemoryManager, session_id_getter, prompt: str = ADD_MEMORY_TOOL_DESCRIPTION) -> Tool:
+def create_add_memory_tool(
+    memory_manager: MemoryManager,
+    session_id_getter,
+    prompt: str = ADD_MEMORY_TOOL_DESCRIPTION,
+    runtime: "MemoryRuntime" = None,
+) -> Tool:
 
     async def add_memory(memories: List[str]) -> str:
         valid_memories = []
@@ -35,7 +43,11 @@ def create_add_memory_tool(memory_manager: MemoryManager, session_id_getter, pro
             valid_memories.append(memory)
 
         if valid_memories:
-            await memory_manager.add_memories(valid_memories)
+            if runtime is not None:
+                async with runtime.store_lock:
+                    await memory_manager.add_memories(valid_memories)
+            else:
+                await memory_manager.add_memories(valid_memories)
             saved_list = "\n".join(f"  - {m.content}" for m in valid_memories)
             return f"Saved {len(valid_memories)} memories:\n{saved_list}"
 
@@ -59,7 +71,7 @@ DELETE_MEMORY_TOOL_DESCRIPTION = (
     '- Delete multiple conflicting memories at once: memory_ids=["a1b2c3d4...", "e5f6g7h8..."]'
 )
 
-def create_delete_memory_tool(memory_manager: MemoryManager) -> Tool:
+def create_delete_memory_tool(memory_manager: MemoryManager, runtime: "MemoryRuntime" = None) -> Tool:
 
     async def delete_memory(memory_ids: List[str]) -> str:
         if not memory_ids:
@@ -68,14 +80,21 @@ def create_delete_memory_tool(memory_manager: MemoryManager) -> Tool:
         deleted = []
         not_found = []
 
-        for mid in memory_ids:
-            data = memory_manager.collection.get(ids=[mid], include=["documents"])
-            if data.get("ids"):
-                content = data["documents"][0] if data.get("documents") else "(unknown)"
-                memory_manager.delete_memory(mid)
-                deleted.append(f"  - [{mid[:12]}...] {content}")
-            else:
-                not_found.append(f"  - [{mid[:12]}...]")
+        async def _delete():
+            for mid in memory_ids:
+                data = memory_manager.collection.get(ids=[mid], include=["documents"])
+                if data.get("ids"):
+                    content = data["documents"][0] if data.get("documents") else "(unknown)"
+                    memory_manager.delete_memory(mid)
+                    deleted.append(f"  - [{mid[:12]}...] {content}")
+                else:
+                    not_found.append(f"  - [{mid[:12]}...]")
+
+        if runtime is not None:
+            async with runtime.store_lock:
+                await _delete()
+        else:
+            await _delete()
 
         result_parts = []
         if deleted:
@@ -143,20 +162,24 @@ async def inject_memory_context(
     vector_weight: float = 0.5,
     max_candidates: int = 50,
     logger: AgentLogger = None,
+    runtime: "MemoryRuntime" = None,
 ) -> str:
-    if memory_manager.count == 0:
-        if logger:
-            logger.debug("Memory store is empty, skipping injection")
-        return None
+    async def _collect_candidates() -> list[dict] | None:
+        count = memory_manager.count
+        if count == 0:
+            if logger:
+                logger.debug("Memory store is empty, skipping injection")
+            return None
 
-    if memory_manager.count <= max_candidates:
-        candidates = memory_manager.get_all()
-        if logger:
-            logger.debug(
-                f"Using all {memory_manager.count} memories as candidates (small store)",
-                context={"total_count": memory_manager.count},
-            )
-    else:
+        if count <= max_candidates:
+            all_candidates = memory_manager.get_all()
+            if logger:
+                logger.debug(
+                    f"Using all {count} memories as candidates (small store)",
+                    context={"total_count": count},
+                )
+            return all_candidates
+
         hybrid_result = await memory_manager.hybrid_search(
             query=query,
             n_results=max_candidates,
@@ -171,15 +194,22 @@ async def inject_memory_context(
                     context={"query_preview": query[:50]},
                 )
             return None
-        candidates = [
+        hybrid_candidates = [
             {"id": hybrid_result["ids"][i], "content": hybrid_result["documents"][i]}
             for i in range(len(hybrid_result["ids"]))
         ]
         if logger:
             logger.info(
-                f"Hybrid search returned {len(candidates)} candidates for query: {query[:50]}",
-                context={"candidate_count": len(candidates), "query_preview": query[:50]},
+                f"Hybrid search returned {len(hybrid_candidates)} candidates for query: {query[:50]}",
+                context={"candidate_count": len(hybrid_candidates), "query_preview": query[:50]},
             )
+        return hybrid_candidates
+
+    if runtime is not None:
+        async with runtime.store_lock:
+            candidates = await _collect_candidates()
+    else:
+        candidates = await _collect_candidates()
 
     if not candidates:
         return None
@@ -226,12 +256,21 @@ async def inject_memory_context(
             context={"selected_count": len(valid_ids), "candidate_count": len(candidates)},
         )
 
-    candidate_map = {c["id"]: c["content"] for c in candidates}
-    valid_contents = []
-    for mid in valid_ids:
-        if mid in candidate_map:
-            valid_contents.append(candidate_map[mid])
-            memory_manager.increment_access(mid)
+    def _resolve_selected() -> list[str]:
+        current = memory_manager.get_by_ids(valid_ids)
+        current_map = {c["id"]: c["content"] for c in current}
+        contents = []
+        for mid in valid_ids:
+            if mid in current_map:
+                contents.append(current_map[mid])
+                memory_manager.increment_access(mid)
+        return contents
+
+    if runtime is not None:
+        async with runtime.store_lock:
+            valid_contents = _resolve_selected()
+    else:
+        valid_contents = _resolve_selected()
 
     if not valid_contents:
         return None
