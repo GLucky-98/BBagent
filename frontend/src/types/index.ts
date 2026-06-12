@@ -102,6 +102,12 @@ export interface ToolPolicy {
   maxReadSize?: number;
   bashMaxOutputSize?: number;
   bashDefaultTimeout?: number;
+  webTimeout?: number;
+  webMaxResponseSize?: number;
+  webMaxOutputSize?: number;
+  webSearchMaxResults?: number;
+  webAllowedDomains?: string[];
+  webUserAgent?: string;
   subAgentModel?: string;           // modelId for sub-agent
   subAgentBlockedTools?: string[];  // tool names blocked for sub-agent
 }

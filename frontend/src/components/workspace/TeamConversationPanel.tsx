@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowRightLeft, Check, Inbox, Loader2, MessageSquare, Trash2, X } from "lucide-react";
 import { useAppStore } from "../../store";
 import { cn } from "../../lib/utils";
@@ -7,6 +7,8 @@ import { isTeam, type TeamConversation } from "../../types";
 interface Props {
   width: number;
 }
+
+const EMPTY_TEAM_CONVERSATIONS: TeamConversation[] = [];
 
 function formatConversationTime(value: number) {
   if (!value) return "";
@@ -121,10 +123,15 @@ function ConversationRow({
 }
 
 export function TeamConversationPanel({ width }: Props) {
-  const agents = useAppStore((s) => s.agents);
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
-  const agentStates = useAppStore((s) => s.agentStates);
-  const conversationsByTeam = useAppStore((s) => s.teamConversations);
+  const team = useAppStore((s) => {
+    const agent = s.activeAgentId ? s.agents.find((item) => item.id === s.activeAgentId) : null;
+    return agent && isTeam(agent) ? agent : null;
+  });
+  const teamId = team?.id || "";
+  const teamState = useAppStore((s) => (teamId ? s.agentStates[teamId] || team?.state || "ready" : "ready"));
+  const conversations = useAppStore((s) =>
+    teamId ? s.teamConversations[teamId] || EMPTY_TEAM_CONVERSATIONS : EMPTY_TEAM_CONVERSATIONS
+  );
   const loadTeamConversations = useAppStore((s) => s.loadTeamConversations);
   const loadTeamConversation = useAppStore((s) => s.loadTeamConversation);
   const deleteTeamConversation = useAppStore((s) => s.deleteTeamConversation);
@@ -134,19 +141,14 @@ export function TeamConversationPanel({ width }: Props) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const team = agents.find((agent) => agent.id === activeAgentId && isTeam(agent));
-  const conversations = useMemo(
-    () => (team ? conversationsByTeam[team.id] || [] : []),
-    [conversationsByTeam, team]
-  );
-  const teamState = team ? (agentStates[team.id] || team.state) : "ready";
   const disabled = teamState !== "ready";
 
   useEffect(() => {
-    if (!team) return;
+    if (!teamId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Team changes trigger an external conversation refresh with local loading state.
     setLoadingList(true);
-    loadTeamConversations(team.id).finally(() => setLoadingList(false));
-  }, [team?.id, loadTeamConversations]);
+    loadTeamConversations(teamId).finally(() => setLoadingList(false));
+  }, [teamId, loadTeamConversations]);
 
   const handleLoad = async (conversationId: string) => {
     if (!team) return;

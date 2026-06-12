@@ -218,6 +218,7 @@ export function WorkingDirView() {
   useEffect(() => {
     if (!workingDirPath) return;
     let ignore = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Working directory changes trigger an external file-tree refresh with local loading state.
     setLoading(true);
     api
       .getFileTree(workingDirPath)

@@ -33,6 +33,14 @@ export interface Toast {
   type: "info" | "warning";
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function agentIsBusy(state: "ready" | "waiting" | "running" | "error" | undefined): boolean {
+  return state === "running";
+}
+
 export interface AppState {
   agents: Agent[];
   // Per the unified-id design, the primary identifier for the active
@@ -47,6 +55,9 @@ export interface AppState {
   removeAgent: (id: string, deleteFiles?: boolean) => Promise<void>;
   addMessage: (agentId: string, message: Message) => void;
   patchMessage: (agentId: string, messageId: string, patch: Partial<Message>) => void;
+  agentInputs: Record<string, string>;
+  setAgentInput: (agentId: string, value: string) => void;
+  clearAgentInput: (agentId: string) => void;
 
   // Hook descriptors from GET /api/hooks. Populated by loadAll.
   hooksDescriptor: HookListResponse | null;
@@ -170,6 +181,9 @@ export interface AppState {
   teamConversations: Record<string, TeamConversation[]>;
   activeTeamConversationIds: Record<string, string>;
   teamConversationPanelOpen: boolean;
+  teamInputs: Record<string, string>;
+  setTeamInput: (teamId: string, value: string) => void;
+  clearTeamInput: (teamId: string) => void;
   addTeamMessage: (teamId: string, msg: TeamChatMessage) => void;
   loadTeamMessages: (teamId: string) => Promise<void>;
   loadTeamConversations: (teamId: string) => Promise<void>;
@@ -219,6 +233,8 @@ const BUILTIN_TOOL_IDS: Record<string, string> = {
   grep: "4dc7319f-7ff7-484b-aa19-c39fa5efa772",
   find: "023a166d-246b-4aeb-be56-3119210b9bba",
   ls: "20ae9084-3a2c-413b-bdbb-86f04fb9fdd3",
+  web_search: "b8fdcf95-a63b-5292-ba3f-b2b98b68c4e8",
+  fetch_url: "ce38b1cb-5dad-521f-bef8-0f7ffd442e7b",
 };
 
 const defaultTools: Tool[] = [
@@ -264,6 +280,18 @@ const defaultTools: Tool[] = [
     source: "built_in",
     description: "List directory contents",
   },
+  {
+    id: BUILTIN_TOOL_IDS.web_search,
+    name: "web_search",
+    source: "built_in",
+    description: "Search the web and return result titles, URLs, and snippets",
+  },
+  {
+    id: BUILTIN_TOOL_IDS.fetch_url,
+    name: "fetch_url",
+    source: "built_in",
+    description: "Fetch a web URL and return readable text content",
+  },
 ];
 
 const normalizeTeamMessages = (messages: Record<string, unknown>[] = []): TeamChatMessage[] =>
@@ -287,6 +315,7 @@ const applyConversationMessages = (
     const memberSessions = conversation.memberSessions || {};
     const team = state.agents.find((a) => a.id === teamId && isTeam(a)) as Team | undefined;
     const memberIdsByName = new Map((team?.members || []).map((member) => [member.name, member.id]));
+    const memberIdsWithChangedSessions = new Set<string>();
     const updatedMessages = result.messages ? normalizeTeamMessages(result.messages) : state.teamMessages[teamId] || [];
     const existingConversations = state.teamConversations[teamId] || [];
     const hasConversation = existingConversations.some((item) => item.id === conversation.id);
@@ -295,6 +324,7 @@ const applyConversationMessages = (
       active: item.id === conversation.id,
       ...(item.id === conversation.id ? conversation : {}),
     }));
+    const nextAgentInputs = { ...state.agentInputs };
 
     return {
       teamMessages: {
@@ -321,14 +351,20 @@ const applyConversationMessages = (
         }
         const memberName = [...memberIdsByName.entries()].find(([, id]) => id === agent.id)?.[0];
         if (memberName && isSingleAgent(agent)) {
+          const nextSessionId = memberSessions[memberName] || agent.currentSessionId;
+          if (nextSessionId !== agent.currentSessionId) {
+            memberIdsWithChangedSessions.add(agent.id);
+            delete nextAgentInputs[agent.id];
+          }
           return {
             ...agent,
-            currentSessionId: memberSessions[memberName] || agent.currentSessionId,
+            currentSessionId: nextSessionId,
             messages: result.messages ? [] : agent.messages,
           };
         }
         return agent;
       }),
+      agentInputs: memberIdsWithChangedSessions.size > 0 ? nextAgentInputs : state.agentInputs,
     };
   });
 };
@@ -344,6 +380,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   teamConversations: {},
   activeTeamConversationIds: {},
   teamConversationPanelOpen: false,
+  teamInputs: {},
+  setTeamInput: (teamId, value) => {
+    if (!teamId) return;
+    set((state) => ({
+      teamInputs: { ...state.teamInputs, [teamId]: value },
+    }));
+  },
+  clearTeamInput: (teamId) => {
+    if (!teamId) return;
+    set((state) => {
+      const next = { ...state.teamInputs };
+      delete next[teamId];
+      return { teamInputs: next };
+    });
+  },
   addTeamMessage: (teamId, msg) =>
     set((state) => ({
       teamMessages: {
@@ -403,6 +454,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const name = team ? `Conversation ${new Date().toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : undefined;
     try {
       const result = (await api.createTeamConversation(teamId, name)) as TeamConversationResult;
+      get().clearTeamInput(teamId);
       applyConversationMessages(teamId, { ...result, messages: [] }, set);
       await Promise.all([
         get().loadTeamConversations(teamId),
@@ -415,14 +467,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       ]);
       for (const warning of result.warnings || []) get().addToast(warning, "warning");
       get().addToast("Team conversation created", "info");
-    } catch (e: any) {
-      get().addToast(`Create conversation failed: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Create conversation failed: ${errorMessage(e)}`, "warning");
     }
   },
   loadTeamConversation: async (teamId, conversationId) => {
     const team = get().agents.find((a) => a.id === teamId);
     try {
       const result = (await api.loadTeamConversation(teamId, conversationId)) as TeamConversationResult;
+      get().clearTeamInput(teamId);
       applyConversationMessages(teamId, result, set);
       await Promise.all([
         get().loadTeamConversations(teamId),
@@ -434,8 +487,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       ]);
       for (const warning of result.warnings || []) get().addToast(warning, "warning");
       get().addToast("Team conversation loaded", "info");
-    } catch (e: any) {
-      get().addToast(`Load conversation failed: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Load conversation failed: ${errorMessage(e)}`, "warning");
     }
   },
   deleteTeamConversation: async (teamId, conversationId) => {
@@ -444,6 +497,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const result = await api.deleteTeamConversation(teamId, conversationId);
       if (result.active) {
         const activeResult = result.active as TeamConversationResult;
+        get().clearTeamInput(teamId);
         applyConversationMessages(teamId, activeResult.messages ? activeResult : { ...activeResult, messages: [] }, set);
         for (const warning of activeResult.warnings || []) get().addToast(warning, "warning");
       }
@@ -457,21 +511,20 @@ export const useAppStore = create<AppState>((set, get) => ({
         ])),
       ]);
       get().addToast("Team conversation deleted", "info");
-    } catch (e: any) {
-      get().addToast(`Delete conversation failed: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Delete conversation failed: ${errorMessage(e)}`, "warning");
     }
   },
 
   setActiveAgentId: (id) => {
     const agent = id ? get().agents.find((a) => a.id === id) : null;
-    const isTeamAgent = agent?.type === "team";
     set({
       activeAgentId: id,
       activeTeamMemberName: null,
       workingDirPath: agent?.workingDir || "",
       baseDirPath: agent?.baseDir || "",
       previewFile: null,
-      teamGraphOpen: isTeamAgent ? true : false,
+      teamGraphOpen: false,
       teamConversationPanelOpen: false,
     });
   },
@@ -585,10 +638,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         agents: state.agents.filter((a) => a.id !== id),
         activeAgentId: state.activeAgentId === id ? null : state.activeAgentId,
         previewFile: state.activeAgentId === id ? null : state.previewFile,
+        agentInputs: Object.fromEntries(Object.entries(state.agentInputs).filter(([agentId]) => agentId !== id)),
       }));
       get().addToast(`Agent '${name}' deleted`, "info");
-    } catch (e: any) {
-      get().addToast(`Failed to delete agent '${name}': ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to delete agent '${name}': ${errorMessage(e)}`, "warning");
     }
   },
   addMessage: (agentId, message) =>
@@ -604,6 +658,21 @@ export const useAppStore = create<AppState>((set, get) => ({
         return { ...a, messages: newMsgs };
       }),
     })),
+  agentInputs: {},
+  setAgentInput: (agentId, value) => {
+    if (!agentId) return;
+    set((state) => ({
+      agentInputs: { ...state.agentInputs, [agentId]: value },
+    }));
+  },
+  clearAgentInput: (agentId) => {
+    if (!agentId) return;
+    set((state) => {
+      const next = { ...state.agentInputs };
+      delete next[agentId];
+      return { agentInputs: next };
+    });
+  },
 
   isSettingsOpen: false,
   settingsActiveTab: "models",
@@ -627,7 +696,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleBasedirExpand: (path) =>
     set((state) => {
       const newSet = new Set(state.basedirExpandedPaths);
-      newSet.has(path) ? newSet.delete(path) : newSet.add(path);
+      if (newSet.has(path)) {
+        newSet.delete(path);
+      } else {
+        newSet.add(path);
+      }
       return { basedirExpandedPaths: newSet };
     }),
 
@@ -635,7 +708,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleWorkingDirExpand: (path) =>
     set((state) => {
       const newSet = new Set(state.workingDirExpandedPaths);
-      newSet.has(path) ? newSet.delete(path) : newSet.add(path);
+      if (newSet.has(path)) {
+        newSet.delete(path);
+      } else {
+        newSet.add(path);
+      }
       return { workingDirExpandedPaths: newSet };
     }),
 
@@ -708,8 +785,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const [mcps, tools] = await Promise.all([api.listMcps(), api.listTools()]);
       set({ mcpServers: mcps || [], tools: tools || [] });
       get().addToast(`MCP server '${server.name}' created`, "info");
-    } catch (e: any) {
-      get().addToast(`Failed to create MCP server '${server.name}': ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to create MCP server '${server.name}': ${errorMessage(e)}`, "warning");
     }
   },
   updateMcpServer: async (id, updates) => {
@@ -809,7 +886,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleTeamExpanded: (teamId: string) =>
     set((state) => {
       const newSet = new Set(state.expandedTeams);
-      newSet.has(teamId) ? newSet.delete(teamId) : newSet.add(teamId);
+      if (newSet.has(teamId)) {
+        newSet.delete(teamId);
+      } else {
+        newSet.add(teamId);
+      }
       return { expandedTeams: newSet };
     }),
 
@@ -840,28 +921,66 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   switchSession: async (id: string, sessionId: string) => {
-    await api.switchSession(id, sessionId);
-    const sessions = get().agentSessions[id] || [];
-    set((s) => ({
-      agentSessions: {
-        ...s.agentSessions,
-        [id]: sessions.map((sess) => ({
-          ...sess,
-          isActive: sess.id === sessionId,
-        })),
-      },
-    }));
-    await get().loadAgentMessages(id);
+    const currentState = get().agentStates[id] || get().agents.find((a) => a.id === id)?.state;
+    if (agentIsBusy(currentState)) {
+      get().addToast("Cannot switch sessions while agent is running", "warning");
+      return;
+    }
+    try {
+      await api.switchSession(id, sessionId);
+      get().clearAgentInput(id);
+      const sessions = get().agentSessions[id] || [];
+      set((s) => ({
+        agents: s.agents.map((a) =>
+          a.id === id
+            ? {
+                ...a,
+                currentSessionId: sessionId,
+                sessions: a.sessions.map((sess) => ({
+                  ...sess,
+                  isActive: sess.id === sessionId,
+                })),
+              }
+            : a
+        ),
+        agentSessions: {
+          ...s.agentSessions,
+          [id]: sessions.map((sess) => ({
+            ...sess,
+            isActive: sess.id === sessionId,
+          })),
+        },
+        globalSessions: s.globalSessions.map((sess) => (
+          sess.agent_id === id
+            ? { ...sess, is_active: sess.session_id === sessionId }
+            : sess
+        )),
+      }));
+      await get().loadAgentMessages(id);
+    } catch (e: unknown) {
+      get().addToast(`Switch session failed: ${errorMessage(e)}`, "warning");
+    }
   },
 
   createNewSession: async (id: string) => {
-    const result = await api.newSession(id);
-    await get().loadAgentSessions(id);
-    set((s) => ({
-      agents: s.agents.map((a) =>
-        a.id === id ? { ...a, messages: [], currentSessionId: result.session_id } : a
-      ),
-    }));
+    const currentState = get().agentStates[id] || get().agents.find((a) => a.id === id)?.state;
+    if (agentIsBusy(currentState)) {
+      get().addToast("Cannot create a new session while agent is running", "warning");
+      return;
+    }
+    try {
+      const result = await api.newSession(id);
+      get().clearAgentInput(id);
+      await get().loadAgentSessions(id);
+      await get().loadGlobalSessions();
+      set((s) => ({
+        agents: s.agents.map((a) =>
+          a.id === id ? { ...a, messages: [], currentSessionId: result.session_id } : a
+        ),
+      }));
+    } catch (e: unknown) {
+      get().addToast(`Create session failed: ${errorMessage(e)}`, "warning");
+    }
   },
 
   loadAgentMessages: async (id: string) => {
@@ -909,8 +1028,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await api.startAgent(id);
       get().addToast(`Agent '${name}' started`, "info");
-    } catch (e: any) {
-      get().addToast(`Failed to start agent '${name}': ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to start agent '${name}': ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -920,8 +1039,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await api.stopAgent(id);
       get().addToast(`Agent '${name}' stopped`, "info");
-    } catch (e: any) {
-      get().addToast(`Failed to stop agent '${name}': ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to stop agent '${name}': ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -931,8 +1050,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await api.startTeam(id);
       get().addToast(`Team '${name}' started`, "info");
-    } catch (e: any) {
-      get().addToast(`Failed to start team '${name}': ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to start team '${name}': ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -942,8 +1061,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await api.stopTeam(id);
       get().addToast(`Team '${name}' stopped`, "info");
-    } catch (e: any) {
-      get().addToast(`Failed to stop team '${name}': ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to stop team '${name}': ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -956,10 +1075,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         agents: state.agents.filter((a) => a.id !== id),
         activeAgentId: state.activeAgentId === id ? null : state.activeAgentId,
         previewFile: state.activeAgentId === id ? null : state.previewFile,
+        teamInputs: Object.fromEntries(Object.entries(state.teamInputs).filter(([teamId]) => teamId !== id)),
       }));
       get().addToast(`Team '${name}' deleted`, "info");
-    } catch (e: any) {
-      get().addToast(`Failed to delete team '${name}': ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to delete team '${name}': ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -978,8 +1098,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const timers = await api.addTimer(id, data);
       set((s) => ({ agentTimers: { ...s.agentTimers, [id]: timers || [] } }));
-    } catch (e: any) {
-      get().addToast(`Failed to add timer: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to add timer: ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -987,8 +1107,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const timers = await api.updateTimer(id, name, data);
       set((s) => ({ agentTimers: { ...s.agentTimers, [id]: timers || [] } }));
-    } catch (e: any) {
-      get().addToast(`Failed to update timer: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to update timer: ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -996,8 +1116,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await api.startTimer(id, name);
       await get().loadTimers(id);
-    } catch (e: any) {
-      get().addToast(`Failed to start timer: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to start timer: ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -1005,8 +1125,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await api.stopTimer(id, name);
       await get().loadTimers(id);
-    } catch (e: any) {
-      get().addToast(`Failed to stop timer: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to stop timer: ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -1014,8 +1134,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const timers = await api.deleteTimer(id, name);
       set((s) => ({ agentTimers: { ...s.agentTimers, [id]: timers || [] } }));
-    } catch (e: any) {
-      get().addToast(`Failed to delete timer: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Failed to delete timer: ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -1309,8 +1429,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       get().refreshFileTree();
       await get().loadGlobalSessions();
-    } catch (e: any) {
-      get().addToast(`Fork failed: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Fork failed: ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -1318,15 +1438,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await api.deleteGlobalSession(sessionId);
       set((s) => {
-        const { [sessionId]: _, ...rest } = s.sessionDetails;
+        const rest = { ...s.sessionDetails };
+        delete rest[sessionId];
         return {
           globalSessions: s.globalSessions.filter((gs) => gs.session_id !== sessionId),
           sessionDetails: rest,
         };
       });
       get().addToast("Session deleted", "info");
-    } catch (e: any) {
-      get().addToast(`Delete failed: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      get().addToast(`Delete failed: ${errorMessage(e)}`, "warning");
     }
   },
 
@@ -1383,16 +1504,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 }));
 
 export const useSelectedAgent = () => {
-  const agents = useAppStore((s) => s.agents);
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
-  const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
-  if (!activeAgentId) return null;
-  const agent = agents.find((a) => a.id === activeAgentId);
-  if (!agent) return null;
-  if (isTeam(agent) && activeTeamMemberName) {
-    return agent.members.find((m) => m.name === activeTeamMemberName) ?? null;
-  }
-  return agent;
+  return useAppStore((s) => {
+    if (!s.activeAgentId) return null;
+    const agent = s.agents.find((a) => a.id === s.activeAgentId);
+    if (!agent) return null;
+    if (isTeam(agent) && s.activeTeamMemberName) {
+      return agent.members.find((m) => m.name === s.activeTeamMemberName) ?? null;
+    }
+    return agent;
+  });
 };
 
 export const useAgentModel = () => {

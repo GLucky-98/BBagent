@@ -220,7 +220,7 @@ class MemoryManager:
         except Exception as e:
             self.logger.warning(f"Failed to delete memory from ChromaDB: id={memory_id}, error={e}")
 
-    async def add_memories(self, memories: List[Memory]):
+    async def add_memories(self, memories: List[Memory]) -> dict:
         all_data = self.collection.get(include=["documents"])
         existing_contents = set(all_data.get("documents", []))
 
@@ -240,13 +240,13 @@ class MemoryManager:
                 f"All {len(memories)} memories already exist, skipping",
                 context={"duplicate_count": len(memories)},
             )
-            return
+            return {"added_count": 0, "skipped_duplicates": skipped, "failed_count": 0}
         contents = [m.content for m in pending]
         try:
             embeddings = await self.embedding.get_embeddings(contents)
         except Exception as e:
             self.logger.error(f"Failed to get embeddings for {len(contents)} memories: {e}")
-            return
+            return {"added_count": 0, "skipped_duplicates": skipped, "failed_count": len(pending)}
 
         valid_pairs = [(m, e) for m, e in zip(pending, embeddings) if e is not None]
         if len(valid_pairs) < len(pending):
@@ -254,8 +254,13 @@ class MemoryManager:
             self.logger.warning(
                 f"Partial embedding: {len(valid_pairs)}/{len(pending)} memories embedded, {failed_count} failed",
             )
+        else:
+            failed_count = 0
         pending = [m for m, _ in valid_pairs]
         embeddings = [e for _, e in valid_pairs]
+
+        if not pending:
+            return {"added_count": 0, "skipped_duplicates": skipped, "failed_count": failed_count}
 
         await self._add_batch_to_chroma(pending, embeddings)
 
@@ -266,6 +271,7 @@ class MemoryManager:
         self._dump_memories_json()
         self.increment_mutation_count(len(pending))
         self._bm25_dirty = True
+        return {"added_count": len(pending), "skipped_duplicates": skipped, "failed_count": failed_count}
 
     def delete_memory(self, memory_id: str):
         doc_data = self.collection.get(ids=[memory_id])

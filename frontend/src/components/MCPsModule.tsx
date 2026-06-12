@@ -142,8 +142,9 @@ function MCPList({ onNew, onSelect, onEdit }: { onNew: () => void; onSelect: () 
     setImporting(true);
     try {
       await importMcpServers(path);
-    } catch (e: any) {
-      useAppStore.getState().addToast(`MCP import failed: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      useAppStore.getState().addToast(`MCP import failed: ${message}`, "warning");
     } finally {
       setImporting(false);
     }

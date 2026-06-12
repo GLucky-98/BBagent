@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from backend.logging import get_backend_logger
 from backend.state import state_manager
 
-
 logger = get_backend_logger("api.skills")
 
 
@@ -23,20 +22,18 @@ async def list_skills():
 
 
 @router.post("/import")
-async def import_skills(req: ImportRequest):
+def import_skills(req: ImportRequest):
     target = Path(req.path).expanduser().resolve()
     if not target.exists():
         raise HTTPException(status_code=400, detail="Path does not exist")
 
-    if target.is_file() and target.suffix.lower() == ".md":
-        dir_path = target.parent
-    elif target.is_dir():
-        dir_path = target
+    if target.is_dir() or (target.is_file() and target.name.lower() == "skill.md"):
+        import_path = target
     else:
-        raise HTTPException(status_code=400, detail="Not a valid skill path (must be .md file or directory)")
+        raise HTTPException(status_code=400, detail="Not a valid skill path (must be SKILL.md file or directory)")
 
-    logger.info(f"Importing skills from: {dir_path}")
-    added, skipped = state_manager.import_skills_from_dir(dir_path)
+    logger.info(f"Importing skills from: {import_path}")
+    added, skipped = state_manager.import_skills_from_dir(import_path)
 
     for item in added:
         logger.info(f"  [imported] {item.name}")

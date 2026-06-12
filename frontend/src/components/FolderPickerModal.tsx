@@ -52,6 +52,7 @@ export function FolderPickerModal({ open, onClose, onSelect, title = "Select Fol
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Opening the modal resets transient inline editor state.
       setCreatingNew(false);
       setRenamingDir(null);
       loadDirs("~");

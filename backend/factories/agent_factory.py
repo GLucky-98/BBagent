@@ -22,19 +22,19 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from bbagent.core.agent import Agent, AgentConfig as CoreAgentConfig
-from bbagent.core.message import Session
-from bbagent.core.mcp import MCPClient
-from bbagent.core.tool import Tool
+from backend.dispatcher import AgentOutputDispatcher
+from backend.errors import AppError, ConflictError, ErrorCode, NotFoundError
+from backend.factories import _builtin_tool_id, _next_id
+from backend.logging import get_backend_logger, log_operation
+from backend.schemas import AgentConfig, TimerConfig
+from bbagent.built_in_hook import HOOK_CREATOR, BuiltinHookConfig
 from bbagent.built_in_tool import TOOL_CREATOR
 from bbagent.built_in_tool.policy import Policy
-from bbagent.built_in_hook import HOOK_CREATOR, BuiltinHookConfig
-
-from backend.schemas import AgentConfig, TimerConfig
-from backend.dispatcher import AgentOutputDispatcher
-from backend.errors import NotFoundError, ErrorCode, AppError
-from backend.logging import get_backend_logger, log_operation
-from backend.factories import _next_id, _builtin_tool_id
+from bbagent.core.agent import Agent, AgentState
+from bbagent.core.agent import AgentConfig as CoreAgentConfig
+from bbagent.core.mcp import MCPClient
+from bbagent.core.message import Session
+from bbagent.core.tool import Tool
 
 # camelCase -> snake_case for tool policy
 # Used only when constructing Policy objects from camelCase dicts.
@@ -42,6 +42,12 @@ _POLICY_FIELD_MAP = {
     "maxReadSize": "max_read_size",
     "bashMaxOutputSize": "bash_max_output_size",
     "bashDefaultTimeout": "bash_default_timeout",
+    "webTimeout": "web_timeout",
+    "webMaxResponseSize": "web_max_response_size",
+    "webMaxOutputSize": "web_max_output_size",
+    "webSearchMaxResults": "web_search_max_results",
+    "webAllowedDomains": "web_allowed_domains",
+    "webUserAgent": "web_user_agent",
     "subAgentModel": "sub_agent_model",
     "subAgentBlockedTools": "sub_agent_blocked_tools",
 }
@@ -51,21 +57,28 @@ def _policy_to_snake(policy: dict) -> dict:
     return {_POLICY_FIELD_MAP.get(k, k): v for k, v in policy.items()}
 
 
-def _prepare_policy_dict(policy_dict: dict, tool_ids: list[str], model_factory) -> dict:
+def _prepare_policy_dict(
+    policy_dict: dict,
+    tool_ids: list[str],
+    model_factory,
+    fallback_model_id: str = "",
+) -> dict:
     """Process policy dict before creating Policy object.
-    
-    - If sub_agent tool is in tool_ids, resolve subAgentModel to model config dict
+
+    - If sub_agent tool is in tool_ids, resolve subAgentModel to model config dict.
+      When subAgentModel is empty, fall back to the agent's main model.
     - If sub_agent tool is NOT in tool_ids, remove sub_agent related fields
     """
     result = dict(policy_dict)
     sub_agent_tool_id = _builtin_tool_id("sub_agent")
     has_sub_agent = sub_agent_tool_id in tool_ids
-    
+
     if has_sub_agent:
         # Resolve subAgentModel (modelId) to model config dict
         sub_model_id = result.pop("subAgentModel", None) or result.pop("sub_agent_model", None)
-        if sub_model_id:
-            model_obj = model_factory.acquire_submodel(sub_model_id)
+        effective_model_id = sub_model_id or fallback_model_id
+        if effective_model_id:
+            model_obj = model_factory.acquire_submodel(effective_model_id)
             result["sub_agent_model"] = model_obj.to_config_dict() if model_obj else None
         # subAgentBlockedTools will be converted by _policy_to_snake
     else:
@@ -74,7 +87,7 @@ def _prepare_policy_dict(policy_dict: dict, tool_ids: list[str], model_factory) 
         result.pop("sub_agent_model", None)
         result.pop("subAgentBlockedTools", None)
         result.pop("sub_agent_blocked_tools", None)
-    
+
     return result
 
 
@@ -453,19 +466,7 @@ class AgentFactory:
                 cfg.toolPolicy = dict(current_policy)
                 cfg.workingDir = current_policy.get("cwd", "")
             tool_ids = list(cfg.toolIds) if cfg else []
-            prepared_policy = _prepare_policy_dict(current_policy, tool_ids, self._model_factory)
-            policy_obj = Policy(**_policy_to_snake(prepared_policy))
-            for tool_name, tool in list(agent.tools.items()):
-                source = getattr(tool, 'source', None)
-                if not source or source not in TOOL_CREATOR:
-                    continue
-                del agent.tools[tool_name]
-                builder = TOOL_CREATOR[source]
-                if asyncio.iscoroutinefunction(builder):
-                    new_tool = await builder(policy_obj)
-                else:
-                    new_tool = builder(policy_obj)
-                agent.tools[new_tool.name] = new_tool
+            await self._rebuild_existing_builtin_tools(agent_id, tool_ids)
 
         if "systemPrompt" in updates:
             agent.change_system_prompt(updates["systemPrompt"])
@@ -491,6 +492,11 @@ class AgentFactory:
                     self._model_ids[agent_id] = new_model_id
                     if old_model_id and old_model_id != new_model_id:
                         await self._model_factory.release(old_model_id)
+                    if cfg:
+                        policy = dict(getattr(agent, "policy", {}) or {})
+                        sub_model_id = policy.get("subAgentModel") or policy.get("sub_agent_model")
+                        if not sub_model_id:
+                            await self._rebuild_existing_builtin_tools(agent_id, list(cfg.toolIds))
 
         # toolIds
         if "toolIds" in updates:
@@ -504,7 +510,12 @@ class AgentFactory:
 
             policy_for_build = dict(getattr(agent, "policy", {}) or {})
             policy_for_build.setdefault("cwd", str(agent.base_dir))
-            prepared_policy = _prepare_policy_dict(policy_for_build, new_tool_ids, self._model_factory)
+            prepared_policy = _prepare_policy_dict(
+                policy_for_build,
+                new_tool_ids,
+                self._model_factory,
+                self._model_ids.get(agent_id, ""),
+            )
             policy_obj = Policy(**_policy_to_snake(prepared_policy))
 
             for tid in added:
@@ -606,7 +617,7 @@ class AgentFactory:
         if not agent:
             raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{agent_id}' not found")
 
-        if agent._running:
+        if agent.is_running:
             logger.info("Agent '%s' already running, skipped", agent.name)
             return
 
@@ -821,6 +832,11 @@ class AgentFactory:
         agent = self.agents.get(agent_id)
         if not agent:
             raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{agent_id}' not found")
+        if agent.state == AgentState.Running:
+            raise ConflictError(
+                ErrorCode.AGENT_ALREADY_RUNNING,
+                f"Cannot switch session for agent '{agent.name}' while it is running",
+            )
         session_path = agent.session_dir / session_id / f"{session_id}.jsonl"
         if not session_path.exists():
             raise NotFoundError(ErrorCode.SESSION_NOT_FOUND, f"Session '{session_id}' not found")
@@ -833,6 +849,11 @@ class AgentFactory:
         agent = self.agents.get(agent_id)
         if not agent:
             raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{agent_id}' not found")
+        if agent.state == AgentState.Running:
+            raise ConflictError(
+                ErrorCode.AGENT_ALREADY_RUNNING,
+                f"Cannot create a new session for agent '{agent.name}' while it is running",
+            )
         with log_operation(logger, "new_session", agent_name=agent.name):
             await agent.new_session()
         self._update_last_session_id(agent_id)
@@ -907,7 +928,7 @@ class AgentFactory:
         # Merge runtime running state if agent is running
         agent = self.agents.get(agent_id)
         running_names = set()
-        if agent and agent._running:
+        if agent and agent.is_running:
             for t in agent.list_timers():
                 if t.get("running"):
                     running_names.add(t["name"])
@@ -942,7 +963,7 @@ class AgentFactory:
         new_timer = TimerConfig(name=name, seconds=seconds, hint=hint, enabled=enabled)
         cfg.timers.append(new_timer)
 
-        if agent._running and enabled:
+        if agent.is_running and enabled:
             agent.add_timer(seconds, name, hint)
 
         self._write_agent_json_full(agent_id, started=agent_id in self._started)
@@ -968,7 +989,7 @@ class AgentFactory:
         if enabled is not None:
             timer.enabled = enabled
 
-        if agent._running:
+        if agent.is_running:
             agent.update_timer(timer_name, seconds=timer.seconds, hint=timer.hint)
             if timer.enabled:
                 agent.start_timer(timer_name)
@@ -1018,7 +1039,7 @@ class AgentFactory:
         if not agent or not cfg:
             return False
 
-        if agent._running:
+        if agent.is_running:
             agent.cancel_timer(timer_name)
 
         cfg.timers = [t for t in cfg.timers if t.name != timer_name]
@@ -1028,6 +1049,40 @@ class AgentFactory:
     # ------------------------------------------------------------------
     # Internal: tool/skill helpers
     # ------------------------------------------------------------------
+
+    async def _rebuild_existing_builtin_tools(self, agent_id: str, tool_ids: list[str]) -> None:
+        agent = self.agents[agent_id]
+        policy_raw = dict(getattr(agent, "policy", {}) or {})
+        policy_raw.setdefault("cwd", str(agent.base_dir))
+        prepared_policy = _prepare_policy_dict(
+            policy_raw,
+            tool_ids,
+            self._model_factory,
+            self._model_ids.get(agent_id, ""),
+        )
+        policy_obj = Policy(**_policy_to_snake(prepared_policy))
+        current_pool = self._tool_instances.get(agent_id)
+
+        for tool_id in tool_ids:
+            tool_config = self._tool_factory.get(tool_id)
+            if not tool_config or tool_config.source != "built_in":
+                continue
+            builder = TOOL_CREATOR.get(tool_config.name)
+            if builder is None:
+                continue
+            should_rebuild = (
+                (current_pool is not None and tool_id in current_pool)
+                or tool_config.name in agent.tools
+            )
+            if not should_rebuild:
+                continue
+            if asyncio.iscoroutinefunction(builder):
+                new_tool = await builder(policy_obj)
+            else:
+                new_tool = builder(policy_obj)
+            agent.tools[new_tool.name] = new_tool
+            if current_pool is not None and tool_id in current_pool:
+                current_pool[tool_id] = new_tool
 
     def _collect_missing_tool_ids(self, agent_id: str) -> list[str]:
         cfg = self._agent_configs.get(agent_id)
@@ -1059,25 +1114,20 @@ class AgentFactory:
     async def _lazy_init(self, agent_id: str):
         agent = self.agents[agent_id]
         policy_raw = getattr(agent, "policy", {}) or {}
-        
+
         cfg = self._agent_configs.get(agent_id)
         tool_ids = list(cfg.toolIds) if cfg else []
         skill_ids = list(cfg.skillIds) if cfg else []
-        
-        if policy_raw:
-            prepared_policy = _prepare_policy_dict(policy_raw, tool_ids, self._model_factory)
-            policy_snake = _policy_to_snake(prepared_policy)
-            policy_snake.setdefault("cwd", str(agent.base_dir))
-            policy_obj = Policy(**policy_snake)
-        else:
-            policy_obj = None
 
-        # Build tools from toolIds
-        mcp_server_to_template_ids: dict[str, list[str]] = {}
-        for tid in tool_ids:
-            tpl = self._tool_factory.get(tid)
-            if tpl and tpl.mcpServerId:
-                mcp_server_to_template_ids.setdefault(tpl.mcpServerId, []).append(tid)
+        prepared_policy = _prepare_policy_dict(
+            policy_raw,
+            tool_ids,
+            self._model_factory,
+            self._model_ids.get(agent_id, ""),
+        )
+        policy_snake = _policy_to_snake(prepared_policy)
+        policy_snake.setdefault("cwd", str(agent.base_dir))
+        policy_obj = Policy(**policy_snake)
 
         # Build tools from toolIds — in parallel
         async def _safe_build(tid):
@@ -1092,18 +1142,6 @@ class AgentFactory:
 
         if built_tools:
             agent.add_tools(built_tools)
-
-        # Register MCP clients
-        mcp_client_map: dict[str, MCPClient] = {}
-        bucket = self._mcp_clients.get(agent_id, {})
-        for server_id in mcp_server_to_template_ids.keys():
-            client = bucket.get(server_id)
-            if client is not None:
-                mcp_cfg = self._mcp_factory.get(server_id)
-                if mcp_cfg:
-                    mcp_client_map[mcp_cfg.name] = client
-        if mcp_client_map:
-            agent.register_mcp_clients(mcp_client_map)
 
         # Skills
         for sid in skill_ids:

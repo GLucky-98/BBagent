@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { X, Bot, Users, FileText, Settings, Copy, Download, FileJson, AlertCircle } from "lucide-react";
 import { useAppStore } from "../../store";
 import { cn, agentToTemplate, resolveTemplate, detectTemplateType } from "../../lib/utils";
@@ -14,6 +14,7 @@ import type {
   CreateAgentPayload,
   CreateTeamPayload,
   Template,
+  Prompt,
 } from "../../types";
 import { isTeam, isSingleAgent } from "../../types";
 import { FolderPicker } from "../FolderPicker";
@@ -51,10 +52,6 @@ function HookConfigDialog({
   const models = useAppStore((s) => s.models);
   const prompts = useAppStore((s) => s.prompts);
   const [draft, setDraft] = useState<Record<string, unknown>>(hookConfig);
-
-  useEffect(() => {
-    setDraft(hookConfig);
-  }, [hookConfig, open]);
 
   if (!open) return null;
 
@@ -136,7 +133,7 @@ function HookSectionForm({
   section: HookSection;
   draft: Record<string, unknown>;
   models: { id: string; name: string; provider: string }[];
-  prompts: { id: string; name: string; content: string; description?: string }[];
+  prompts: Prompt[];
   onField: (key: string, value: unknown) => void;
 }) {
   return (
@@ -168,7 +165,7 @@ function HookFieldInput({
   field: HookFieldSchema;
   value: unknown;
   models: { id: string; name: string; provider: string }[];
-  prompts: { id: string; name: string; content: string; description?: string }[];
+  prompts: Prompt[];
   onChange: (v: unknown) => void;
 }) {
   const [showPromptPicker, setShowPromptPicker] = useState(false);
@@ -229,7 +226,7 @@ function HookFieldInput({
         {showPromptPicker && (
           <div className="mb-2">
             <GroupedPromptPicker
-              prompts={prompts as any}
+              prompts={prompts}
               onSelect={(p) => { onChange(p.content); setShowPromptPicker(false); }}
             />
           </div>
@@ -310,10 +307,6 @@ interface ToolPolicyDialogProps {
 
 function ToolPolicyDialog({ open, onClose, toolPolicy, onSave, models, builtinTools, hasSubAgent }: ToolPolicyDialogProps) {
   const [draft, setDraft] = useState<ToolPolicy>(toolPolicy);
-
-  useEffect(() => {
-    setDraft(toolPolicy);
-  }, [toolPolicy, open]);
 
   if (!open) return null;
 
@@ -817,6 +810,7 @@ function SingleAgentForm({
       </div>
 
       <ToolPolicyDialog
+        key={toolPolicyOpen ? JSON.stringify(toolPolicy) : "closed"}
         open={toolPolicyOpen}
         onClose={() => setToolPolicyOpen(false)}
         toolPolicy={toolPolicy}
@@ -830,6 +824,7 @@ function SingleAgentForm({
       />
       {hooksDescriptor && (
         <HookConfigDialog
+          key={hookConfigOpen ? JSON.stringify(hookConfig) : "closed"}
           open={hookConfigOpen}
           onClose={() => setHookConfigOpen(false)}
           hookConfig={hookConfig}
@@ -1225,11 +1220,8 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
   const updateAgent = useAppStore((s) => s.updateAgent);
   const updateTeam = useAppStore((s) => s.updateTeam);
   const addToast = useAppStore((s) => s.addToast);
-  const [localType, setLocalType] = useState<"agent" | "team" | "">(type);
-
-  useEffect(() => {
-    setLocalType(type);
-  }, [open, type]);
+  const [typeOverride, setTypeOverride] = useState<"agent" | "team" | "">("");
+  const localType = type || typeOverride;
 
   const existingAgent = agentId ? agents.find((a) => a.id === agentId) : null;
   const [saving, setSaving] = useState(false);
@@ -1286,7 +1278,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
             hookConfig: resolved.hookConfig,
           },
         });
-        setLocalType("agent");
+        setTypeOverride("agent");
       } else if (resolved.type === "team" && resolved.members) {
         setImportedFormData({
           type: "team",
@@ -1308,7 +1300,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
             contacts: resolved.contacts ?? {},
           },
         });
-        setLocalType("team");
+        setTypeOverride("team");
       }
     } catch (e) {
       addToast(`Failed to parse template: ${e instanceof Error ? e.message : String(e)}`, "warning");
@@ -1363,7 +1355,7 @@ export function AgentConfigDialog({ open, onClose, mode, type, agentId }: AgentC
           <div className="relative w-full max-w-2xl bg-(--color-background) rounded-2xl shadow-[-8px_8px_24px_rgba(0,0,0,0.08)] overflow-hidden">
             <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-(--color-secondary) transition-colors z-10"><X size={18} /></button>
             <TypeSelection
-              onSelect={(t) => { setLocalType(t); setImportedFormData(null); }}
+              onSelect={(t) => { setTypeOverride(t); setImportedFormData(null); }}
               onTemplate={() => setTemplatePickerOpen(true)}
             />
           </div>

@@ -23,8 +23,9 @@ function SkillList() {
     setImporting(true);
     try {
       await importSkills(path);
-    } catch (e: any) {
-      useAppStore.getState().addToast(`Skill import failed: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      useAppStore.getState().addToast(`Skill import failed: ${message}`, "warning");
     } finally {
       setImporting(false);
     }

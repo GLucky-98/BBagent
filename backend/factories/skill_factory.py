@@ -1,18 +1,16 @@
 """SkillFactory — manages SkillConfig CRUD and Skill instance cache.
 
 每个 SkillConfig 持久化为 data/skills/{id}.json。
-Skill 实例采用懒加载：import 时 scan 直接实例化，load 从 JSON 恢复后通过 get_instance 按需创建。
+Skill 实例采用懒加载: import 时 scan 直接实例化, load 从 JSON 恢复后通过 get_instance 按需创建。
 """
 
 import json
 from pathlib import Path
-from typing import Optional
 
-from bbagent.core.skill import Skill, scan_skills, parse_skill_md
-
-from backend.schemas import SkillConfig
-from backend.factories import _skill_id, _safe_filename
+from backend.factories import _safe_filename, _skill_id
 from backend.logging import get_backend_logger
+from backend.schemas import SkillConfig
+from bbagent.core.skill import Skill, parse_skill_md, scan_skills
 
 
 class SkillFactory:
@@ -31,6 +29,7 @@ class SkillFactory:
         return self._skills_dir() / f"{_safe_filename(skill_id)}.json"
 
     def _save_config(self, config: SkillConfig):
+        self._skills_dir().mkdir(parents=True, exist_ok=True)
         self._file_path(config.id).write_text(
             config.model_dump_json(indent=2), encoding="utf-8",
         )
@@ -41,7 +40,7 @@ class SkillFactory:
             p.unlink()
 
     @staticmethod
-    def _load_single_skill(skill_dir: Path) -> Optional[Skill]:
+    def _load_single_skill(skill_dir: Path) -> Skill | None:
         """从单个 skill 目录加载 Skill 实例。"""
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
@@ -78,10 +77,10 @@ class SkillFactory:
 
     # --- accessors ---
 
-    def get(self, skill_id: str) -> Optional[SkillConfig]:
+    def get(self, skill_id: str) -> SkillConfig | None:
         return self._configs.get(skill_id)
 
-    def get_instance(self, skill_id: str) -> Optional[Skill]:
+    def get_instance(self, skill_id: str) -> Skill | None:
         """获取 Skill 运行时实例。首次调用时从源目录懒加载并缓存。"""
         if skill_id in self._instances:
             return self._instances[skill_id]
@@ -109,7 +108,7 @@ class SkillFactory:
     # --- import ---
 
     def import_dir(self, dir_path: Path) -> tuple[list[SkillConfig], list[str]]:
-        """扫描目录，生成 SkillConfig 并落盘，同时创建 Skill 实例缓存。
+        """扫描目录, 生成 SkillConfig 并落盘, 同时创建 Skill 实例缓存。
 
         Returns:
             (added, skipped): imported configs 和已存在被跳过的 skill name 列表。
@@ -152,7 +151,7 @@ class SkillFactory:
 
     # --- refresh ---
 
-    def refresh(self, skill_id: str) -> Optional[SkillConfig]:
+    def refresh(self, skill_id: str) -> SkillConfig | None:
         """重新从源文件加载 skill 并更新 config + 清除实例缓存。"""
         config = self._configs.get(skill_id)
         if not config:
@@ -160,12 +159,15 @@ class SkillFactory:
 
         skill_dir = Path(config.path)
         if not skill_dir.exists():
-            self._logger.warning(f"Skill source dir not found, keeping stale config: {config.path}")
-            return config
+            self._logger.warning(f"Skill source dir not found, deleting stale config: {config.path}")
+            self.delete(skill_id)
+            return None
 
         skill = self._load_single_skill(skill_dir)
         if not skill:
-            return config
+            self._logger.warning(f"Failed to reload skill, deleting stale config: {config.path}")
+            self.delete(skill_id)
+            return None
 
         new_config = SkillConfig(
             id=skill_id,

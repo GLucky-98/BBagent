@@ -2,12 +2,10 @@ import json
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
-
-from bbagent.core.team import AgentTeam, TeamMessage
 
 from backend.errors import ConflictError, ErrorCode, NotFoundError
 from backend.factories import _next_id
+from bbagent.core.team import AgentTeam, TeamMessage
 
 
 class TeamConversationManager:
@@ -23,7 +21,7 @@ class TeamConversationManager:
     def ensure_loaded(self, team_id: str, team: AgentTeam) -> dict:
         conversations = self.list_conversations(team)
         if not conversations:
-            self._create_default_from_legacy(team)
+            self._create_default_conversation(team)
             conversations = self.list_conversations(team)
         active = next((c for c in conversations if c.get("active")), conversations[0] if conversations else None)
         if active:
@@ -44,7 +42,7 @@ class TeamConversationManager:
                 continue
             meta = self._read_json(meta_path)
             meta["active"] = cid == index.get("activeConversationId")
-            meta["messageCount"] = self._message_count(team, cid)
+            meta["messageCount"] = int(meta.get("messageCount") or 0)
             result.append(meta)
         result.sort(key=lambda c: c.get("updatedAt", 0), reverse=True)
         if changed:
@@ -183,7 +181,7 @@ class TeamConversationManager:
     def record_message(self, team: AgentTeam, msg_dict: dict) -> None:
         active = self.get_active_conversation(team)
         if not active:
-            self._create_default_from_legacy(team)
+            self._create_default_conversation(team)
             active = self.get_active_conversation(team)
         if not active:
             return
@@ -221,16 +219,12 @@ class TeamConversationManager:
             return created
         return await self.load_conversation(team, active["id"])
 
-    def _create_default_from_legacy(self, team: AgentTeam) -> dict:
+    def _create_default_conversation(self, team: AgentTeam) -> dict:
         cid = _next_id()
         now = self._now()
         self._conversation_dir(team, cid).mkdir(parents=True, exist_ok=True)
-        legacy = team.base_dir / "team_messages.jsonl" if team.base_dir else None
         messages_path = self._messages_path(team, cid)
-        if legacy and legacy.exists():
-            shutil.copyfile(legacy, messages_path)
-        else:
-            messages_path.touch()
+        messages_path.touch()
         meta = {
             "id": cid,
             "name": "Conversation",
@@ -270,7 +264,7 @@ class TeamConversationManager:
         if not path.exists():
             return []
         messages = []
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -281,7 +275,7 @@ class TeamConversationManager:
         path = self._messages_path(team, conversation_id)
         if not path.exists():
             return 0
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return sum(1 for line in f if line.strip())
 
     def _get_meta(self, team: AgentTeam, conversation_id: str) -> dict:

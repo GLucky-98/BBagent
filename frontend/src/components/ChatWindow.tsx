@@ -145,6 +145,10 @@ const TurnDots = memo(function TurnDots({
 });
 
 const EMPTY_SESSIONS: SessionInfo[] = [];
+const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_COLLAPSED_SECTIONS = new Set<string>();
+const INITIAL_VISIBLE_SEGMENTS = 80;
+const SEGMENT_PAGE_SIZE = 80;
 
 // ── Error boundary: fall back to plain text if markdown parsing throws ──
 const SafeMarkdown = memo(class SafeMarkdown extends Component<{ content: string; isStreaming?: boolean }> {
@@ -458,6 +462,7 @@ export function ChatWindow() {
   const patchMessage = useAppStore((s) => s.patchMessage);
   const agentState = useAppStore((s) => s.agentStates[selectedAgent?.id || ""] || selectedAgent?.state || "ready");
   const isRunning = agentState === "running";
+  const sessionActionsDisabled = agentState === "running";
   const setAgentState = useAppStore((s) => s.setAgentState);
   const contextTokens = useAppStore((s) => s.agentContextTokens[selectedAgent?.id || ""] || 0);
   const loadAgentSessions = useAppStore((s) => s.loadAgentSessions);
@@ -466,8 +471,12 @@ export function ChatWindow() {
   const loadAgentMessages = useAppStore((s) => s.loadAgentMessages);
   const sessionPanelOpen = useAppStore((s) => s.sessionPanelOpen);
   const toggleSessionPanel = useAppStore((s) => s.toggleSessionPanel);
+  const selectedAgentId = selectedAgent?.id || "";
+  const selectedAgentName = selectedAgent?.name || "";
+  const selectedSessionId = selectedAgent?.currentSessionId || "";
+  const input = useAppStore((s) => (selectedAgentId ? s.agentInputs[selectedAgentId] || "" : ""));
+  const setAgentInput = useAppStore((s) => s.setAgentInput);
 
-  const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const subscribedAgentRef = useRef<string | null>(null);
   const streamBufferRef = useRef("");
@@ -476,6 +485,11 @@ export function ChatWindow() {
   const currentThinkingMsgIdRef = useRef<string | null>(null);
   const textFlushPendingRef = useRef(false);
   const thinkingFlushPendingRef = useRef(false);
+  const [streamingMsgId, setStreamingMsgId] = useState<string | null>(null);
+  const [visibleSegmentState, setVisibleSegmentState] = useState({
+    scope: "",
+    count: INITIAL_VISIBLE_SEGMENTS,
+  });
 
   const [timerPanelOpen, setTimerPanelOpen] = useState(false);
   const agentTimers = useAppStore((s) => s.agentTimers[selectedAgent?.id || ""]) || [];
@@ -483,27 +497,40 @@ export function ChatWindow() {
 
   // Track which sections the user has manually collapsed.
   // When a section is in this set, its default expand/collapse state is flipped.
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const collapsedScope = `${selectedAgentId}:${selectedSessionId}`;
+  const [collapsedState, setCollapsedState] = useState<{ scope: string; sections: Set<string> }>({
+    scope: "",
+    sections: EMPTY_COLLAPSED_SECTIONS,
+  });
+  const collapsedSections = collapsedState.scope === collapsedScope
+    ? collapsedState.sections
+    : EMPTY_COLLAPSED_SECTIONS;
   const toggleSection = (id: string) => {
-    setCollapsedSections((prev) => {
-      const next = new Set(prev);
+    setCollapsedState((prev) => {
+      const current = prev.scope === collapsedScope ? prev.sections : EMPTY_COLLAPSED_SECTIONS;
+      const next = new Set(current);
       if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
+      return { scope: collapsedScope, sections: next };
     });
   };
+  const messages = selectedAgent?.messages || EMPTY_MESSAGES;
 
   // 提取所有 turn（每轮对话由一个 user message 或 input_event 开始）
   const turns = useMemo(() => {
-    if (!selectedAgent?.messages) return [];
-    return selectedAgent.messages.filter(
+    return messages.filter(
       (m) => m.role === "user" || m.chunkType === "input_event"
     );
-  }, [selectedAgent?.messages]);
+  }, [messages]);
 
   const segments = useMemo(() => {
-    if (!selectedAgent?.messages) return [];
-    return buildSegments(selectedAgent.messages);
-  }, [selectedAgent?.messages]);
+    return buildSegments(messages);
+  }, [messages]);
+  const visibleSegmentScope = `${selectedAgentId}:${selectedSessionId}`;
+  const visibleSegmentCount = visibleSegmentState.scope === visibleSegmentScope
+    ? visibleSegmentState.count
+    : INITIAL_VISIBLE_SEGMENTS;
+  const hiddenSegmentCount = Math.max(0, segments.length - visibleSegmentCount);
+  const visibleSegments = hiddenSegmentCount > 0 ? segments.slice(hiddenSegmentCount) : segments;
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrollingRef = useRef(false);
@@ -545,6 +572,7 @@ export function ChatWindow() {
         if (!existingMsg) {
           const newId = (chunk.message_id as string) || crypto.randomUUID();
           currentAssistantMsgIdRef.current = newId;
+          setStreamingMsgId(newId);
           flushSync(() => addMessage(agentId, {
             id: newId,
             role: "assistant",
@@ -569,6 +597,7 @@ export function ChatWindow() {
         if (!existingMsg) {
           const newId = crypto.randomUUID();
           currentThinkingMsgIdRef.current = newId;
+          setStreamingMsgId(newId);
           flushSync(() => addMessage(agentId, {
             id: newId,
             role: "system",
@@ -680,6 +709,7 @@ export function ChatWindow() {
         currentThinkingMsgIdRef.current = null;
         textFlushPendingRef.current = false;
         thinkingFlushPendingRef.current = false;
+        setStreamingMsgId(null);
       } else if (chunk.type === "interrupted") {
         streamBufferRef.current = "";
         currentAssistantMsgIdRef.current = null;
@@ -687,6 +717,7 @@ export function ChatWindow() {
         currentThinkingMsgIdRef.current = null;
         textFlushPendingRef.current = false;
         thinkingFlushPendingRef.current = false;
+        setStreamingMsgId(null);
       } else if (chunk.type === "switched") {
         setAgentState(agentId, (chunk.agent_state as "ready" | "waiting" | "running" | "error"));
         if (typeof chunk.context_tokens === "number") {
@@ -712,9 +743,9 @@ export function ChatWindow() {
 
   // ── Agent switch: load history FIRST, then send switch_agent ──
   useEffect(() => {
-    if (!selectedAgent) return;
-    const name = selectedAgent.name;
-    const id = selectedAgent.id;
+    if (!selectedAgentId) return;
+    const name = selectedAgentName;
+    const id = selectedAgentId;
 
     // Clear stream buffer on agent switch. Agent state will be set by
     // the switched chunk (which reads agent.state directly from backend).
@@ -722,8 +753,6 @@ export function ChatWindow() {
     currentAssistantMsgIdRef.current = null;
     thinkingBufferRef.current = "";
     currentThinkingMsgIdRef.current = null;
-    setCollapsedSections(new Set());
-
     // Load history BEFORE subscribing to WS replay.
     // loadAgentMessages() replaces the entire message list — if replay chunks
     // arrive before HTTP completes, they will be wiped by the replacement.
@@ -754,18 +783,17 @@ export function ChatWindow() {
       }
     };
     init();
-  }, [selectedAgent?.id]);
+  }, [selectedAgentId, selectedAgentName, loadAgentMessages, loadAgentSessions, loadTimers, setAgentState]);
 
   // ── Session switch: reload messages only (no WS switch needed) ──
   useEffect(() => {
-    if (!selectedAgent) return;
+    if (!selectedAgentId) return;
     streamBufferRef.current = "";
     currentAssistantMsgIdRef.current = null;
     thinkingBufferRef.current = "";
     currentThinkingMsgIdRef.current = null;
-    setCollapsedSections(new Set());
-    loadAgentMessages(selectedAgent.id);
-  }, [selectedAgent?.currentSessionId]);
+    loadAgentMessages(selectedAgentId);
+  }, [selectedAgentId, selectedSessionId, loadAgentMessages]);
 
   const handleSend = () => {
     if (!input.trim() || !selectedAgent) return;
@@ -776,7 +804,7 @@ export function ChatWindow() {
     if (chatWs?.readyState === WebSocket.OPEN) {
       chatWs.send(JSON.stringify({ type: "user_message", content: input.trim() }));
     }
-    setInput("");
+    setAgentInput(selectedAgent.id, "");
   };
 
   const handleInterrupt = () => {
@@ -846,21 +874,23 @@ export function ChatWindow() {
             </span>
           </button>
           <button
-            onClick={() => { if (selectedAgent) createNewSession(selectedAgent.id); }}
+            onClick={() => { if (selectedAgent && !sessionActionsDisabled) createNewSession(selectedAgent.id); }}
+            disabled={sessionActionsDisabled}
             className={cn(
               "flex items-center justify-center w-7 h-7 text-[12.5px] font-medium rounded-r-full transition-colors border-l",
               sessionPanelOpen
                 ? "bg-(--color-primary) text-white border-white/20"
-                : "bg-(--color-secondary) hover:bg-(--color-border) text-(--color-foreground) border-(--color-border)"
+                : "bg-(--color-secondary) hover:bg-(--color-border) text-(--color-foreground) border-(--color-border)",
+              "disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-(--color-secondary)"
             )}
-            title="New session"
+            title={sessionActionsDisabled ? "Cannot create a new session while agent is running" : "New session"}
           >
             <Plus size={13} />
           </button>
         </div>
       </header>
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden">
-          {(!selectedAgent.messages || selectedAgent.messages.length === 0) ? (
+          {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-(--color-ink-3)">
               <div className="w-12 h-12 rounded-full bg-(--color-secondary) flex items-center justify-center mb-3">
                 <Sparkles size={18} className="text-(--color-ink-2)" />
@@ -872,7 +902,22 @@ export function ChatWindow() {
             <div className="w-full max-w-[880px] mx-auto px-4">
               <div className="flex">
                 <div className="flex-1 min-w-0">
-                  {segments.map((seg) => {
+                  {hiddenSegmentCount > 0 && (
+                    <div className="py-3 flex justify-center border-b border-(--color-rule-soft)">
+                      <button
+                        onClick={() =>
+                          setVisibleSegmentState({
+                            scope: visibleSegmentScope,
+                            count: visibleSegmentCount + SEGMENT_PAGE_SIZE,
+                          })
+                        }
+                        className="h-8 px-3 rounded-md bg-(--color-secondary) hover:bg-(--color-secondary-hover) text-[12.5px] font-medium text-(--color-foreground) transition-colors"
+                      >
+                        Load {Math.min(SEGMENT_PAGE_SIZE, hiddenSegmentCount)} earlier turns
+                      </button>
+                    </div>
+                  )}
+                  {visibleSegments.map((seg) => {
                     if (seg.length === 1 && isStandalone(seg[0])) {
                       return <TurnBlock key={seg[0].id} message={seg[0]} />;
                     }
@@ -881,7 +926,7 @@ export function ChatWindow() {
                         key={`group-${seg[0].id}`}
                         messages={seg}
                         isRunning={isRunning}
-                        streamingMsgId={currentAssistantMsgIdRef.current || currentThinkingMsgIdRef.current}
+                        streamingMsgId={streamingMsgId}
                         collapsedSections={collapsedSections}
                         onToggleSection={toggleSection}
                       />
@@ -975,7 +1020,7 @@ export function ChatWindow() {
           </div>
           <div className="flex items-end gap-2 bg-(--color-tint) border border-(--color-border) rounded-xl p-2 transition-all focus-within:bg-white focus-within:border-(--color-primary) focus-within:shadow-[0_0_0_3px_rgba(0,102,204,0.12)]">
             <textarea value={input} onChange={(e) => {
-              setInput(e.target.value);
+              if (selectedAgent) setAgentInput(selectedAgent.id, e.target.value);
               const el = e.target;
               el.style.height = "auto";
               el.style.height = Math.min(el.scrollHeight, 120) + "px";
@@ -984,8 +1029,8 @@ export function ChatWindow() {
               onDrop={(e) => {
                 e.preventDefault();
                 const path = e.dataTransfer.getData("text/plain");
-                if (path) {
-                  setInput((prev) => prev ? prev + " " + path : path);
+                if (path && selectedAgent) {
+                  setAgentInput(selectedAgent.id, input ? `${input} ${path}` : path);
                 }
               }}
               placeholder="Message…" rows={1}

@@ -79,11 +79,14 @@ function SessionRow({
   const loadSessionDetail = useAppStore((s) => s.loadSessionDetail);
   const deleteGlobalSession = useAppStore((s) => s.deleteGlobalSession);
   const switchSession = useAppStore((s) => s.switchSession);
-  const loadAgentMessages = useAppStore((s) => s.loadAgentMessages);
+  const agentState = useAppStore((s) => s.agentStates[session.agent_id]);
+  const fallbackAgentState = useAppStore((s) => s.agents.find((agent) => agent.id === session.agent_id)?.state);
   const [deleting, setDeleting] = useState(false);
   const [switching, setSwitching] = useState(false);
 
   const detail = sessionDetails[session.session_id];
+  const sessionActionsDisabled = agentState === "running"
+    || fallbackAgentState === "running";
 
   const handleToggle = async () => {
     if (!expanded && !detail) {
@@ -106,11 +109,10 @@ function SessionRow({
 
   const handleSwitch = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!session.agent_id || session.is_active) return;
+    if (!session.agent_id || session.is_active || sessionActionsDisabled) return;
     setSwitching(true);
     try {
       await switchSession(session.agent_id, session.session_id);
-      await loadAgentMessages(session.agent_id);
     } finally {
       setSwitching(false);
     }
@@ -135,9 +137,9 @@ function SessionRow({
         {!session.is_active && (
           <button
             onClick={handleSwitch}
-            disabled={switching}
-            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-(--color-tint) text-(--color-primary) transition-opacity shrink-0"
-            title="Switch to this session"
+            disabled={switching || sessionActionsDisabled}
+            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-(--color-tint) text-(--color-primary) transition-opacity shrink-0 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+            title={sessionActionsDisabled ? "Cannot switch sessions while agent is running" : "Switch to this session"}
           >
             {switching ? <Loader2 size={11} className="animate-spin" /> : <ArrowRightLeft size={11} />}
           </button>
@@ -228,10 +230,11 @@ export function SessionManagerPanel({ width }: Props) {
 
   useEffect(() => {
     if (globalSessions.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Panel mount triggers an external session refresh with local loading state.
       setLoading(true);
       loadGlobalSessions().finally(() => setLoading(false));
     }
-  }, []);
+  }, [globalSessions.length, loadGlobalSessions]);
 
   const groups = useMemo(() => groupByAgent(globalSessions), [globalSessions]);
 

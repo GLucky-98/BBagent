@@ -1,10 +1,12 @@
-from typing import List, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-from ...core.tool import Tool
-from ...core.message import HumanMessage
 from ...core.agent import SubAgent
 from ...core.logger import AgentLogger
+from ...core.message import HumanMessage
 from ...core.model import Model
+from ...core.tool import Tool
+from .fingerprint import format_memory_for_injection, memory_fingerprint
 from .memory import Memory, MemoryManager
 
 if TYPE_CHECKING:
@@ -31,9 +33,10 @@ def create_add_memory_tool(
     session_id_getter,
     prompt: str = ADD_MEMORY_TOOL_DESCRIPTION,
     runtime: "MemoryRuntime" = None,
+    mark_current_turn_extracted: Callable[[], None] | None = None,
 ) -> Tool:
 
-    async def add_memory(memories: List[str]) -> str:
+    async def add_memory(memories: list[str]) -> str:
         valid_memories = []
         for content in memories:
             memory = Memory.create(
@@ -45,9 +48,14 @@ def create_add_memory_tool(
         if valid_memories:
             if runtime is not None:
                 async with runtime.store_lock:
-                    await memory_manager.add_memories(valid_memories)
+                    result = await memory_manager.add_memories(valid_memories)
             else:
-                await memory_manager.add_memories(valid_memories)
+                result = await memory_manager.add_memories(valid_memories)
+            result = result or {}
+            added_count = int(result.get("added_count", 0))
+            skipped_count = int(result.get("skipped_duplicates", 0))
+            if mark_current_turn_extracted is not None and (added_count > 0 or skipped_count > 0):
+                mark_current_turn_extracted()
             saved_list = "\n".join(f"  - {m.content}" for m in valid_memories)
             return f"Saved {len(valid_memories)} memories:\n{saved_list}"
 
@@ -73,7 +81,7 @@ DELETE_MEMORY_TOOL_DESCRIPTION = (
 
 def create_delete_memory_tool(memory_manager: MemoryManager, runtime: "MemoryRuntime" = None) -> Tool:
 
-    async def delete_memory(memory_ids: List[str]) -> str:
+    async def delete_memory(memory_ids: list[str]) -> str:
         if not memory_ids:
             return "No memory IDs provided."
 
@@ -133,7 +141,7 @@ INJECT_MEMORIES_SUBAGENT_PROMPT = """You are a memory selector. Your ONLY job is
 
 
 def create_inject_memories_tool(max_inject: int = 5, sub_agent=None):
-    captured_ids: List[str] = []
+    captured_ids: list[str] = []
 
     async def inject_memories(memory_ids: list) -> str:
         memory_ids = [str(mid) for mid in memory_ids]
@@ -161,9 +169,18 @@ async def inject_memory_context(
     bm25_weight: float = 0.5,
     vector_weight: float = 0.5,
     max_candidates: int = 50,
+    seen_memory_keys: set[bytes] | None = None,
+    selected_memory_keys: list[bytes] | None = None,
+    oversample_factor: int = 3,
+    oversample_cap: int = 200,
     logger: AgentLogger = None,
     runtime: "MemoryRuntime" = None,
 ) -> str:
+    seen_memory_keys = seen_memory_keys or set()
+    candidate_fetch = max_candidates
+    if seen_memory_keys:
+        candidate_fetch = min(max_candidates * max(1, oversample_factor), oversample_cap)
+
     async def _collect_candidates() -> list[dict] | None:
         count = memory_manager.count
         if count == 0:
@@ -171,7 +188,7 @@ async def inject_memory_context(
                 logger.debug("Memory store is empty, skipping injection")
             return None
 
-        if count <= max_candidates:
+        if count <= candidate_fetch:
             all_candidates = memory_manager.get_all()
             if logger:
                 logger.debug(
@@ -182,7 +199,7 @@ async def inject_memory_context(
 
         hybrid_result = await memory_manager.hybrid_search(
             query=query,
-            n_results=max_candidates,
+            n_results=candidate_fetch,
             rrf_k=rrf_k,
             bm25_weight=bm25_weight,
             vector_weight=vector_weight,
@@ -212,6 +229,25 @@ async def inject_memory_context(
         candidates = await _collect_candidates()
 
     if not candidates:
+        return None
+
+    id_to_key = {}
+    filtered_candidates = []
+    for candidate in candidates:
+        key = memory_fingerprint(candidate["content"])
+        if key in seen_memory_keys:
+            continue
+        id_to_key[candidate["id"]] = key
+        filtered_candidates.append(candidate)
+
+    candidates = filtered_candidates[:max_candidates]
+
+    if not candidates:
+        if logger:
+            logger.debug(
+                "Memory injection skipped (all candidates already seen in session)",
+                context={"seen_count": len(seen_memory_keys)},
+            )
         return None
 
     candidates_text = "\n\n".join(
@@ -256,23 +292,27 @@ async def inject_memory_context(
             context={"selected_count": len(valid_ids), "candidate_count": len(candidates)},
         )
 
-    def _resolve_selected() -> list[str]:
+    def _resolve_selected() -> list[tuple[str, str]]:
         current = memory_manager.get_by_ids(valid_ids)
         current_map = {c["id"]: c["content"] for c in current}
-        contents = []
+        selected = []
         for mid in valid_ids:
             if mid in current_map:
-                contents.append(current_map[mid])
+                selected.append((mid, current_map[mid]))
                 memory_manager.increment_access(mid)
-        return contents
+        return selected
 
     if runtime is not None:
         async with runtime.store_lock:
-            valid_contents = _resolve_selected()
+            selected = _resolve_selected()
     else:
-        valid_contents = _resolve_selected()
+        selected = _resolve_selected()
 
-    if not valid_contents:
+    if not selected:
         return None
 
-    return "\n".join(f"- {c}" for c in valid_contents)
+    selected_keys = [id_to_key[mid] for mid, _ in selected if mid in id_to_key]
+    if selected_memory_keys is not None:
+        selected_memory_keys.extend(selected_keys)
+
+    return "\n".join(f"- {format_memory_for_injection(content)}" for _, content in selected)

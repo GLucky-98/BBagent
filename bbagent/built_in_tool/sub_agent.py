@@ -45,7 +45,7 @@ async def create_sub_agent_tool(
             continue
 
     desc_lines = [
-        "Delegate a task to a sub-agent. The sub-agent works autonomously and returns a single result. Specify which tools the sub-agent can use via the allowed_tools parameter.",
+        "Delegate a task to a sub-agent. The sub-agent works autonomously and returns a single result. Specify which tools the sub-agent can use via the allowed_tools parameter. You can call this tool multiple times in parallel to launch multiple sub-agents working on different tasks simultaneously.",
         "",
         "Available built-in tools for sub-agent:",
     ]

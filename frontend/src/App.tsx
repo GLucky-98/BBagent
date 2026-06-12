@@ -37,6 +37,7 @@ function App() {
           <Suspense fallback={null}><OnboardingView /></Suspense>
         ) : <WorkspaceView />}
         <AgentConfigDialog
+          key={`${configDialog.open ? "open" : "closed"}-${configDialog.mode}-${configDialog.type}-${configDialog.agentId ?? ""}`}
           open={configDialog.open}
           onClose={closeConfigDialog}
           mode={configDialog.mode}

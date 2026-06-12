@@ -1,6 +1,9 @@
 import asyncio
 import logging
-from typing import Coroutine, Optional
+from collections.abc import Coroutine
+
+from ...core.message import Session
+from .fingerprint import extract_seen_memory_keys
 
 
 class MemoryRuntime:
@@ -10,13 +13,15 @@ class MemoryRuntime:
     store access serialization, and extraction/cleanup de-duplication.
     """
 
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(self, logger: logging.Logger | None = None):
         self.logger = logger or logging.getLogger(__name__)
         self.store_lock = asyncio.Lock()
         self.jobs: set[asyncio.Task] = set()
         self.inflight_turns: set[tuple[str, int]] = set()
         self.completed_turns: set[tuple[str, int]] = set()
         self.clean_task: asyncio.Task | None = None
+        self.seen_memory_keys_by_session: dict[str, set[bytes]] = {}
+        self.scanned_turn_count_by_session: dict[str, int] = {}
 
     def schedule(self, coro: Coroutine, name: str) -> asyncio.Task:
         task = asyncio.create_task(self._run_job(coro, name), name=name)
@@ -51,6 +56,27 @@ class MemoryRuntime:
     def release_turns(self, session_id: str, indexes: list[int]):
         for idx in indexes:
             self.inflight_turns.discard((session_id, idx))
+
+    def get_seen_memory_keys(self, session: Session, inject_prefix: str) -> set[bytes]:
+        session_id = session.id
+        scanned_turn_count = self.scanned_turn_count_by_session.get(session_id)
+        if scanned_turn_count is None or scanned_turn_count > len(session.turns):
+            seen = extract_seen_memory_keys(session, inject_prefix)
+            self.seen_memory_keys_by_session[session_id] = seen
+            self.scanned_turn_count_by_session[session_id] = len(session.turns)
+            return seen
+
+        seen = self.seen_memory_keys_by_session.setdefault(session_id, set())
+        if scanned_turn_count < len(session.turns):
+            partial = Session(id=session.id, turns=session.turns[scanned_turn_count:])
+            seen.update(extract_seen_memory_keys(partial, inject_prefix))
+            self.scanned_turn_count_by_session[session_id] = len(session.turns)
+        return seen
+
+    def mark_memory_keys_seen(self, session_id: str, keys: list[bytes]):
+        if not keys:
+            return
+        self.seen_memory_keys_by_session.setdefault(session_id, set()).update(keys)
 
     def schedule_clean(self, coro: Coroutine, name: str) -> bool:
         if self.clean_task is not None and not self.clean_task.done():

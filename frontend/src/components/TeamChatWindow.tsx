@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, memo } from "react";
 import { Bot, User, Radio, X, ChevronDown, Check, Sparkles, ArrowUp, Network, Plus, MessageSquare } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
-import type { TeamChatMessage, Team } from "../types";
+import type { TeamChatMessage, Team, TeamConversation } from "../types";
 import { isTeam } from "../types";
 import { MarkdownContent } from "./MarkdownContent";
 
@@ -11,7 +11,13 @@ const AGENT_COLORS = [
   "#ec4899", "#06b6d4", "#84cc16", "#f97316", "#6366f1",
 ];
 
-function TeamMessageBubble({ msg, color }: { msg: TeamChatMessage; color: string }) {
+const EMPTY_TEAM_MESSAGES: TeamChatMessage[] = [];
+const EMPTY_TEAM_CONVERSATIONS: TeamConversation[] = [];
+const EMPTY_TEAM_MEMBERS: Team["members"] = [];
+const INITIAL_VISIBLE_TEAM_MESSAGES = 80;
+const TEAM_MESSAGE_PAGE_SIZE = 80;
+
+const TeamMessageBubble = memo(function TeamMessageBubble({ msg, color }: { msg: TeamChatMessage; color: string }) {
   const isUser = msg.type === "user";
   const isBroadcast = msg.type === "broadcast";
 
@@ -52,12 +58,13 @@ function TeamMessageBubble({ msg, color }: { msg: TeamChatMessage; color: string
       </div>
     </div>
   );
-}
+});
 
 export function TeamChatWindow() {
-  const agents = useAppStore((s) => s.agents);
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
-  const teamMessages = useAppStore((s) => s.teamMessages);
+  const team = useAppStore((s) => {
+    const activeAgent = s.activeAgentId ? s.agents.find((a) => a.id === s.activeAgentId) : null;
+    return activeAgent && isTeam(activeAgent) ? activeAgent : null;
+  });
   const addTeamMessage = useAppStore((s) => s.addTeamMessage);
   const loadTeamMessages = useAppStore((s) => s.loadTeamMessages);
   const toggleTeamGraph = useAppStore((s) => s.toggleTeamGraph);
@@ -65,28 +72,33 @@ export function TeamChatWindow() {
   const toggleTeamConversationPanel = useAppStore((s) => s.toggleTeamConversationPanel);
   const createTeamConversation = useAppStore((s) => s.createTeamConversation);
   const loadTeamConversations = useAppStore((s) => s.loadTeamConversations);
-  const teamConversations = useAppStore((s) => s.teamConversations);
-  const activeTeamConversationIds = useAppStore((s) => s.activeTeamConversationIds);
-  const agentStates = useAppStore((s) => s.agentStates);
   const teamScrollTarget = useAppStore((s) => s.teamScrollTarget);
   const clearTeamScrollTarget = useAppStore((s) => s.clearTeamScrollTarget);
 
-  const team = agents.find((a): a is Team => a.id === activeAgentId && isTeam(a));
-  const members = team?.members || [];
-  const messages = team ? (teamMessages[team.id] || []) : [];
-  const conversations = team ? (teamConversations[team.id] || []) : [];
-  const activeConversationId = team ? activeTeamConversationIds[team.id] : "";
+  const teamId = team?.id || "";
+  const members = team?.members || EMPTY_TEAM_MEMBERS;
+  const messages = useAppStore((s) =>
+    teamId ? s.teamMessages[teamId] || EMPTY_TEAM_MESSAGES : EMPTY_TEAM_MESSAGES
+  );
+  const conversations = useAppStore((s) =>
+    teamId ? s.teamConversations[teamId] || EMPTY_TEAM_CONVERSATIONS : EMPTY_TEAM_CONVERSATIONS
+  );
+  const activeConversationId = useAppStore((s) => (teamId ? s.activeTeamConversationIds[teamId] || "" : ""));
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId)
     || conversations.find((conversation) => conversation.active);
-  const teamState = team ? (agentStates[team.id] || team.state) : "ready";
+  const teamState = useAppStore((s) => (teamId ? s.agentStates[teamId] || team?.state || "ready" : "ready"));
   const canChangeConversation = teamState === "ready";
+  const input = useAppStore((s) => (teamId ? s.teamInputs[teamId] || "" : ""));
+  const setTeamInput = useAppStore((s) => s.setTeamInput);
 
-  const [input, setInput] = useState("");
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [visibleMessageState, setVisibleMessageState] = useState({
+    scope: "",
+    count: INITIAL_VISIBLE_TEAM_MESSAGES,
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const agentColorMapRef = useRef<Record<string, string>>({});
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -109,13 +121,20 @@ export function TeamChatWindow() {
     return () => clearTimeout(timer);
   }, [teamScrollTarget, clearTeamScrollTarget]);
 
-  const getAgentColor = (name: string) => {
-    if (!agentColorMapRef.current[name]) {
-      const idx = Object.keys(agentColorMapRef.current).length % AGENT_COLORS.length;
-      agentColorMapRef.current[name] = AGENT_COLORS[idx];
-    }
-    return agentColorMapRef.current[name];
-  };
+  const agentColorMap = useMemo(() => {
+    const names = new Set<string>();
+    for (const member of members) names.add(member.name);
+    for (const msg of messages) names.add(msg.fromAgent);
+    return Array.from(names).reduce<Record<string, string>>((acc, name, idx) => {
+      acc[name] = AGENT_COLORS[idx % AGENT_COLORS.length];
+      return acc;
+    }, {});
+  }, [members, messages]);
+
+  const getAgentColor = useCallback(
+    (name: string) => agentColorMap[name] || AGENT_COLORS[0],
+    [agentColorMap]
+  );
 
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "instant" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
@@ -133,11 +152,10 @@ export function TeamChatWindow() {
 
   // 加载历史消息
   useEffect(() => {
-    if (team) {
-      loadTeamConversations(team.id);
-      loadTeamMessages(team.id);
-    }
-  }, [team?.id, loadTeamConversations, loadTeamMessages]);
+    if (!teamId) return;
+    loadTeamConversations(teamId);
+    loadTeamMessages(teamId);
+  }, [teamId, loadTeamConversations, loadTeamMessages]);
 
   const connectWs = useCallback((teamRef: string) => {
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
@@ -166,13 +184,11 @@ export function TeamChatWindow() {
   }, [addTeamMessage]);
 
   useEffect(() => {
-    if (team) {
-      connectWs(team.id);
-    }
+    if (teamId) connectWs(teamId);
     return () => {
       wsRef.current?.close();
     };
-  }, [team?.id, connectWs]);
+  }, [teamId, connectWs]);
 
   const toggleAgent = (name: string) => {
     setSelectedAgents((prev) =>
@@ -202,7 +218,7 @@ export function TeamChatWindow() {
         mentions: selectedAgents,
       }));
     }
-    setInput("");
+    setTeamInput(team.id, "");
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -226,6 +242,12 @@ export function TeamChatWindow() {
   }
 
   const canSend = input.trim().length > 0 && selectedAgents.length > 0;
+  const visibleMessageScope = `${teamId}:${activeConversationId}`;
+  const visibleMessageCount = visibleMessageState.scope === visibleMessageScope
+    ? visibleMessageState.count
+    : INITIAL_VISIBLE_TEAM_MESSAGES;
+  const hiddenMessageCount = Math.max(0, messages.length - visibleMessageCount);
+  const visibleMessages = hiddenMessageCount > 0 ? messages.slice(hiddenMessageCount) : messages;
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-(--color-background)">
@@ -295,13 +317,30 @@ export function TeamChatWindow() {
             <p className="text-[12px] text-(--color-ink-3) mt-1">Select agents to send messages to team members</p>
           </div>
         ) : (
-          messages.map((msg, i) => (
-            <TeamMessageBubble
-              key={`${msg.timestamp}-${i}`}
-              msg={msg}
-              color={getAgentColor(msg.fromAgent)}
-            />
-          ))
+          <>
+            {hiddenMessageCount > 0 && (
+              <div className="px-8 py-3 border-b border-(--color-rule-soft) flex justify-center">
+                <button
+                  onClick={() =>
+                    setVisibleMessageState({
+                      scope: visibleMessageScope,
+                      count: visibleMessageCount + TEAM_MESSAGE_PAGE_SIZE,
+                    })
+                  }
+                  className="h-8 px-3 rounded-md bg-(--color-secondary) hover:bg-(--color-secondary-hover) text-[12.5px] font-medium text-(--color-foreground) transition-colors"
+                >
+                  Load {Math.min(TEAM_MESSAGE_PAGE_SIZE, hiddenMessageCount)} earlier messages
+                </button>
+              </div>
+            )}
+            {visibleMessages.map((msg, i) => (
+              <TeamMessageBubble
+                key={`${msg.timestamp}-${hiddenMessageCount + i}`}
+                msg={msg}
+                color={getAgentColor(msg.fromAgent)}
+              />
+            ))}
+          </>
         )}
         <div ref={messagesEndRef} />
       </div>
@@ -390,14 +429,16 @@ export function TeamChatWindow() {
             <textarea
               ref={inputRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                if (team) setTeamInput(team.id, e.target.value);
+              }}
               onKeyDown={handleKeyDown}
               onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
               onDrop={(e) => {
                 e.preventDefault();
                 const path = e.dataTransfer.getData("text/plain");
-                if (path) {
-                  setInput((prev) => prev ? prev + " " + path : path);
+                if (path && team) {
+                  setTeamInput(team.id, input ? `${input} ${path}` : path);
                 }
               }}
               placeholder={selectedAgents.length === 0 ? "Select agents to send..." : "Type your message..."}

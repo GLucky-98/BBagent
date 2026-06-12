@@ -1,31 +1,33 @@
 import asyncio
+import contextlib
 import json
 import shutil
 import sys
 import time
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
 from uuid import uuid4 as uuid
 
-from .model import Model, Model_Input
-from .tool import Tool, tool
-from .message import (
-    Session,
-    Message,
-    HumanMessage,
-    ModelMessage,
-    ToolMessage,
-    ContentBlock,
-    TextBlock,
-    ImageBlock,
-    ToolUseBlock,
-)
-from .skill import Skill
-from .hook import AgentHook, HookType, Hook
+from .hook import AgentHook, Hook, HookType
 from .input import AgentEvent, EventType, InputChannel
 from .logger import AgentLogger, _NullLogger
+from .message import (
+    ContentBlock,
+    HumanMessage,
+    ImageBlock,
+    Message,
+    ModelMessage,
+    Session,
+    TextBlock,
+    ToolMessage,
+    ToolUseBlock,
+)
+from .model import Model, Model_Input
+from .skill import Skill
+from .tool import Tool, tool
+
 
 @dataclass
 class AgentConfig:
@@ -74,7 +76,6 @@ class Agent:
         self.session = agent_config.session
 
         self.tools: dict[str, Tool] = {}
-        self._mcp_clients: dict = {}
         if agent_config.tools:
             self.add_tools(agent_config.tools)
 
@@ -94,7 +95,10 @@ class Agent:
         self._event_queue: asyncio.Queue = asyncio.Queue()
         self.input = InputChannel()
         self._output_callback: Optional[Callable] = None
-        self._running = False
+        self._loop_running = False
+        self._interrupt_event = asyncio.Event()
+        self._stop_event = asyncio.Event()
+        self._active_tool_tasks: set[asyncio.Task] = set()
 
         self.logger = AgentLogger(
             name=self.name,
@@ -221,37 +225,10 @@ class Agent:
         self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
 
 
-    def register_mcp_clients(self, clients: dict):
-        self._mcp_clients.update(clients)
-
     def remove_tools(self, tool_names: List[str]):
-        from .mcp import MCPTool
-
-        mcp_servers_to_close: list = []
         for name in tool_names:
-            tool = self.tools.pop(name, None)
-            if tool is None:
-                continue
-            if isinstance(tool, MCPTool):
-                server_name = tool.mcp_server_name
-                remaining = any(
-                    isinstance(t, MCPTool) and t.mcp_server_name == server_name
-                    for t in self.tools.values()
-                )
-                if not remaining and server_name in self._mcp_clients:
-                    mcp_servers_to_close.append(server_name)
+            self.tools.pop(name, None)
 
-        for server_name in mcp_servers_to_close:
-            client = self._mcp_clients.pop(server_name, None)
-            if client:
-                self.logger.info(f"Closing MCP client '{server_name}': no remaining tools")
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(client.close())
-                except RuntimeError:
-                    asyncio.run(client.close())
-
-    
     def _add_load_skills_tool(self):
         @tool
         def load_skill(skill_name: str):
@@ -300,6 +277,12 @@ class Agent:
                         f"Tool '{tool_use.name}' completed successfully",
                         context={"tool_name": tool_use.name}
                     )
+                except asyncio.CancelledError:
+                    self.logger.info(
+                        f"Tool '{tool_use.name}' execution cancelled",
+                        context={"tool_name": tool_use.name}
+                    )
+                    raise
                 except Exception as e:
                     content = f"Tool invocation error: {str(e)}"
                     self.logger.error(
@@ -349,6 +332,51 @@ Your available skills are:
         prompt = self.system_prompt + self.team_prompt + self.teammate_prompt + self.skill_prompt
         messages = self.session.get_visible_context()
         return Model_Input(prompt=prompt, tools=tools, messages=messages)
+
+    def _interrupt_requested(self) -> bool:
+        if self.hook.should_break():
+            self._interrupt_event.set()
+        return self._interrupt_event.is_set()
+
+    @property
+    def is_running(self) -> bool:
+        return self._loop_running
+
+    def _drain_event_queue(self):
+        while True:
+            try:
+                self._event_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    async def _cancel_tool_tasks(self, tool_tasks: List[asyncio.Task]):
+        for task in tool_tasks:
+            if not task.done():
+                task.cancel()
+        if tool_tasks:
+            await asyncio.gather(*tool_tasks, return_exceptions=True)
+
+    async def _wait_for_tool_results(self, tool_tasks: List[asyncio.Task]):
+        tool_results_future = asyncio.gather(*tool_tasks)
+        interrupt_waiter = asyncio.create_task(self._interrupt_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {tool_results_future, interrupt_waiter},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if self._interrupt_event.is_set():
+                tool_results_future.cancel()
+                await self._cancel_tool_tasks(tool_tasks)
+                return None
+
+            interrupt_waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await interrupt_waiter
+            return await tool_results_future
+        except asyncio.CancelledError:
+            tool_results_future.cancel()
+            await self._cancel_tool_tasks(tool_tasks)
+            raise
       
     async def stream_tool_loop(self):
         try:
@@ -356,15 +384,16 @@ Your available skills are:
                 tool_tasks = []
                 stop_reason = None
                 interrupted = False
+                pending_model_message = None
                 
                 await self.hook.trigger(HookType.BEFORE_STREAM)
-                if self.hook.should_break():
+                if self._interrupt_requested():
                     self.logger.info("Agent interrupted before stream")
                     yield {'type': 'interrupted', 'content': 'Agent interrupted'}
                     break
                 model_input = self.construct_model_input()
                 async for chunk in self.model.async_stream_invoke(model_input): 
-                    if self.hook.should_break():
+                    if self._interrupt_requested():
                         self.logger.info("Agent interrupted during stream")
                         interrupted = True
                         break
@@ -386,6 +415,8 @@ Your available skills are:
                         task = asyncio.create_task(
                             self.tool_execute(tool_use)
                         )
+                        self._active_tool_tasks.add(task)
+                        task.add_done_callback(self._active_tool_tasks.discard)
                         tool_tasks.append(task)
                         yield chunk
 
@@ -397,12 +428,16 @@ Your available skills are:
                         )
                         await self.hook.trigger(HookType.ON_MESSAGE, content)
                         self._ensure_session()
-                        self.session.add_message(content)
+                        if stop_reason == 'tool_use':
+                            pending_model_message = content
+                        else:
+                            self.session.add_message(content)
                         yield chunk
                         break
                 
                 if interrupted:
                     self.logger.info("Agent tool loop interrupted after stream")
+                    await self._cancel_tool_tasks(tool_tasks)
                     yield {'type': 'interrupted', 'content': 'Agent interrupted'}
                     break
                 
@@ -411,10 +446,17 @@ Your available skills are:
                         "Agent tool loop continuing for tool execution",
                         context={"tool_count": len(tool_tasks)}
                     )
-                    tool_results = await asyncio.gather(*tool_tasks)
+                    tool_results = await self._wait_for_tool_results(tool_tasks)
+                    if tool_results is None:
+                        self.logger.info("Agent tool loop interrupted during tool execution")
+                        yield {'type': 'interrupted', 'content': 'Agent interrupted'}
+                        break
                     yield {'type': 'tool_results', 'content': tool_results}
                     self._ensure_session()
-                    self.session.add_message(tool_results)
+                    if pending_model_message is not None:
+                        self.session.add_message([pending_model_message, *tool_results])
+                    else:
+                        self.session.add_message(tool_results)
                 elif stop_reason == 'end_turn':
                     self.logger.info("Agent tool loop ended with end_turn")
                     break
@@ -438,6 +480,7 @@ Your available skills are:
             raise
                  
     async def run(self, human_msg:HumanMessage):
+        self._interrupt_event.clear()
         self.state = AgentState.Running
         self.logger.set_trace_id()
         self._ensure_session()
@@ -486,13 +529,15 @@ Your available skills are:
                 self._output_callback(chunk)
 
     async def start(self):
-        if self._running:
+        if self._loop_running:
             self.logger.warning("Agent already running, start ignored")
             return
 
         with self.logger.span("agent_start"):
             self.logger.info("Agent event loop started")
-            self._running = True
+            self._stop_event.clear()
+            self._interrupt_event.clear()
+            self._loop_running = True
             self.state = AgentState.Waiting
             await self._emit({'type': 'agent_state', 'state': 'waiting'})
 
@@ -503,16 +548,21 @@ Your available skills are:
                     f"Failed to start input channel: {e}",
                     exc_info=True,
                 )
-                self._running = False
+                self._loop_running = False
                 self.state = AgentState.Error
                 await self._emit({'type': 'agent_state', 'state': 'error'})
                 return
 
             _exit_reason = "unknown"
             try:
-                while self._running:
+                while self._loop_running:
+                    event_task = asyncio.create_task(self._event_queue.get())
+                    stop_task = asyncio.create_task(self._stop_event.wait())
                     try:
-                        event = await self._event_queue.get()
+                        done, pending = await asyncio.wait(
+                            {event_task, stop_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
                     except Exception as e:
                         self.logger.error(
                             f"Failed to get event from queue: {e}",
@@ -520,11 +570,27 @@ Your available skills are:
                         )
                         _exit_reason = "queue_error"
                         break
-                    if event is _SENTINEL:
+
+                    for task in pending:
+                        task.cancel()
+                    for task in pending:
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+
+                    if self._stop_event.is_set() or not self._loop_running:
                         _exit_reason = "stopped"
                         break
+
+                    if event_task not in done:
+                        _exit_reason = "stopped"
+                        break
+
+                    event = event_task.result()
                     self.state = AgentState.Running
                     await self._emit({'type': 'agent_state', 'state': 'running'})
+                    if self._stop_event.is_set() or not self._loop_running:
+                        _exit_reason = "stopped"
+                        break
                     try:
                         await self._handle_event(event)
                     except Exception as e:
@@ -541,7 +607,7 @@ Your available skills are:
                                 exc_info=True,
                             )
                         self.state = AgentState.Error
-                    if self._running:
+                    if self._loop_running:
                         self.state = AgentState.Waiting
                         await self._emit({'type': 'agent_state', 'state': 'waiting'})
                 else:
@@ -549,7 +615,7 @@ Your available skills are:
             finally:
                 await self.input.stop()
                 self._event_queue = asyncio.Queue()
-                self._running = False
+                self._loop_running = False
                 self.state = AgentState.Ready
                 try:
                     await self._emit({'type': 'agent_state', 'state': 'ready'})
@@ -564,18 +630,26 @@ Your available skills are:
                 )
 
     async def interrupt(self):
-        self.hook.context.break_loop()
+        self._interrupt_event.set()
+        for task in list(self._active_tool_tasks):
+            if not task.done():
+                task.cancel()
 
     async def stop(self):
         with self.logger.span("agent_stop"):
             self.logger.info("Agent stopping")
-            self._running = False
-            self.hook.context.break_loop()
-            self._event_queue.put_nowait(_SENTINEL)
+            self._stop_event.set()
+            self._loop_running = False
+            self._interrupt_event.set()
+            for task in list(self._active_tool_tasks):
+                if not task.done():
+                    task.cancel()
+            self._drain_event_queue()
 
     async def _handle_event(self, event: AgentEvent):
         # Clear any stale BREAK flag left by interrupt() called while idle.
         self.hook.context.reset_control()
+        self._interrupt_event.clear()
         self.logger.set_trace_id(event.correlation_id)
         with self.logger.span("event_handle"):
             self.logger.info(
@@ -640,10 +714,6 @@ Your available skills are:
                         )
                 self.logger.info("Event handling completed")
                 self.logger.clear_trace_id()
-
-
-_SENTINEL = object()
-
 
 class SubAgent:
     def __init__(self, model: Model, tools: List[Tool] = None, system_prompt: str = "",
@@ -840,9 +910,3 @@ Your available skills are:
             return text
         finally:
             self.logger.clear_trace_id()
-
-
-
-
-
-

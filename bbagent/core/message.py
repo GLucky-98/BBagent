@@ -696,13 +696,13 @@ class Session:
 
         for line in text.split('\n'):
             stripped = line.strip()
-            if not stripped or stripped.startswith('#') or stripped == '---':
-                continue
-
             if stripped.startswith('## Turn'):
                 if current_turn is not None:
                     turns_metadata.append(current_turn)
                 current_turn = {}
+                continue
+
+            if not stripped or stripped.startswith('#') or stripped == '---':
                 continue
 
             if ':' in stripped and current_turn is not None:

@@ -164,14 +164,6 @@ function PromptForm({ onClose, editPrompt, copyPrompt, prompts }: { onClose: () 
 
   const existingGroups = [...new Set(prompts.map((p) => p.group).filter(Boolean))].sort();
 
-  useEffect(() => {
-    if (copyPrompt) {
-      setName(copyPrompt.name + " (copy)");
-      setContent(copyPrompt.content);
-      setGroup(copyPrompt.group);
-    }
-  }, [copyPrompt]);
-
   const handleSave = () => {
     if (editPrompt) {
       updatePrompt(editPrompt.id, { name, content, group });
@@ -278,8 +270,9 @@ function PromptList({ onNew, onSelect, onEdit, onCopyFrom }: { onNew: () => void
     setImporting(true);
     try {
       await importPrompts(path);
-    } catch (e: any) {
-      useAppStore.getState().addToast(`Prompt import failed: ${e.message || e}`, "warning");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      useAppStore.getState().addToast(`Prompt import failed: ${message}`, "warning");
     } finally {
       setImporting(false);
     }
@@ -604,7 +597,17 @@ function PromptDetailPanel({ showForm, editPrompt, copyPrompt, onCloseForm }: { 
   const selectedPromptId = useAppStore((s) => s.selectedPromptId);
   const [copied, setCopied] = useState(false);
 
-  if (showForm) return <PromptForm onClose={onCloseForm} editPrompt={editPrompt} copyPrompt={copyPrompt} prompts={prompts} />;
+  if (showForm) {
+    return (
+      <PromptForm
+        key={copyPrompt ? `copy-${copyPrompt.id}` : editPrompt ? `edit-${editPrompt.id}` : "new"}
+        onClose={onCloseForm}
+        editPrompt={editPrompt}
+        copyPrompt={copyPrompt}
+        prompts={prompts}
+      />
+    );
+  }
 
   const selectedPrompt = prompts.find((p) => p.id === selectedPromptId);
 

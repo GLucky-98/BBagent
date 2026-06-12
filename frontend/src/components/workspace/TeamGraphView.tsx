@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   ReactFlow,
   Background,
@@ -113,6 +114,10 @@ interface TeamMapData {
   nodeSummaries: Record<string, TeamNodeData>;
   edgeSummaries: Record<string, TeamEdgeData>;
 }
+
+const EMPTY_TEAM_MESSAGES: TeamChatMessage[] = [];
+const EMPTY_TEAM_MEMBERS: SingleAgent[] = [];
+const EMPTY_TEAM_CONTACTS: Record<string, Record<string, string>> = {};
 
 const NODE_COLORS = [
   "#0066cc",
@@ -819,13 +824,25 @@ const nodeTypes = { teamAgentNode: TeamAgentNode };
 const edgeTypes = { teamContactEdge: TeamContactEdge };
 
 export function TeamGraphView({ width }: { width: number }) {
-  const activeAgentId = useAppStore((s) => s.activeAgentId);
-  const agents = useAppStore((s) => s.agents);
-  const agentStates = useAppStore((s) => s.agentStates);
+  const activeAgent = useAppStore((s) => {
+    const agent = s.activeAgentId ? s.agents.find((item) => item.id === s.activeAgentId) : null;
+    return agent && isTeam(agent) ? agent : null;
+  });
+  const activeAgentId = activeAgent?.id || "";
+  const members = activeAgent?.members || EMPTY_TEAM_MEMBERS;
+  const contacts = activeAgent?.contacts || EMPTY_TEAM_CONTACTS;
+  const agentStates = useAppStore(useShallow((s) => {
+    const states: Record<string, string> = {};
+    for (const member of members) {
+      states[member.id] = s.agentStates[member.id] || member.state;
+    }
+    return states;
+  }));
   const closeTeamGraph = useAppStore((s) => s.closeTeamGraph);
-  const teamMessages = useAppStore((s) => s.teamMessages);
+  const messages = useAppStore((s) =>
+    activeAgentId ? s.teamMessages[activeAgentId] || EMPTY_TEAM_MESSAGES : EMPTY_TEAM_MESSAGES
+  );
   const scrollToTeamMessage = useAppStore((s) => s.scrollToTeamMessage);
-  const activeAgent = agents.find((agent) => agent.id === activeAgentId);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({
@@ -852,22 +869,6 @@ export function TeamGraphView({ width }: { width: number }) {
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
-
-  const members = useMemo(() => {
-    if (!activeAgent || !isTeam(activeAgent)) return [];
-    return activeAgent.members;
-  }, [activeAgent]);
-
-  const contacts = useMemo(() => {
-    if (!activeAgent || !isTeam(activeAgent))
-      return {} as Record<string, Record<string, string>>;
-    return activeAgent.contacts || {};
-  }, [activeAgent]);
-
-  const messages: TeamChatMessage[] = useMemo(() => {
-    if (!activeAgentId) return [];
-    return teamMessages[activeAgentId] || [];
-  }, [activeAgentId, teamMessages]);
 
   useEffect(() => {
     if (mode !== "replay") return;
@@ -1022,7 +1023,7 @@ export function TeamGraphView({ width }: { width: number }) {
     }));
   }, []);
 
-  if (!activeAgent || !isTeam(activeAgent) || members.length === 0) {
+  if (!activeAgent || members.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-(--color-ink-3) text-sm">
         No team selected

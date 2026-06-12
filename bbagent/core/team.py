@@ -1,8 +1,9 @@
 import json
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Awaitable, Callable, List
 
 from .agent import Agent, AgentState
 from .input import EventType
@@ -14,7 +15,7 @@ from .tool import Tool
 class TeamMessage:
     from_agent: str
     to_agent: str
-    content: str | List[ContentBlock]
+    content: str | list[ContentBlock]
     type: str  # "direct" | "broadcast" | "user"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
 
@@ -47,13 +48,13 @@ class TeamConfig:
 
 
 class AgentTeam:
-    def __init__(self, name: str, team_description: str = "", base_dir: str | Path = None):
+    def __init__(self, name: str, team_description: str = "", base_dir: str | Path | None = None):
         self.name = name
         self.team_description = team_description
         self.agents: dict[str, Agent] = {}
         self._contacts: dict[str, set[str]] = {}
         self.base_dir = Path(base_dir) if base_dir else None
-        self._team_messages: List[TeamMessage] = []
+        self._team_messages: list[TeamMessage] = []
         self._on_team_message: Callable[[dict], Awaitable[None]] | None = None
         self.state = AgentState.Ready
 
@@ -111,9 +112,13 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             return self._contacts[agent_name]
         return {name for name in self.agents if name != agent_name}
 
-    def _wrap_with_prefix(self, content: str | List[ContentBlock], from_agent: str,
-                          to_agent: str) -> str | List[ContentBlock]:
-        """如果接收方通讯录中包含发送方，则添加前缀提示；否则原样返回（伪装 user 消息）"""
+    def _wrap_with_prefix(
+        self,
+        content: str | list[ContentBlock],
+        from_agent: str,
+        to_agent: str,
+    ) -> str | list[ContentBlock]:
+        """Add a sender prefix only when the receiver can see the sender."""
         receiver_contacts = self._get_visible_contacts(to_agent)
         if from_agent not in receiver_contacts:
             return content
@@ -125,8 +130,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
 
         if isinstance(content, str):
             return prefix + content
-        else:
-            return [TextBlock(text=prefix)] + content
+        return [TextBlock(text=prefix), *content]
 
     def _inject_team_tools(self, agent: Agent):
         team = self
@@ -187,8 +191,8 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
 
         agent.add_tools([send_msg_tool, broadcast_tool])
 
-    async def push_to_agent(self, agent_name: str, content: str | List[ContentBlock], source: str = "user"):
-        """从外部向指定 agent 推送消息，同时记录到 team messages"""
+    async def push_to_agent(self, agent_name: str, content: str | list[ContentBlock], source: str = "user"):
+        """Push external content to an agent and record it in team messages."""
         target = self.agents.get(agent_name)
         if target is None:
             raise ValueError(f"Agent '{agent_name}' not found in team")
@@ -203,7 +207,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             type="user",
         ))
 
-    async def _send(self, from_agent: str, to_agent: str, content: str | List[ContentBlock]):
+    async def _send(self, from_agent: str, to_agent: str, content: str | list[ContentBlock]):
         target = self.agents.get(to_agent)
         if target is None:
             raise ValueError(f"Agent '{to_agent}' not found in team")
@@ -219,7 +223,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             type="direct",
         ))
 
-    async def _broadcast(self, from_agent: str, content: str | List[ContentBlock]) -> int:
+    async def _broadcast(self, from_agent: str, content: str | list[ContentBlock]) -> int:
         count = 0
         visible = self._get_visible_contacts(from_agent)
         for name in visible:
@@ -242,10 +246,8 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
     async def _record_team_message(self, msg: TeamMessage):
         self._team_messages.append(msg)
         if self._on_team_message:
-            try:
+            with suppress(Exception):
                 await self._on_team_message(msg.to_dict())
-            except Exception:
-                pass
 
     async def start(self):
         for agent in self.agents.values():
@@ -258,7 +260,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         self.update_state()
 
     def update_state(self):
-        """根据成员 agent 的真实 state 聚合计算 team state"""
+        """Aggregate team state from member agent states."""
         if not self.agents:
             self.state = AgentState.Ready
             return
@@ -272,24 +274,16 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         else:
             self.state = AgentState.Ready
 
-    def get_team_messages(self) -> List[TeamMessage]:
+    def get_team_messages(self) -> list[TeamMessage]:
         return list(self._team_messages)
 
-    def load_team_messages(self, path: str | Path = None):
-        target = Path(path) if path else (self.base_dir / 'team_messages.jsonl' if self.base_dir else None)
-        if not target or not target.exists():
+    def load_team_messages(self, path: str | Path):
+        target = Path(path)
+        if not target.exists():
             return
         self._team_messages.clear()
-        with open(target, 'r', encoding='utf-8') as f:
+        with open(target, encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if line:
                     self._team_messages.append(TeamMessage.from_dict(json.loads(line)))
-
-    def clear_team_messages(self):
-        self._team_messages.clear()
-        if self.base_dir:
-            path = self.base_dir / 'team_messages.jsonl'
-            if path.exists():
-                path.write_text('', encoding='utf-8')
-

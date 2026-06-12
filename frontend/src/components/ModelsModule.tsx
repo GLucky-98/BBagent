@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Plus, Box, Play, X, Loader2, Pencil, Trash2, Copy } from "lucide-react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
@@ -24,23 +24,6 @@ function NewModelForm({ onClose, editModel, copyModel }: { onClose: () => void; 
       topP: src?.topP ?? 1,
       thinkingEnabled: src?.thinking ?? true,
   });
-
-  useEffect(() => {
-    if (copyModel) {
-      setForm({
-        name: copyModel.name + " (copy)",
-        provider: copyModel.provider,
-        modelName: copyModel.modelName,
-        apiKey: copyModel.apiKey,
-        baseUrl: copyModel.baseUrl,
-        maxContextTokens: copyModel.maxContextTokens,
-        maxCompletionTokens: copyModel.maxCompletionTokens,
-        temperature: copyModel.temperature ?? 1,
-        topP: copyModel.topP ?? 1,
-        thinkingEnabled: copyModel.thinking ?? true,
-      });
-    }
-  }, [copyModel]);
 
   const handleSave = () => {
     const model: Model = {
@@ -233,7 +216,7 @@ function ModelList({ onNew, onSelect, onEdit, onCopyFrom }: { onNew: () => void;
   );
 }
 
-function ModelTestPanel({ showForm, editModel, copyModel, onCloseForm, onNew: _onNew, onEdit: _onEdit }: {
+function ModelTestPanel({ showForm, editModel, copyModel, onCloseForm }: {
   showForm: boolean; editModel?: Model; copyModel?: Model; onCloseForm: () => void;
   onNew: () => void; onEdit: (id: string) => void;
 }) {
@@ -264,7 +247,12 @@ function ModelTestPanel({ showForm, editModel, copyModel, onCloseForm, onNew: _o
   return (
     <div className="flex-1 h-full flex flex-col bg-(--color-background) overflow-y-auto">
       {showForm ? (
-        <NewModelForm onClose={onCloseForm} editModel={editModel} copyModel={copyModel} />
+        <NewModelForm
+          key={copyModel ? `copy-${copyModel.id}` : editModel ? `edit-${editModel.id}` : "new"}
+          onClose={onCloseForm}
+          editModel={editModel}
+          copyModel={copyModel}
+        />
       ) : selectedModel ? (
         <>
           <ModelDetailView selectedModel={selectedModel} />

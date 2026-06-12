@@ -1,19 +1,19 @@
-from pathlib import Path
-from typing import Dict, Optional, List
 import logging
-import yaml
-
 from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
 
 logger = logging.getLogger("skill")
 
+
 @dataclass
-class SkillMetadata():
+class SkillMetadata:
     license: str = None
     compatibility: str = None
     version: str = None
-    allowed_tools: Optional[List[str]] = None
-    metadata: Optional[dict] = None
+    allowed_tools: list[str] | None = None
+    metadata: dict | None = None
 
     def to_dict(self):
         return {
@@ -24,9 +24,9 @@ class SkillMetadata():
             'metadata': self.metadata,
         }
 
-      
+
 @dataclass
-class Skill():  
+class Skill:
     name: str
     description: str
     body: str = ""
@@ -41,7 +41,7 @@ class Skill():
         }
 
 
-def parse_skill_md(skill_path: Path) -> Optional[Dict]:
+def parse_skill_md(skill_path: Path) -> dict | None:
     try:
         content = skill_path.read_text(encoding='utf-8')
 
@@ -92,11 +92,37 @@ def parse_skill_md(skill_path: Path) -> Optional[Dict]:
         return None
 
 
-def scan_skills(skill_dir: Path | str) -> Dict[str, Skill]:
-    skills: Dict[str, Skill] = {}
+def _load_skill_from_md(skill_md: Path) -> Skill | None:
+    skill_data = parse_skill_md(skill_md)
+    if not skill_data:
+        return None
+
+    return Skill(
+        name=skill_data['name'],
+        description=skill_data['description'],
+        body=skill_data['body'],
+        path=skill_md.parent,
+        metadata=skill_data['metadata']
+    )
+
+
+def scan_skills(skill_dir: Path | str) -> dict[str, Skill]:
+    skills: dict[str, Skill] = {}
     skill_dir = Path(skill_dir)
     if not skill_dir.exists():
         return skills
+
+    if skill_dir.is_file():
+        skill = _load_skill_from_md(skill_dir)
+        if skill:
+            skills[skill.name] = skill
+        return skills
+
+    root_skill = skill_dir / "SKILL.md"
+    if root_skill.exists():
+        skill = _load_skill_from_md(root_skill)
+        if skill:
+            skills[skill.name] = skill
 
     for skill_path in skill_dir.iterdir():
         if not skill_path.is_dir():
@@ -106,19 +132,9 @@ def scan_skills(skill_dir: Path | str) -> Dict[str, Skill]:
         if not skill_md.exists():
             continue
 
-        skill_data = parse_skill_md(skill_md)
-        if skill_data:
-            skill_name = skill_data['name']
-            if skill_name in skills:
-                continue
-            skills[skill_name] = Skill(
-                name=skill_name,
-                description=skill_data['description'],
-                body=skill_data['body'],
-                path=skill_path,
-                metadata=skill_data['metadata']
-            )
+        skill = _load_skill_from_md(skill_md)
+        if not skill or skill.name in skills:
+            continue
+        skills[skill.name] = skill
 
     return skills
-
-        

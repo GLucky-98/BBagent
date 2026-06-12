@@ -23,7 +23,9 @@ const PANEL_C_DEFAULT = 360;
 export function WorkspaceView() {
   const activeAgentId = useAppStore((s) => s.activeAgentId);
   const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
-  const agents = useAppStore((s) => s.agents);
+  const activeAgent = useAppStore((s) => (
+    s.activeAgentId ? s.agents.find((a) => a.id === s.activeAgentId) : undefined
+  ));
   const previewFile = useAppStore((s) => s.previewFile);
   const sessionPanelOpen = useAppStore((s) => s.sessionPanelOpen);
   const teamGraphOpen = useAppStore((s) => s.teamGraphOpen);
@@ -41,7 +43,6 @@ export function WorkspaceView() {
     setPanelCWidth(width);
   }, []);
 
-  const activeAgent = agents.find((a) => a.id === activeAgentId);
   // Show TeamChatWindow only when team tab is active AND no specific member is selected.
   // When a teammate is selected, activeAgentId is the mate's UUID → ChatWindow handles it.
   const showTeamChat = activeAgent?.type === "team" && !activeTeamMemberName;

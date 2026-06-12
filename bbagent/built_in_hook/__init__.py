@@ -29,6 +29,9 @@ VECTOR_WEIGHT = 0.5
 
 MAX_INJECT = 5
 MAX_CANDIDATES = 50
+EXTRACT_TURN_INTERVAL = 5
+INJECT_OVERSAMPLE_FACTOR = 3
+INJECT_OVERSAMPLE_CAP = 200
 
 MEMORY_SYSTEM_PROMPT = """
 ## Long-Term Memory System
@@ -82,12 +85,18 @@ class BuiltinHookConfig:
     max_inject: int = MAX_INJECT
     # Max candidate memories retrieved before reranking.
     max_candidates: int = MAX_CANDIDATES
+    # Complete unextracted turns needed before background interval extraction.
+    extract_turn_interval: int = EXTRACT_TURN_INTERVAL
     # RRF k used to fuse BM25 and vector retrieval scores.
     rrf_k: int = RRF_K
     # BM25 weight in the fused retrieval score.
     bm25_weight: float = BM25_WEIGHT
     # Vector weight in the fused retrieval score.
     vector_weight: float = VECTOR_WEIGHT
+    # Search wider than max_candidates before filtering memories already seen in a session.
+    inject_oversample_factor: int = INJECT_OVERSAMPLE_FACTOR
+    # Hard cap for the oversampled retrieval size.
+    inject_oversample_cap: int = INJECT_OVERSAMPLE_CAP
     # Model used by the memory subsystem; defaults to the agent's own model.
     submodel: Model = None
     # Embedding model used by the memory subsystem; defaults to OllamaEmbedding().
@@ -133,18 +142,24 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
     )
     memory_runtime = MemoryRuntime(logger=agent.logger)
 
+    def mark_current_turn_memory_extracted() -> None:
+        if agent.session is not None and agent.session.turns:
+            agent.session.turns[-1].memory_extracted = True
+
     add_tool = create_add_memory_tool(
         memory_manager,
         lambda: agent.session.id,
         prompt=config.add_memory_tool_prompt,
         runtime=memory_runtime,
+        mark_current_turn_extracted=mark_current_turn_memory_extracted,
     )
     agent.add_tools([add_tool])
 
     (extract_memory_before_compress,
      extract_memory_before_new_session,
      clean_memory_hook,
-     inject_memory_hook) = create_memory_hook(
+     inject_memory_hook,
+     extract_memory_after_interval) = create_memory_hook(
         memory_manager, submodel,
         runtime=memory_runtime,
         extract_prompt=config.extract_prompt,
@@ -159,6 +174,9 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
         inject_bm25_weight=config.bm25_weight,
         inject_vector_weight=config.vector_weight,
         max_candidates=config.max_candidates,
+        extract_turn_interval=config.extract_turn_interval,
+        inject_oversample_factor=config.inject_oversample_factor,
+        inject_oversample_cap=config.inject_oversample_cap,
         clean_mutation_threshold=config.clean_mutation_threshold,
     )
 
@@ -167,6 +185,7 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
     hook.register(func=extract_memory_before_compress, hook_type=HookType.BEFORE_STREAM, priority=101)
     hook.register(func=extract_memory_before_new_session, hook_type=HookType.NEW_SESSION, priority=100)
     hook.register(func=clean_memory_hook, hook_type=HookType.NEW_SESSION, priority=101)
+    hook.register(func=extract_memory_after_interval, hook_type=HookType.AFTER_RUN, priority=100)
 
     prompt = config.memory_system_prompt.format(
         memory_dir=memory_manager.memory_dir,

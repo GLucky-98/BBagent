@@ -205,6 +205,11 @@ class SessionManager:
         new_session = source.fork(session_root=fork_root, at=turn_index)
 
         # 4. 写入 fork 来源信息
+        source_agent_id = src_idx.agent_id if src_idx else None
+        if source_agent_id and target_agent_id != source_agent_id:
+            for turn in new_session.turns:
+                turn.memory_extracted = False
+
         new_session.parent_session_id = session_id
         new_session.fork_turn_index = turn_index
         new_session.save()

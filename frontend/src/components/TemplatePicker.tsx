@@ -39,6 +39,7 @@ export function TemplatePicker({ open, onClose, onSelect }: TemplatePickerProps)
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Opening the picker intentionally loads external file-tree data.
       loadTree("./templates");
     }
   }, [open]);

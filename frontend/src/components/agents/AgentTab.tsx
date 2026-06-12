@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Settings2, Trash2, Play, Square, Loader2 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { cn } from "../../lib/utils";
@@ -19,7 +19,6 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
-  const tabRef = useRef<HTMLDivElement>(null);
   const activeAgentId = useAppStore((s) => s.activeAgentId);
   const activeTeamMemberName = useAppStore((s) => s.activeTeamMemberName);
   const removeAgent = useAppStore((s) => s.removeAgent);
@@ -89,7 +88,6 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
         !isActive && "text-(--color-muted-foreground) hover:bg-(--color-secondary) hover:text-(--color-foreground)",
         isActive && "bg-(--color-secondary) text-(--color-foreground)"
       )}
-      ref={tabRef}
       onClick={isTeam ? undefined : onClick}
     >
       <button
@@ -153,7 +151,7 @@ export function AgentTab({ agent, isActive, onClick, onConfig }: AgentTabProps) 
             align="start"
             sideOffset={4}
             className="z-[100]"
-            style={{ minWidth: tabRef.current?.offsetWidth || 200, maxHeight: "50vh" }}
+            style={{ minWidth: "var(--radix-dropdown-menu-trigger-width)", maxHeight: "50vh" }}
           >
             <TeamDropdown
               agent={agent}

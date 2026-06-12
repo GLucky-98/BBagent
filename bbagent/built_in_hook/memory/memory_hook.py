@@ -456,10 +456,13 @@ def create_memory_hook(
     small_turn_cap: int = 5000,
     max_inject: int = 5,
     max_candidates: int = 50,
+    extract_turn_interval: int = 5,
     inject_rrf_k: int = 60,
     inject_bm25_weight: float = 0.5,
     inject_vector_weight: float = 0.5,
     inject_user_prompt: str = INJECT_USER_PREFIX,
+    inject_oversample_factor: int = 3,
+    inject_oversample_cap: int = 200,
     clean_mutation_threshold: int = 50,
 ):
     if runtime is None:
@@ -574,6 +577,56 @@ def create_memory_hook(
             name=f"memory_extract:{session.id}",
         )
 
+    async def extract_memory_after_interval(ctx: HookContext):
+        agent = ctx.agent
+        session = agent.session
+        if not session or extract_turn_interval <= 0:
+            return
+
+        indexed = [
+            (idx, turn)
+            for idx, turn in enumerate(session.turns)
+            if turn.is_complete and not turn.memory_extracted
+        ]
+        if len(indexed) < extract_turn_interval:
+            agent.logger.debug(
+                "Memory extraction skipped (interval not reached)",
+                context={
+                    "completed_unextracted": len(indexed),
+                    "extract_turn_interval": extract_turn_interval,
+                },
+            )
+            return
+
+        claimed = runtime.claim_turns(session.id, indexed)
+        if len(claimed) < extract_turn_interval:
+            if claimed:
+                runtime.release_turns(session.id, [idx for idx, _ in claimed])
+            agent.logger.debug(
+                "Memory extraction skipped (interval turns already claimed)",
+                context={
+                    "claimed_count": len(claimed),
+                    "extract_turn_interval": extract_turn_interval,
+                },
+            )
+            return
+
+        agent.logger.info(
+            f"Queued memory extraction from {len(claimed)} turns (interval)",
+            context={"turn_count": len(claimed), "session_id": session.id},
+        )
+
+        runtime.schedule(
+            _extract_new_session_job(
+                agent,
+                session,
+                claimed,
+                agent.model.max_context_tokens,
+                agent.logger,
+            ),
+            name=f"memory_extract_interval:{session.id}",
+        )
+
     async def _clean_memory_job(logger: AgentLogger):
         async with runtime.store_lock:
             hard_deleted = _hard_clean_memories(memory_manager, logger)
@@ -642,6 +695,10 @@ def create_memory_hook(
             return
         _last_inject_hash = query_hash
 
+        inject_static_prefix = inject_user_prompt.split("{search_context}", 1)[0]
+        seen_memory_keys = runtime.get_seen_memory_keys(session, inject_static_prefix)
+        selected_memory_keys = []
+
         context = await inject_memory_context(
             query=query,
             memory_manager=memory_manager,
@@ -651,6 +708,10 @@ def create_memory_hook(
             bm25_weight=inject_bm25_weight,
             vector_weight=inject_vector_weight,
             max_candidates=max_candidates,
+            seen_memory_keys=seen_memory_keys,
+            selected_memory_keys=selected_memory_keys,
+            oversample_factor=inject_oversample_factor,
+            oversample_cap=inject_oversample_cap,
             logger=agent.logger,
             runtime=runtime,
         )
@@ -671,5 +732,12 @@ def create_memory_hook(
             last_msg.content = prefix + content
         elif isinstance(content, list):
             last_msg.content = [TextBlock(text=prefix)] + content
+        runtime.mark_memory_keys_seen(session.id, selected_memory_keys)
 
-    return extract_memory_before_compress, extract_memory_before_new_session, clean_memory_hook, inject_memory_hook
+    return (
+        extract_memory_before_compress,
+        extract_memory_before_new_session,
+        clean_memory_hook,
+        inject_memory_hook,
+        extract_memory_after_interval,
+    )
