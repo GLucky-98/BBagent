@@ -459,6 +459,7 @@ export function ChatWindow() {
   const selectedAgent = useSelectedAgent();
   const agentModel = useAgentModel();
   const addMessage = useAppStore((s) => s.addMessage);
+  const upsertMessage = useAppStore((s) => s.upsertMessage);
   const patchMessage = useAppStore((s) => s.patchMessage);
   const agentState = useAppStore((s) => s.agentStates[selectedAgent?.id || ""] || selectedAgent?.state || "ready");
   const isRunning = agentState === "running";
@@ -614,14 +615,17 @@ export function ChatWindow() {
         }
       } else if (chunk.type === "completed_tool_use") {
         const ct = chunk.content as Record<string, unknown> | undefined;
-        addMessage(agentId, {
-          id: crypto.randomUUID(),
+        const toolCallId = (ct?.id as string) || "";
+        upsertMessage(agentId, {
+          id: toolCallId ? `tool_use:${toolCallId}` : crypto.randomUUID(),
           role: "system",
           content: JSON.stringify(ct?.input || {}, null, 2),
           timestamp: Date.now(),
           chunkType: "tool_use",
           toolName: (ct?.name as string) || "",
           toolInput: (ct?.input as Record<string, unknown>) || {},
+          toolCallId,
+          runtime: true,
         });
       } else if (chunk.type === "tool_results") {
         const results = chunk.content;
@@ -647,18 +651,24 @@ export function ChatWindow() {
             } else {
               contentStr = JSON.stringify(rawContent, null, 2);
             }
-            addMessage(agentId, {
-              id: crypto.randomUUID(),
+            const toolCallId = (rDict.id as string) || "";
+            upsertMessage(agentId, {
+              id: toolCallId ? `tool_result:${toolCallId}` : crypto.randomUUID(),
               role: "system",
               content: contentStr,
               timestamp: Date.now(),
               chunkType: "tool_result",
               toolName,
+              toolCallId,
+              runtime: true,
             });
           }
         }
       } else if (chunk.type === "input_event") {
         const sourceId = (chunk.source_id as string) || "";
+        if (sourceId === "user") {
+          return;
+        }
         let sourceTag: string;
         if ((chunk.event_type as string) === "timer_trigger") {
           sourceTag = `Timer: ${sourceId.replace("timer:", "")}`;
@@ -739,7 +749,7 @@ export function ChatWindow() {
     return () => {
       useAppStore.setState({ onWsChunk: null });
     };
-  }, [addMessage, patchMessage, setAgentState]);
+  }, [addMessage, upsertMessage, patchMessage, setAgentState]);
 
   // ── Agent switch: load history FIRST, then send switch_agent ──
   useEffect(() => {
@@ -848,9 +858,9 @@ export function ChatWindow() {
           <h2 className="text-[15px] font-semibold text-(--color-foreground) tracking-[-0.01em]">{selectedAgent.name}</h2>
           <p className="text-[12px] text-(--color-ink-2) mt-0.5 flex items-center gap-1.5">
             <span className={cn(
-              "w-2 h-2 rounded-full",
+              "w-1.5 h-1.5 rounded-full",
               agentState === "waiting" && "bg-(--color-success)",
-              agentState === "running" && "bg-(--color-success) animate-halo",
+              agentState === "running" && "bg-(--color-success) animate-halo-green-yellow",
               agentState === "error" && "bg-(--color-danger)",
               agentState === "ready" && "bg-(--color-ink-4)"
             )} />

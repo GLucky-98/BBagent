@@ -54,6 +54,7 @@ export interface AppState {
   updateTeam: (id: string, updates: UpdateTeamPayload) => Promise<void>;
   removeAgent: (id: string, deleteFiles?: boolean) => Promise<void>;
   addMessage: (agentId: string, message: Message) => void;
+  upsertMessage: (agentId: string, message: Message) => void;
   patchMessage: (agentId: string, messageId: string, patch: Partial<Message>) => void;
   agentInputs: Record<string, string>;
   setAgentInput: (agentId: string, value: string) => void;
@@ -302,6 +303,33 @@ const normalizeTeamMessages = (messages: Record<string, unknown>[] = []): TeamCh
     type: m.type as "direct" | "broadcast" | "user",
     timestamp: m.timestamp as number,
   }));
+
+type MessageRole = Message["role"];
+type MessageChunkType = NonNullable<Message["chunkType"]>;
+
+function buildMessageUiId(
+  message: {
+    role?: string;
+    chunkType?: string;
+    messageId?: string;
+    toolCallId?: string;
+  },
+  fallback: string
+): string {
+  if (message.chunkType === "tool_use" && message.toolCallId) {
+    return `tool_use:${message.toolCallId}`;
+  }
+  if (message.chunkType === "tool_result" && message.toolCallId) {
+    return `tool_result:${message.toolCallId}`;
+  }
+  if (message.chunkType === "thinking" && message.messageId) {
+    return `thinking:${message.messageId}`;
+  }
+  if ((!message.chunkType || message.chunkType === "text") && message.messageId) {
+    return `${message.role || "message"}:${message.messageId}:text`;
+  }
+  return fallback;
+}
 
 type AppStateSetter = (partial: Partial<AppState> | ((state: AppState) => Partial<AppState>)) => void;
 
@@ -647,6 +675,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   addMessage: (agentId, message) =>
     set((state) => ({ agents: state.agents.map((a) => (a.id === agentId ? { ...a, messages: [...a.messages, message] } : a)) })),
+  upsertMessage: (agentId, message) =>
+    set((state) => ({
+      agents: state.agents.map((a) => {
+        if (a.id !== agentId) return a;
+        const idx = a.messages.findIndex((m) => m.id === message.id);
+        if (idx === -1) {
+          return { ...a, messages: [...a.messages, message] };
+        }
+        const existing = a.messages[idx];
+        const newMsgs = a.messages.slice();
+        newMsgs[idx] = {
+          ...existing,
+          ...message,
+          runtime: existing.runtime === false ? false : message.runtime,
+        };
+        return { ...a, messages: newMsgs };
+      }),
+    })),
   patchMessage: (agentId, messageId, patch) =>
     set((state) => ({
       agents: state.agents.map((a) => {
@@ -1004,15 +1050,22 @@ export const useAppStore = create<AppState>((set, get) => ({
             } else {
               contentStr = "";
             }
+            const role = m.role as MessageRole;
+            const chunkType = m.chunkType as MessageChunkType | undefined;
+            const messageId = m.messageId as string | undefined;
+            const toolCallId = m.toolCallId as string | undefined;
             return {
-              id: `hist-${i}`,
-              role: m.role as string,
+              id: buildMessageUiId({ role, chunkType, messageId, toolCallId }, `hist-${i}`),
+              role,
               content: contentStr,
               timestamp: m.timestamp as number,
               sourceAgent: (m.source_agent || m.sourceAgent) as string | undefined,
-              chunkType: m.chunkType as string | undefined,
+              chunkType,
               toolName: m.toolName as string | undefined,
               toolInput: m.toolInput as Record<string, unknown> | undefined,
+              messageId,
+              toolCallId,
+              runtime: false,
             };
           }) } : a
         ),

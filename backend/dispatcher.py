@@ -4,9 +4,6 @@ from backend.logging import get_backend_logger
 
 logger = get_backend_logger("dispatcher")
 
-_MAX_BUFFER_ENTRIES = 500
-_MAX_BUFFER_BYTES = 500 * 1024  # 500 KB
-
 
 def _make_serializable(obj):
     """Recursively convert dataclass objects to plain dicts via to_dict()."""
@@ -19,42 +16,42 @@ def _make_serializable(obj):
     return obj
 
 
+def _is_completed_end_turn(chunk: dict) -> bool:
+    if chunk.get("type") != "completed_message":
+        return False
+    content = chunk.get("content") or {}
+    return isinstance(content, dict) and content.get("stop_reason") == "end_turn"
+
+
+def _should_clear_buffer(chunk: dict) -> bool:
+    if _is_completed_end_turn(chunk):
+        return True
+    if chunk.get("type") == "interrupted":
+        return True
+    return chunk.get("type") == "agent_state" and chunk.get("state") == "error"
+
+
 class AgentOutputDispatcher:
-    def __init__(self):
+    def __init__(self, replay_buffer: bool = True):
         self._subscribers: dict[str, asyncio.Queue] = {}
         self._round_buffer: list[dict] = []
-        self._buffer_bytes = 0
+        self._replay_buffer = replay_buffer
 
     async def on_chunk(self, chunk):
         # Serialize dataclass content to plain dicts so downstream
         # consumers (WebSocket send_json, etc.) never see non-JSON types.
         serializable = _make_serializable(chunk)
 
-        # Cache for replay
-        self._round_buffer.append(serializable)
-        self._buffer_bytes += len(str(serializable))
+        if self._replay_buffer:
+            # Cache the current incomplete turn for replay. It is intentionally
+            # not truncated; otherwise switching back can restore only part of
+            # an in-flight tool loop.
+            self._round_buffer.append(serializable)
 
-        # Evict oldest if over capacity (entries or bytes)
-        while (
-            len(self._round_buffer) > _MAX_BUFFER_ENTRIES
-            or self._buffer_bytes > _MAX_BUFFER_BYTES
-        ):
-            evicted = self._round_buffer.pop(0)
-            self._buffer_bytes -= len(str(evicted))
-
-        # Clear buffer when round completes or is terminated abnormally
-        if serializable.get("type") == "completed_message":
-            self._round_buffer.clear()
-            self._buffer_bytes = 0
-        elif serializable.get("type") == "interrupted":
-            self._round_buffer.clear()
-            self._buffer_bytes = 0
-        elif (
-            serializable.get("type") == "agent_state"
-            and serializable.get("state") == "error"
-        ):
-            self._round_buffer.clear()
-            self._buffer_bytes = 0
+            # Clear buffer only when the full turn ends or is terminated.
+            # A completed_message with stop_reason=tool_use is still mid-turn.
+            if _should_clear_buffer(serializable):
+                self._round_buffer.clear()
 
         # Broadcast to existing subscribers
         for q in list(self._subscribers.values()):

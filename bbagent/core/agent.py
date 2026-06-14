@@ -3,22 +3,18 @@ import contextlib
 import json
 import shutil
 import sys
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
 from uuid import uuid4 as uuid
 
-from .hook import AgentHook, Hook, HookType
-from .input import AgentEvent, EventType, InputChannel
+from .hook import AgentHook, HookType
+from .input import AgentEvent, InputChannel
 from .logger import AgentLogger, _NullLogger
 from .message import (
-    ContentBlock,
     HumanMessage,
-    ImageBlock,
     Message,
-    ModelMessage,
     Session,
     TextBlock,
     ToolMessage,
@@ -53,10 +49,10 @@ class AgentConfig:
 
 @dataclass
 class AgentState:
-    Ready = 'Ready'
-    Waiting = 'Waiting'
-    Running = 'Running'
-    Error = 'Error'
+    Ready = 'ready'
+    Waiting = 'waiting'
+    Running = 'running'
+    Error = 'error'
 
 
 class Agent:
@@ -92,7 +88,6 @@ class Agent:
         self.hook = AgentHook()
         self.hook.set_context(self)
 
-        self._event_queue: asyncio.Queue = asyncio.Queue()
         self.input = InputChannel()
         self._output_callback: Optional[Callable] = None
         self._loop_running = False
@@ -114,9 +109,8 @@ class Agent:
     def set_session(self, session: Session):
         self.session = session
 
-    def add_timer(self, seconds: float, name: str = "", hint: str = "") -> 'Agent':
+    def add_timer(self, seconds: float, name: str = "", hint: str = "") -> None:
         self.input.every(seconds, name, hint)
-        return self
 
     def list_timers(self) -> list[dict]:
         return self.input.list_timers()
@@ -228,6 +222,11 @@ class Agent:
     def remove_tools(self, tool_names: List[str]):
         for name in tool_names:
             self.tools.pop(name, None)
+        if self.session is not None:
+            ever_used_tools = self.session.ever_used_tools
+            for tool_name in ever_used_tools:
+                if tool_name not in self.tools:
+                    self.logger.warning(f"Tool '{tool_name}' not found in agent tools")
 
     def _add_load_skills_tool(self):
         @tool
@@ -245,7 +244,6 @@ class Agent:
         self.add_tools([load_skill])
     
     async def tool_execute(self, tool_use: ToolUseBlock) -> ToolMessage:
-        await self.hook.trigger(HookType.ON_TOOL_USE, tool_use)
         tool = self.tools.get(tool_use.name)
 
         if tool is None:
@@ -255,6 +253,7 @@ class Agent:
                 context={"tool_name": tool_use.name, "tool_input": tool_use.input}
             )
         else:
+            await self.hook.trigger(HookType.ON_TOOL_USE, tool_use)
             self.logger.info(
                 f"Tool '{tool.name}' execution started",
                 context={"tool_name": tool.name, "tool_input": tool_use.input}
@@ -266,9 +265,7 @@ class Agent:
                     else:
                         raw_result = await asyncio.to_thread(tool.invoke, tool_use.input)
 
-                    if isinstance(raw_result, str):
-                        content = raw_result
-                    elif isinstance(raw_result, list):
+                    if isinstance(raw_result, (str, list)):
                         content = raw_result
                     else:
                         content = json.dumps(raw_result, ensure_ascii=False)
@@ -301,11 +298,11 @@ class Agent:
 
     def _load_skill_prompt(self):
         """从 skills.md 加载技能提示词，文件不存在时使用默认值"""
-        skill_system_prompt = ["""You have access to the following skills. Each skill's complete information (including its full capabilities, usage instructions, and detailed behavior) is stored in a markdown file located at the skill's path. When you need to use a specific skill, read its SKILL.md file from the skill's path to get the complete details.
+        skill_system_prompt = ["""You have access to the following skills. When you need to use a specific skill, call the `load_skill` tool with the skill name to get its full capabilities, usage instructions, and detailed behavior.
 
 Your available skills are:
 """]
-        skill_short_prompt = [f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in self.skills.values()]
+        skill_short_prompt = [f'- name: {s.name}, Description: {s.description}' for s in self.skills.values()]
         return '\n'.join(skill_system_prompt + skill_short_prompt)
 
     def add_skills(self, skills:List[Skill]):
@@ -341,13 +338,6 @@ Your available skills are:
     @property
     def is_running(self) -> bool:
         return self._loop_running
-
-    def _drain_event_queue(self):
-        while True:
-            try:
-                self._event_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
 
     async def _cancel_tool_tasks(self, tool_tasks: List[asyncio.Task]):
         for task in tool_tasks:
@@ -501,9 +491,9 @@ Your available skills are:
                 )
                 raise
             finally:
-                self.state = AgentState.Ready
+                if self.state == AgentState.Running:
+                    self.state = AgentState.Ready
                 await self.hook.trigger(HookType.AFTER_RUN)
-                # 持久化 session metadata（与 doc/backend-design.md:842 对齐）
                 if self.session is not None and self.session.dir is not None:
                     try:
                         self.session.save()
@@ -519,7 +509,6 @@ Your available skills are:
         self._output_callback = callback
 
     async def _emit(self, chunk):
-        # Auto-inject context_tokens into agent_state events
         if chunk.get("type") == "agent_state" and self.session:
             chunk["context_tokens"] = self.session.get_visible_token_count()
         if self._output_callback:
@@ -527,6 +516,9 @@ Your available skills are:
                 await self._output_callback(chunk)
             else:
                 self._output_callback(chunk)
+
+    async def _emit_state(self):
+        await self._emit({'type': 'agent_state', 'state': self.state})
 
     async def start(self):
         if self._loop_running:
@@ -539,10 +531,10 @@ Your available skills are:
             self._interrupt_event.clear()
             self._loop_running = True
             self.state = AgentState.Waiting
-            await self._emit({'type': 'agent_state', 'state': 'waiting'})
+            await self._emit_state()
 
             try:
-                await self.input.start(self._event_queue)
+                await self.input.start()
             except Exception as e:
                 self.logger.error(
                     f"Failed to start input channel: {e}",
@@ -550,13 +542,13 @@ Your available skills are:
                 )
                 self._loop_running = False
                 self.state = AgentState.Error
-                await self._emit({'type': 'agent_state', 'state': 'error'})
+                await self._emit_state()
                 return
 
             _exit_reason = "unknown"
             try:
                 while self._loop_running:
-                    event_task = asyncio.create_task(self._event_queue.get())
+                    event_task = asyncio.create_task(self.input.queue.get())
                     stop_task = asyncio.create_task(self._stop_event.wait())
                     try:
                         done, pending = await asyncio.wait(
@@ -587,7 +579,7 @@ Your available skills are:
 
                     event = event_task.result()
                     self.state = AgentState.Running
-                    await self._emit({'type': 'agent_state', 'state': 'running'})
+                    await self._emit_state()
                     if self._stop_event.is_set() or not self._loop_running:
                         _exit_reason = "stopped"
                         break
@@ -599,31 +591,31 @@ Your available skills are:
                             exc_info=True,
                         )
                         try:
+                            self.state = AgentState.Error
                             await self._emit({'type': 'error', 'content': str(e)})
-                            await self._emit({'type': 'agent_state', 'state': 'error'})
+                            await self._emit_state()
                         except Exception:
                             self.logger.error(
                                 "Failed to emit error/agent_state in event loop handler",
                                 exc_info=True,
                             )
-                        self.state = AgentState.Error
-                    if self._loop_running:
+                        _exit_reason = "error"
+                        break
+                    if self._loop_running and self.state != AgentState.Error:
                         self.state = AgentState.Waiting
-                        await self._emit({'type': 'agent_state', 'state': 'waiting'})
-                else:
-                    _exit_reason = "not_running"
+                        await self._emit_state()
             finally:
                 await self.input.stop()
-                self._event_queue = asyncio.Queue()
                 self._loop_running = False
-                self.state = AgentState.Ready
-                try:
-                    await self._emit({'type': 'agent_state', 'state': 'ready'})
-                except Exception:
-                    self.logger.error(
-                        "Failed to emit agent_state 'ready'",
-                        exc_info=True,
-                    )
+                if self.state != AgentState.Error:
+                    self.state = AgentState.Ready
+                    try:
+                        await self._emit_state()
+                    except Exception:
+                        self.logger.error(
+                            "Failed to emit agent_state 'ready'",
+                            exc_info=True,
+                        )
                 self.logger.info(
                     "Agent event loop stopped",
                     context={"exit_reason": _exit_reason}
@@ -644,7 +636,7 @@ Your available skills are:
             for task in list(self._active_tool_tasks):
                 if not task.done():
                     task.cancel()
-            self._drain_event_queue()
+            await self.input.stop()
 
     async def _handle_event(self, event: AgentEvent):
         # Clear any stale BREAK flag left by interrupt() called while idle.
@@ -664,27 +656,21 @@ Your available skills are:
             self._ensure_session()
             self.session.add_message(msg)
 
-            # Emit input event so the frontend can display non-direct-user
-            # messages (timer triggers, team agent messages, team user messages)
-            # in the chat window. Direct user messages (source_id="user") are
-            # added locally by the frontend, so they are skipped here.
-            if event.source_id != "user":
-                # Extract plain text from ContentBlock list or raw string
-                if isinstance(msg.content, str):
-                    text = msg.content
-                elif isinstance(msg.content, list):
-                    text = " ".join(
-                        b.text if hasattr(b, "text") else str(b)
-                        for b in msg.content
-                    )
-                else:
-                    text = str(msg.content)
-                await self._emit({
-                    "type": "input_event",
-                    "event_type": event.type.value,
-                    "source_id": event.source_id,
-                    "content": text,
-                })
+            if isinstance(msg.content, str):
+                text = msg.content
+            elif isinstance(msg.content, list):
+                text = " ".join(
+                    b.text if hasattr(b, "text") else str(b)
+                    for b in msg.content
+                )
+            else:
+                text = str(msg.content)
+            await self._emit({
+                "type": "input_event",
+                "event_type": event.type.value,
+                "source_id": event.source_id,
+                "content": text,
+            })
 
             await self.hook.trigger(HookType.AFTER_INPUT)
             try:
@@ -701,9 +687,9 @@ Your available skills are:
                     exc_info=sys.exc_info()
                 )
                 await self.hook.trigger(HookType.ON_ERROR, e)
+                raise
             finally:
                 await self.hook.trigger(HookType.AFTER_RUN)
-                # 持久化 session metadata（timer / team 事件入口兜底）
                 if self.session is not None and self.session.dir is not None:
                     try:
                         self.session.save()
@@ -809,9 +795,7 @@ Your available skills are:
                     else:
                         raw_result = await asyncio.to_thread(tool.invoke, tool_use.input)
 
-                    if isinstance(raw_result, str):
-                        content = raw_result
-                    elif isinstance(raw_result, list):
+                    if isinstance(raw_result, (str, list)):
                         content = raw_result
                     else:
                         content = json.dumps(raw_result, ensure_ascii=False)
@@ -873,7 +857,7 @@ Your available skills are:
                             context={"agent_name": self.name, "error_type": type(e).__name__},
                             exc_info=sys.exc_info()
                         )
-                        raise e
+                        raise
 
                     messages.append(result)
                     self.logger.debug(

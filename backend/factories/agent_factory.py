@@ -413,7 +413,7 @@ class AgentFactory:
         if cfg is None:
             return updates
 
-        scalar_fields = ("name", "modelId", "systemPrompt", "workingDir", "type")
+        scalar_fields = ("name", "modelId", "systemPrompt", "workingDir")
         list_fields = ("toolIds", "skillIds", "hookNames")
 
         filtered = {}
@@ -661,9 +661,9 @@ class AgentFactory:
                 for tid, team in tf.teams.items():
                     meta = tf._team_meta.get(tid, {})
                     if aid in (meta.get("memberIds") or []):
-                        old_state = str(team.state).lower()
+                        old_state = team.state
                         team.update_state()
-                        new_state = str(team.state).lower()
+                        new_state = team.state
                         if new_state != old_state and global_disp:
                             await global_disp.on_chunk({
                                 "type": "agent_state",
@@ -712,7 +712,7 @@ class AgentFactory:
             # 轮询等待 agent 事件循环真正启动（状态不再是 Ready），
             # 避免 API 返回 Ready 后 WebSocket 又推 Waiting 导致状态闪烁
             for _ in range(30):  # 最多等 3 秒
-                if str(agent.state).lower() not in ("ready",):
+                if agent.state != AgentState.Ready:
                     break
                 await asyncio.sleep(0.1)
             else:
@@ -786,12 +786,12 @@ class AgentFactory:
         agent = self.agents.get(agent_id)
         if not agent:
             return {"state": "unknown", "session_id": "", "context_tokens": 0}
-        raw_state = str(agent.state) if agent.state else "Ready"
+        raw_state = agent.state if agent.state else AgentState.Ready
         context_tokens = 0
         if agent.session:
             context_tokens = agent.session.get_visible_token_count()
         return {
-            "state": raw_state.lower(),
+            "state": raw_state,
             "session_id": agent.session.id if agent.session else "",
             "context_tokens": context_tokens,
         }
@@ -865,9 +865,12 @@ class AgentFactory:
             return []
         result = []
         for turn in agent.session.turns:
+            if not turn.is_complete:
+                continue
             for msg in turn.messages:
                 msg_dict = msg.to_dict()
                 ts = msg_dict.get("timestamp", 0) * 1000  # 秒 → 毫秒，统一前端时间格式
+                message_id = msg_dict.get("id", "")
 
                 # ── ToolMessage: 直接输出 tool_result ──
                 if msg_dict.get("role") == "tool":
@@ -878,20 +881,42 @@ class AgentFactory:
                         content_str = "\n".join(text_parts) if text_parts else json.dumps(raw_content, ensure_ascii=False)
                     else:
                         content_str = str(raw_content)
-                    result.append({"role": "system", "chunkType": "tool_result", "toolName": tool_name, "content": content_str, "source_agent": agent.name, "timestamp": ts})
+                    result.append({
+                        "role": "system",
+                        "chunkType": "tool_result",
+                        "messageId": message_id,
+                        "toolCallId": message_id,
+                        "toolName": tool_name,
+                        "content": content_str,
+                        "source_agent": agent.name,
+                        "timestamp": ts,
+                    })
                     continue
 
                 # ── ModelMessage: thinking → text → tool_calls ──
                 thinking = msg_dict.get("thinking", "")
                 if thinking:
-                    result.append({"role": "system", "content": thinking, "chunkType": "thinking", "source_agent": agent.name, "timestamp": ts})
+                    result.append({
+                        "role": "system",
+                        "content": thinking,
+                        "chunkType": "thinking",
+                        "messageId": message_id,
+                        "source_agent": agent.name,
+                        "timestamp": ts,
+                    })
 
                 content = msg_dict.get("content", "")
                 # ModelMessage 的 role 是 "model"，前端期望 "assistant"
                 display_role = "assistant" if msg_dict.get("role") == "model" else msg_dict.get("role", "")
                 if isinstance(content, str):
                     if content.strip():
-                        result.append({"role": display_role, "content": content, "source_agent": agent.name, "timestamp": ts})
+                        result.append({
+                            "role": display_role,
+                            "content": content,
+                            "messageId": message_id,
+                            "source_agent": agent.name,
+                            "timestamp": ts,
+                        })
                 elif isinstance(content, list):
                     # HumanMessage (role=="user"): 合并所有 text block，避免拆成多条用户消息
                     if msg_dict.get("role") == "user":
@@ -899,19 +924,40 @@ class AgentFactory:
                             b.get("text", "") for b in content if b.get("type") == "text"
                         )
                         if merged.strip():
-                            result.append({"role": "user", "content": merged, "source_agent": agent.name, "timestamp": ts})
+                            result.append({
+                                "role": "user",
+                                "content": merged,
+                                "source_agent": agent.name,
+                                "timestamp": ts,
+                            })
                     else:
                         for block in content:
                             bt = block.get("type", "")
                             if bt == "text":
                                 text = block.get("text", "")
                                 if text.strip():
-                                    result.append({"role": display_role, "content": text, "source_agent": agent.name, "timestamp": ts})
+                                    result.append({
+                                        "role": display_role,
+                                        "content": text,
+                                        "messageId": message_id,
+                                        "source_agent": agent.name,
+                                        "timestamp": ts,
+                                    })
 
                 # tool_calls: 仅从 tool_calls 字段输出（content 中的 tooluse 已在上面处理，避免重复）
                 for tc in msg_dict.get("tool_calls", []):
                     tc_input = tc.get("input", {})
-                    result.append({"role": "system", "chunkType": "tool_use", "toolName": tc.get("name", ""), "toolInput": tc_input, "content": json.dumps(tc_input, indent=2, ensure_ascii=False), "source_agent": agent.name, "timestamp": ts})
+                    result.append({
+                        "role": "system",
+                        "chunkType": "tool_use",
+                        "messageId": message_id,
+                        "toolCallId": tc.get("id", ""),
+                        "toolName": tc.get("name", ""),
+                        "toolInput": tc_input,
+                        "content": json.dumps(tc_input, indent=2, ensure_ascii=False),
+                        "source_agent": agent.name,
+                        "timestamp": ts,
+                    })
         return result
 
     def get_dispatcher(self, agent_id: str) -> Optional[AgentOutputDispatcher]:
@@ -1215,7 +1261,6 @@ class AgentFactory:
             new_data: dict = {
                 "id": agent_id,
                 "name": agent.name,
-                "type": cfg.type,
                 "modelId": cfg.modelId,
                 "systemPrompt": cfg.systemPrompt,
                 "workingDir": policy.get("cwd", ""),

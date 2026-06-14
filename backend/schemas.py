@@ -1,4 +1,5 @@
-from typing import Literal, Any
+from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -85,7 +86,7 @@ class AgentSummary(BaseModel):
     name: str
     type: Literal["single", "team"] = "single"
     modelId: str
-    state: str = "Ready"
+    state: str = "ready"
     hookEnabled: bool = False
 
 
@@ -132,7 +133,6 @@ class AgentConfig(BaseModel):
 
     id: str = ""
     name: str
-    type: Literal["single", "team"] = "single"
     modelId: str
     systemPrompt: str = ""
     workingDir: str = ""

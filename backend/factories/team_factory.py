@@ -6,7 +6,6 @@ nested AgentConfig objects. Agent creation is delegated to AgentFactory.
 
 import asyncio
 import json
-import logging
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -17,7 +16,7 @@ from bbagent.core.team import AgentTeam, TeamConfig as CoreTeamConfig
 from backend.schemas import TeamConfig, AgentConfig
 from backend.factories import _next_id
 from backend.factories.team_conversation_factory import TeamConversationManager
-from backend.logging import get_backend_logger, log_operation
+from backend.logging import get_backend_logger
 from backend.dispatcher import AgentOutputDispatcher
 
 logger = get_backend_logger("state.team_factory")
@@ -40,7 +39,7 @@ class TeamFactory:
     def _ensure_dispatcher(self, team_id: str) -> AgentOutputDispatcher:
         dispatcher = self._dispatchers.get(team_id)
         if dispatcher is None:
-            dispatcher = AgentOutputDispatcher()
+            dispatcher = AgentOutputDispatcher(replay_buffer=False)
             self._dispatchers[team_id] = dispatcher
         return dispatcher
 
@@ -407,7 +406,7 @@ class TeamFactory:
         if not team:
             return "unknown"
         team.update_state()
-        return str(team.state).lower()
+        return team.state
 
     async def update(self, team_id: str, updates: dict) -> Optional[AgentTeam]:
         team = self.teams.get(team_id)

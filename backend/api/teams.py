@@ -196,7 +196,7 @@ async def start_team(team_id: str):
     # 等待所有 agent 事件循环启动完毕（状态不再为 Ready）
     for _ in range(30):  # 最多等 3 秒
         team.update_state()
-        if str(team.state).lower() not in ("ready",):
+        if team.state != "ready":
             break
         await asyncio.sleep(0.1)
     else:

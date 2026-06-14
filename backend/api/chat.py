@@ -86,7 +86,7 @@ async def chat_ws(websocket: WebSocket):
             "type": "switched",
             "agent_id": agent_id,
             "agent_name": agent.name,
-            "agent_state": str(agent.state).lower(),
+            "agent_state": agent.state,
             "context_tokens": context_tokens,
         })
         return True

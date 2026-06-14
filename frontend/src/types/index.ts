@@ -59,6 +59,9 @@ export interface Message {
   chunkType?: "text" | "thinking" | "tool_use" | "tool_result" | "error" | "input_event";
   toolName?: string;
   toolInput?: Record<string, unknown>;
+  messageId?: string;
+  toolCallId?: string;
+  runtime?: boolean;
 }
 
 // Team 聊天消息，对应后端 TeamMessage

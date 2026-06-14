@@ -2,7 +2,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, List, Optional
+from typing import Any
 from uuid import uuid4 as uuid
 
 from .message import ContentBlock, HumanMessage
@@ -32,13 +32,16 @@ class AgentEvent:
 
 class InputChannel:
     def __init__(self):
-        self._queue: Optional[asyncio.Queue] = None
+        self._queue: asyncio.Queue = asyncio.Queue()
         self._running = False
         self._timer_configs: list[tuple[float, str, str]] = []
         self._timers: list[tuple[str, asyncio.Task]] = []
 
-    async def start(self, output_queue: asyncio.Queue):
-        self._queue = output_queue
+    @property
+    def queue(self) -> asyncio.Queue:
+        return self._queue
+
+    async def start(self):
         self._running = True
         self._timers = []
         for seconds, name, hint in self._timer_configs:
@@ -49,7 +52,7 @@ class InputChannel:
         async def _loop():
             while self._running:
                 await asyncio.sleep(seconds)
-                if not self._running or self._queue is None:
+                if not self._running:
                     break
                 prompt = f"[Scheduled task: {name}]\n{hint}" if name else hint
                 self.push(
@@ -65,11 +68,19 @@ class InputChannel:
         for _, task in self._timers:
             task.cancel()
         self._timers.clear()
-        self._queue = None
+        self._drain_queue()
+        self._queue = asyncio.Queue()
 
-    def push(self, content: str | List[ContentBlock], source_id: str = "user",
+    def _drain_queue(self):
+        while True:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    def push(self, content: str | list[ContentBlock], source_id: str = "user",
              event_type: EventType = EventType.USER_MESSAGE):
-        if self._queue is None:
+        if not self._running:
             return
         event = AgentEvent(
             type=event_type,
@@ -80,7 +91,7 @@ class InputChannel:
 
     def every(self, seconds: float, name: str = "", hint: str = "") -> 'InputChannel':
         # upsert: if name exists, update config and restart
-        for i, (s, n, h) in enumerate(self._timer_configs):
+        for i, (_, n, _) in enumerate(self._timer_configs):
             if n == name:
                 self._timer_configs[i] = (seconds, name, hint)
                 self._stop_timer_task(name)

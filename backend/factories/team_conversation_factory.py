@@ -197,7 +197,7 @@ class TeamConversationManager:
 
     def assert_member_session_switch_allowed(self, team: AgentTeam, agent_id: str) -> None:
         team.update_state()
-        if str(team.state).lower() == "ready":
+        if team.state == "ready":
             return
         active = self.get_active_conversation(team)
         if not active:
@@ -244,7 +244,7 @@ class TeamConversationManager:
 
     def _assert_team_ready(self, team: AgentTeam) -> None:
         team.update_state()
-        if str(team.state).lower() != "ready":
+        if team.state != "ready":
             raise ConflictError(
                 ErrorCode.TEAM_CONVERSATION_LOCKED,
                 f"Cannot change team conversation while team '{team.name}' is not ready",

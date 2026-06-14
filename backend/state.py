@@ -68,7 +68,7 @@ class State:
 
         # Global dispatcher for cross-agent state events.
         # Chat WS subscribes once and receives agent_state for all agents.
-        self.global_dispatcher = AgentOutputDispatcher()
+        self.global_dispatcher = AgentOutputDispatcher(replay_buffer=False)
         self.agent_factory.global_dispatcher = self.global_dispatcher
         self.agent_factory.team_factory = self.team_factory
 
