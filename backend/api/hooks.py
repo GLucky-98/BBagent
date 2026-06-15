@@ -10,15 +10,14 @@ the canonical BuiltinHookConfig dataclass so they stay in sync.
 """
 from fastapi import APIRouter
 
-from bbagent.built_in_hook import HOOK_CREATOR, BuiltinHookConfig
-
+from backend.logging import get_backend_logger
 from backend.schemas import (
     HookDescriptor,
     HookFieldSchema,
     HookListResponse,
     HookSection,
 )
-from backend.logging import get_backend_logger
+from bbagent.built_in_hook import HOOK_CREATOR, BuiltinHookConfig
 
 logger = get_backend_logger("api.hooks")
 router = APIRouter()
@@ -45,6 +44,9 @@ _FIELD_TYPES: dict[str, str] = {
     "vector_weight": "float",
     "inject_oversample_factor": "number",
     "inject_oversample_cap": "number",
+    # Todo subsystem
+    "todo_system_prompt": "text",
+    "todo_stream_inject_interval": "number",
     # Compress subsystem
     "compress_prompt": "text",
     "compress_prefix": "string",
@@ -122,6 +124,24 @@ _HOOK_DEFINITIONS: list[dict] = [
                     _make_field("compress_prefix", "Compress Prefix"),
                     _make_field("keep_recent_turns", "Keep Recent Turns"),
                     _make_field("compression_threshold", "Compression Threshold"),
+                ],
+            }
+        ],
+    },
+    {
+        "name": "built_in.todo",
+        "displayName": "Todo",
+        "description": (
+            "Runtime todo system. Lets an agent create, update, display, "
+            "and clear a short-lived task plan for the current work."
+        ),
+        "defaultEnabled": False,
+        "fieldSections": [
+            {
+                "title": "Todo",
+                "fields": [
+                    _make_field("todo_system_prompt", "Todo System Prompt"),
+                    _make_field("todo_stream_inject_interval", "Stream Inject Interval"),
                 ],
             }
         ],

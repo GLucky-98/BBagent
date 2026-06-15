@@ -1,23 +1,28 @@
+from dataclasses import dataclass
+
+from ..core import Agent, HookContext, HookType, Model
+from .ctx_compress_hook import COMPRESS_PREFIX, COMPRESS_PROMPT, compress_session, create_ctx_compress_hook
 from .memory import (
+    ADD_MEMORY_TOOL_DESCRIPTION,
+    ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
+    CLEAN_SYSTEM_PROMPT,
+    CLEAN_USER_PROMPT,
+    EXTRACT_SYSTEM_PROMPT,
+    EXTRACT_USER_PROMPT,
+    Embedding,
     MemoryManager,
     MemoryRuntime,
-    Embedding,
     OllamaEmbedding,
     create_add_memory_tool,
     create_memory_hook,
     extract_memories,
-    EXTRACT_SYSTEM_PROMPT,
-    EXTRACT_USER_PROMPT,
-    CLEAN_SYSTEM_PROMPT,
-    CLEAN_USER_PROMPT,
-    ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
-    ADD_MEMORY_TOOL_DESCRIPTION,
 )
-from .ctx_compress_hook import create_ctx_compress_hook, compress_session, COMPRESS_PROMPT, COMPRESS_PREFIX
-
-from dataclasses import dataclass
-
-from ..core import Agent, Model, HookContext, HookType
+from .todo import (
+    TodoManager,
+    TodoRuntime,
+    create_todo_hook,
+    create_todo_tools,
+)
 
 KEEP_RECENT_TURNS = 3
 COMPRESSION_THRESHOLD = 0.8
@@ -26,6 +31,7 @@ SMALL_TURN_CAP = 5000
 RRF_K = 60
 BM25_WEIGHT = 0.5
 VECTOR_WEIGHT = 0.5
+TODO_STREAM_INJECT_INTERVAL = 1
 
 MAX_INJECT = 5
 MAX_CANDIDATES = 50
@@ -56,6 +62,26 @@ Before you receive each user message, the system automatically searches the memo
 - Proactively save discoveries about the user when they share meaningful new information
 - Read the automatically provided memory context carefully — it may contain answers the user is asking for
 - Do not overuse add_memory — only save genuinely useful, lasting information
+"""
+
+TODO_SYSTEM_PROMPT = """
+## Runtime Todo System
+
+You have access to a runtime todo system for tracking the current multi-step task.
+
+### Available Todo Tools
+- `todo_create`: create a complete todo list before substantial multi-step work.
+- `todo_update`: update an item when work starts, completes, is cancelled, or dependencies change.
+- `todo_list`: inspect the current todo list.
+- `todo_clear`: clear the current todo list.
+
+### Best Practices
+- Use todos for complex tasks that benefit from explicit progress tracking.
+- Keep item ids short, stable, and unique within the list.
+- `blocked_by` means dependencies between todo items, not external user or system blockers.
+- `ready` is not a status. The system derives readiness from pending items whose dependencies are terminal.
+- Todo is a short-lived runtime workspace, not long-term memory or session state.
+- When every item is done or cancelled, the todo list is automatically cleared.
 """
 
 
@@ -101,6 +127,12 @@ class BuiltinHookConfig:
     submodel: Model = None
     # Embedding model used by the memory subsystem; defaults to OllamaEmbedding().
     embedding_model: Embedding = None
+
+    # === Todo subsystem (consumed by _setup_todo) ===
+    # System prompt appended to agent.system_prompt after todo setup.
+    todo_system_prompt: str = TODO_SYSTEM_PROMPT
+    # Minimum stream iterations before reinjecting unchanged todo context.
+    todo_stream_inject_interval: int = TODO_STREAM_INJECT_INTERVAL
 
     # === Compress subsystem (consumed by _setup_compress) ===
     # System prompt for the context-compression step.
@@ -219,19 +251,58 @@ def _setup_compress(agent: Agent, config: BuiltinHookConfig | dict = None) -> No
     hook.register(func=do_compress, hook_type=HookType.BEFORE_STREAM, priority=102)
 
 
+def _setup_todo(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
+    """Register the runtime todo subsystem: tools + context/display/session hooks."""
+    if config is None:
+        config = BuiltinHookConfig()
+    elif isinstance(config, dict):
+        config = BuiltinHookConfig(**config)
+
+    manager = TodoManager()
+    runtime = TodoRuntime()
+    agent.add_tools(create_todo_tools(manager, runtime))
+
+    (
+        inject_after_input,
+        remind_before_stream,
+        emit_on_tool_result,
+        clear_on_new_session,
+        cleanup_after_run,
+        todo_context_provider,
+    ) = create_todo_hook(
+        manager,
+        runtime,
+        stream_inject_interval=config.todo_stream_inject_interval,
+    )
+
+    hook = agent.hook
+    hook.register(func=inject_after_input, hook_type=HookType.AFTER_INPUT, priority=110)
+    hook.register(func=remind_before_stream, hook_type=HookType.BEFORE_STREAM, priority=110)
+    hook.register(func=emit_on_tool_result, hook_type=HookType.ON_TOOL_RESULT, priority=100)
+    hook.register(func=clear_on_new_session, hook_type=HookType.NEW_SESSION, priority=90)
+    hook.register(func=cleanup_after_run, hook_type=HookType.AFTER_RUN, priority=110)
+    agent.runtime_context_providers.append(todo_context_provider)
+
+    agent.change_system_prompt(agent.system_prompt + config.todo_system_prompt)
+
+
 HOOK_CREATOR = {
     "built_in.memory": _setup_memory,
     "built_in.compress": _setup_compress,
+    "built_in.todo": _setup_todo,
 }
 
 
 __all__ = [
-    "_setup_memory",
-    "_setup_compress",
     "HOOK_CREATOR",
-    "compress_session",
-    "extract_memories",
     "MEMORY_SYSTEM_PROMPT",
+    "TODO_SYSTEM_PROMPT",
     "BuiltinHookConfig",
     "MemoryRuntime",
+    "TodoRuntime",
+    "_setup_compress",
+    "_setup_memory",
+    "_setup_todo",
+    "compress_session",
+    "extract_memories",
 ]

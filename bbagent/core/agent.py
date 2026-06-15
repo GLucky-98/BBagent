@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import json
 import shutil
 import sys
@@ -84,6 +85,7 @@ class Agent:
 
         self.team_prompt = ""
         self.teammate_prompt = ""
+        self.runtime_context_providers: list[Callable[[], str]] = []
 
         self.hook = AgentHook()
         self.hook.set_context(self)
@@ -331,7 +333,30 @@ Your available skills are:
         tools = list(self.tools.values())
         prompt = self.system_prompt + self.team_prompt + self.teammate_prompt + self.skill_prompt
         messages = self.session.get_visible_context()
+        runtime_contexts = [
+            context.strip()
+            for provider in self.runtime_context_providers
+            if (context := provider().strip())
+        ]
+        if runtime_contexts:
+            messages = self._prepend_runtime_context(messages, "\n\n".join(runtime_contexts) + "\n\n")
         return Model_Input(prompt=prompt, tools=tools, messages=messages)
+
+    def _prepend_runtime_context(self, messages: list[Message], context: str) -> list[Message]:
+        if not messages:
+            return [HumanMessage(content=context)]
+
+        result = copy.deepcopy(messages)
+        for idx in range(len(result) - 1, -1, -1):
+            msg = result[idx]
+            if not isinstance(msg, HumanMessage):
+                continue
+            if isinstance(msg.content, str):
+                msg.content = context + msg.content
+            elif isinstance(msg.content, list):
+                msg.content = [TextBlock(text=context), *msg.content]
+            return result
+        return [HumanMessage(content=context), *result]
 
     def _interrupt_requested(self) -> bool:
         if self.hook.should_break():

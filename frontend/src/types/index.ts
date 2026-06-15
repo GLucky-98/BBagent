@@ -56,7 +56,7 @@ export interface Message {
   content: string;
   timestamp: number;
   sourceAgent?: string;
-  chunkType?: "text" | "thinking" | "tool_use" | "tool_result" | "error" | "input_event";
+  chunkType?: "text" | "thinking" | "tool_use" | "tool_result" | "todo_list" | "error" | "input_event";
   toolName?: string;
   toolInput?: Record<string, unknown>;
   messageId?: string;

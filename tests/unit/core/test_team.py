@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from bbagent.core.agent import Agent, AgentConfig
@@ -95,8 +93,7 @@ async def test_send_message_respects_contacts_and_records_message(tmp_path):
     assert len(team._team_messages) == 1
     assert team._team_messages[0].from_agent == "Alice"
     assert team._team_messages[0].to_agent == "Bob"
-    persisted = (team_dir / "team_messages.jsonl").read_text(encoding="utf-8").strip()
-    assert json.loads(persisted)["content"] == "Please review."
+    assert team._team_messages[0].content == "Please review."
 
 
 @pytest.mark.asyncio

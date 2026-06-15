@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# IDE / editor tooling configs
+.trae/
+
 # Python
 __pycache__/
 *.py[cod]

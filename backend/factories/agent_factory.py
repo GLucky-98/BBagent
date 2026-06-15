@@ -588,6 +588,7 @@ class AgentFactory:
         # Hooks
         if "hookNames" in updates or "hookConfig" in updates:
             agent.hook.clear()
+            agent.runtime_context_providers.clear()
             new_hook_cfg_dict = dict(updates.get("hookConfig") or {})
             new_hook_names = updates.get("hookNames")
             if new_hook_names is None:

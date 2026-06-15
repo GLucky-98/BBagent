@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, memo, Component } from "react";
 import { flushSync } from "react-dom";
-import { Bot, User, Square, ChevronDown, ChevronRight, Plus, Timer, Sparkles, ArrowUp, Terminal, Brain, Wrench, FileText } from "lucide-react";
+import { Bot, User, Square, ChevronDown, ChevronRight, Plus, Timer, Sparkles, ArrowUp, Terminal, Brain, Wrench, FileText, ListTodo } from "lucide-react";
 import { useAppStore, useSelectedAgent, useAgentModel } from "../store";
 import { cn } from "../lib/utils";
 import { api } from "../lib/api";
@@ -241,6 +241,7 @@ function sectionLabel(msg: Message): string {
     case "thinking": return "Thinking";
     case "tool_use": return `Calling: ${msg.toolName || ""}`;
     case "tool_result": return `Result: ${msg.toolName || ""}`;
+    case "todo_list": return "Todo list";
     case "error": return "Error";
     default: return "";
   }
@@ -368,6 +369,35 @@ const GroupSection = memo(function GroupSection({
         >
           <FileText size={12} className="text-(--color-ink-3) shrink-0" />
           <span className="text-[11.5px] font-medium text-(--color-ink-2) tracking-tight">Result: {msg.toolName || "tool"}</span>
+          {!isExpanded && displayContent.length <= 80 && (
+            <span className="text-[10.5px] text-(--color-ink-3) truncate max-w-[50%]">{displayContent}</span>
+          )}
+          <span className="ml-auto text-(--color-ink-3) shrink-0">
+            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </span>
+        </button>
+        {isExpanded && (
+          <div className="border-t border-(--color-border) px-3 py-2 overflow-x-auto">
+            <pre className="text-[12px] font-mono leading-[1.6] text-(--color-ink-2) whitespace-pre-wrap break-words max-h-60 overflow-y-auto">
+              {displayContent}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (msg.chunkType === "todo_list") {
+    const displayContent = msg.content || "";
+
+    return (
+      <div className={cn("my-2 rounded-lg border border-(--color-border) bg-(--color-tint)/60 min-w-0", showDivider && "mt-2")}>
+        <button
+          onClick={onToggle}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-(--color-secondary)/60 transition-colors"
+        >
+          <ListTodo size={12} className="text-(--color-ink-3) shrink-0" />
+          <span className="text-[11.5px] font-medium text-(--color-ink-2) tracking-tight">Todo list</span>
           {!isExpanded && displayContent.length <= 80 && (
             <span className="text-[10.5px] text-(--color-ink-3) truncate max-w-[50%]">{displayContent}</span>
           )}
@@ -664,6 +694,44 @@ export function ChatWindow() {
             });
           }
         }
+      } else if (chunk.type === "todo_list") {
+        const snapshot = chunk.content as Record<string, unknown> | undefined;
+        if (!snapshot) return;
+        const items = Array.isArray(snapshot.items) ? (snapshot.items as Record<string, unknown>[]) : [];
+        const groups = {
+          inProgress: items.filter((item) => item.status === "in_progress"),
+          ready: items.filter((item) => item.status === "pending" && item.ready),
+          blocked: items.filter((item) => item.status === "blocked"),
+        };
+        const lines = [
+          "[Current Todo List]",
+          `Title: ${String(snapshot.title || "")}`,
+        ];
+        const renderGroup = (label: string, groupItems: Record<string, unknown>[]) => {
+          if (!groupItems.length) return;
+          lines.push("");
+          lines.push(`${label}:`);
+          for (const item of groupItems) {
+            lines.push(`- ${String(item.id || "")}: ${String(item.content || "")}`);
+            if (Array.isArray(item.blocked_by) && item.blocked_by.length) {
+              lines.push(`  blocked_by: ${item.blocked_by.join(", ")}`);
+            }
+            if (item.notes) {
+              lines.push(`  notes: ${String(item.notes)}`);
+            }
+          }
+        };
+        renderGroup("In progress", groups.inProgress);
+        renderGroup("Ready to work on", groups.ready);
+        renderGroup("Blocked", groups.blocked);
+        upsertMessage(agentId, {
+          id: `todo_list:${String(snapshot.id || crypto.randomUUID())}`,
+          role: "system",
+          content: lines.join("\n"),
+          timestamp: Date.now(),
+          chunkType: "todo_list",
+          runtime: true,
+        });
       } else if (chunk.type === "input_event") {
         const sourceId = (chunk.source_id as string) || "";
         if (sourceId === "user") {

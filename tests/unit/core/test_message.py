@@ -88,6 +88,28 @@ def test_session_persists_and_loads_completed_turn(tmp_path):
     assert loaded.total_output_cost_tokens == 8
 
 
+def test_session_load_restores_turn_metadata(tmp_path):
+    session = Session.create(tmp_path)
+    session.add_message(HumanMessage(content="Remember my preference.", timestamp=1))
+    session.add_message(
+        ModelMessage(
+            id="m1",
+            content="Done.",
+            stop_reason="end_turn",
+            usage_data={},
+            timestamp=2,
+        )
+    )
+    session.turns[0].memory_extracted = True
+    session.turns[0].key_content = ["preference"]
+    session.save()
+
+    loaded = Session.load(session.id, session.dir)
+
+    assert loaded.turns[0].memory_extracted is True
+    assert loaded.turns[0].key_content == ["preference"]
+
+
 def test_session_merges_incomplete_turn_into_next_user_message():
     session = Session()
     session.add_message(HumanMessage(content="First request", timestamp=1))

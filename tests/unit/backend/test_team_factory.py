@@ -68,6 +68,47 @@ class FakeAgentFactory:
         return True
 
 
+def test_list_team_conversations_uses_persisted_message_count(tmp_path):
+    alice = make_agent("Alice", tmp_path)
+    agent_factory = FakeAgentFactory({"alice-id": alice})
+    team_factory = TeamFactory(tmp_path, agent_factory)
+    team_dir = tmp_path / "teams" / "team-id" / "Research"
+    conversation_dir = team_dir / "team_conversations" / "conversation-id"
+    conversation_dir.mkdir(parents=True)
+
+    team = AgentTeam.create(
+        TeamConfig(
+            name="Research",
+            team_description="Coordinate carefully.",
+            agents={"Alice": alice},
+            contacts={},
+        )
+    )
+    team.base_dir = team_dir
+    (team_dir / "team_conversations" / "index.json").write_text(
+        json.dumps({"activeConversationId": "conversation-id", "conversations": [{"id": "conversation-id"}]}),
+        encoding="utf-8",
+    )
+    (conversation_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "id": "conversation-id",
+                "name": "Conversation",
+                "createdAt": 1,
+                "updatedAt": 2,
+                "memberSessions": {},
+                "missingSessions": {},
+                "messageCount": 42,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    conversations = team_factory.conversations.list_conversations(team)
+
+    assert conversations[0]["messageCount"] == 42
+
+
 @pytest.mark.asyncio
 async def test_update_team_members_removes_member_from_runtime_and_config(tmp_path):
     alice = make_agent("Alice", tmp_path)
