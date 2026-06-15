@@ -1,14 +1,29 @@
 import asyncio
+import inspect
 import json
 import logging
 import os
+import re
 import subprocess
-import sys
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
-import inspect
-from dataclasses import dataclass, field, asdict
 
 from .tool import Tool
+
+_SAFE_TOOL_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
+_UNDERSCORE_RUN_RE = re.compile(r"_+")
+
+
+def _slug_tool_name_part(value: str, fallback: str) -> str:
+    slug = _SAFE_TOOL_NAME_RE.sub("_", value)
+    slug = _UNDERSCORE_RUN_RE.sub("_", slug).strip("_")
+    return slug or fallback
+
+
+def make_safe_mcp_runtime_name(server_name: str, tool_name: str) -> str:
+    server_slug = _slug_tool_name_part(server_name, "server")
+    tool_slug = _slug_tool_name_part(tool_name, "tool")
+    return f"mcp__{server_slug}__{tool_slug}"
 
 @dataclass
 class MCPServerConfig:
@@ -297,7 +312,7 @@ class MCPTool(Tool):
             - __doc__ == config["description"]
             - 参数签名与 inputSchema 一致，并包含正确的默认值
         """
-        func_name = f"mcp:{mcp_client.name}::{config['name']}"
+        func_name = make_safe_mcp_runtime_name(mcp_client.name, config["name"])
         func_doc = config["description"]
         schema = config["inputSchema"]
         properties = schema.get("properties", {})
@@ -447,4 +462,3 @@ def load_configs(config_dir: str) -> Dict[str, MCPServerConfig]:
                 count += 1
     _config_logger.info(f"Loaded {count} MCP server config(s) from {config_dir}")
     return result
-

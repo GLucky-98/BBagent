@@ -215,6 +215,9 @@ class Agent:
 
     def add_tools(self, tools: List[Tool]):
         for t in tools:
+            existing = self.tools.get(t.name)
+            if existing is not None and existing is not t:
+                raise ValueError(f"Duplicate tool name: {t.name}")
             self.tools[t.name] = t
         self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
 
@@ -721,6 +724,9 @@ class SubAgent:
         self.tools: dict[str, Tool] = {}
         if tools:
             for t in tools:
+                existing = self.tools.get(t.name)
+                if existing is not None and existing is not t:
+                    raise ValueError(f"Duplicate tool name: {t.name}")
                 self.tools[t.name] = t
 
         self._force_stop = False
@@ -730,6 +736,9 @@ class SubAgent:
 
     def add_tools(self, tools: List[Tool]):
         for t in tools:
+            existing = self.tools.get(t.name)
+            if existing is not None and existing is not t:
+                raise ValueError(f"Duplicate tool name: {t.name}")
             self.tools[t.name] = t
         self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
     
