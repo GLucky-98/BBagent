@@ -201,8 +201,7 @@ export function BasedirTree() {
   const agents = useAppStore((s) => s.agents);
   const expandedPaths = useAppStore((s) => s.basedirExpandedPaths);
   const toggleExpand = useAppStore((s) => s.toggleBasedirExpand);
-  const refreshFileTree = useAppStore((s) => s.refreshFileTree);
-  const refreshKey = useAppStore((s) => s.refreshFileTreeKey);
+  const refreshKey = useAppStore((s) => s.baseDirRefreshKey);
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -266,7 +265,6 @@ export function BasedirTree() {
       await api.createDir(basePath + "/" + name);
       setCreatingNew(false);
       setNewFolderName("");
-      refreshFileTree();
     } catch (e) {
       console.error("Failed to create folder:", e);
     } finally {
@@ -294,7 +292,6 @@ export function BasedirTree() {
     try {
       await api.renameDir(renamingPath, parentPath + "/" + newName);
       setRenamingPath(null);
-      refreshFileTree();
     } catch (e) {
       console.error("Failed to rename folder:", e);
     } finally {
@@ -308,7 +305,6 @@ export function BasedirTree() {
     setActionLoading(true);
     try {
       await api.deleteDir(path, true);
-      refreshFileTree();
     } catch (e) {
       console.error("Failed to delete:", e);
     } finally {

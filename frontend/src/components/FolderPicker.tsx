@@ -12,7 +12,6 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../lib/api";
-import { useAppStore } from "../store";
 
 interface FolderPickerProps {
   value: string;
@@ -27,7 +26,6 @@ export function FolderPicker({ value, onChange, placeholder }: FolderPickerProps
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const refreshFileTree = useAppStore((s) => s.refreshFileTree);
 
   // Inline action states
   const [creatingNew, setCreatingNew] = useState(false);
@@ -90,7 +88,6 @@ export function FolderPicker({ value, onChange, placeholder }: FolderPickerProps
       const sep = currentPath.endsWith("/") ? "" : "/";
       await api.createDir(currentPath + sep + name);
       await loadDirs(currentPath);
-      refreshFileTree();
       setCreatingNew(false);
       setNewFolderName("");
     } catch (e) {
@@ -119,7 +116,6 @@ export function FolderPicker({ value, onChange, placeholder }: FolderPickerProps
       const sep = currentPath.endsWith("/") ? "" : "/";
       await api.renameDir(currentPath + sep + renamingDir, currentPath + sep + newName);
       await loadDirs(currentPath);
-      refreshFileTree();
       setRenamingDir(null);
     } catch (e) {
       console.error("Failed to rename folder:", e);
@@ -137,7 +133,6 @@ export function FolderPicker({ value, onChange, placeholder }: FolderPickerProps
     try {
       await api.deleteDir(fullPath, true);
       await loadDirs(currentPath);
-      refreshFileTree();
     } catch (e) {
       console.error("Failed to delete folder:", e);
     } finally {

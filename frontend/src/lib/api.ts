@@ -134,6 +134,11 @@ export function createChatWs(): WebSocket {
   return new WebSocket(`${wsBase}/ws/chat`);
 }
 
+export function createFileWatchWs(): WebSocket {
+  const wsBase = API_BASE.replace(/^http/, "ws");
+  return new WebSocket(`${wsBase}/ws/files`);
+}
+
 export function createTeamChatWs(teamId: string): WebSocket {
   const wsBase = API_BASE.replace(/^http/, "ws");
   return new WebSocket(`${wsBase}/ws/team/${teamId}`);

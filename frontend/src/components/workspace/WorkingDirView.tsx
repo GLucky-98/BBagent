@@ -200,8 +200,7 @@ export function WorkingDirView() {
   const workingDirPath = useAppStore((s) => s.workingDirPath);
   const expandedPaths = useAppStore((s) => s.workingDirExpandedPaths);
   const toggleExpand = useAppStore((s) => s.toggleWorkingDirExpand);
-  const refreshFileTree = useAppStore((s) => s.refreshFileTree);
-  const refreshKey = useAppStore((s) => s.refreshFileTreeKey);
+  const refreshKey = useAppStore((s) => s.workingDirRefreshKey);
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -262,7 +261,6 @@ export function WorkingDirView() {
       await api.createDir(workingDirPath + "/" + name);
       setCreatingNew(false);
       setNewFolderName("");
-      refreshFileTree();
     } catch (e) {
       console.error("Failed to create folder:", e);
     } finally {
@@ -290,7 +288,6 @@ export function WorkingDirView() {
     try {
       await api.renameDir(renamingPath, parentPath + "/" + newName);
       setRenamingPath(null);
-      refreshFileTree();
     } catch (e) {
       console.error("Failed to rename folder:", e);
     } finally {
@@ -304,7 +301,6 @@ export function WorkingDirView() {
     setActionLoading(true);
     try {
       await api.deleteDir(path, true);
-      refreshFileTree();
     } catch (e) {
       console.error("Failed to delete:", e);
     } finally {

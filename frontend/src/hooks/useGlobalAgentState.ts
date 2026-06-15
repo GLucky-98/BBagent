@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store";
-import { createChatWs } from "../lib/api";
+import { createChatWs, createFileWatchWs } from "../lib/api";
 
 /**
  * 唯一的 WebSocket 持有者。
@@ -14,13 +14,27 @@ import { createChatWs } from "../lib/api";
 export function useGlobalAgentState() {
   const setAgentState = useAppStore((s) => s.setAgentState);
   const setAgentContextTokens = useAppStore((s) => s.setAgentContextTokens);
+  const refreshWorkingDir = useAppStore((s) => s.refreshWorkingDir);
+  const refreshBaseDir = useAppStore((s) => s.refreshBaseDir);
   const reconnectDelayRef = useRef(1000);
+  const fileWatchReconnectDelayRef = useRef(1000);
   const MAX_RECONNECT_DELAY = 30000;
 
   useEffect(() => {
     let stopped = false;
     let ws: WebSocket | null = null;
+    let fileWatchWs: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout>;
+    let fileWatchReconnectTimer: ReturnType<typeof setTimeout>;
+
+    function sendFileWatchTarget() {
+      if (stopped || fileWatchWs?.readyState !== WebSocket.OPEN) return;
+      const id = useAppStore.getState().activeAgentId;
+      fileWatchWs.send(JSON.stringify({
+        type: "watch_files",
+        agent_id: id,
+      }));
+    }
 
     function connect() {
       if (stopped) return;
@@ -74,13 +88,69 @@ export function useGlobalAgentState() {
       };
     }
 
+    function connectFileWatch() {
+      if (stopped) return;
+      fileWatchWs = createFileWatchWs();
+
+      fileWatchWs.onopen = () => {
+        fileWatchReconnectDelayRef.current = 1000;
+        sendFileWatchTarget();
+      };
+
+      fileWatchWs.onmessage = (event) => {
+        try {
+          const chunk = JSON.parse(event.data);
+          if (chunk.type !== "file_tree_changed") return;
+
+          const scopes = Array.isArray(chunk.scopes) ? chunk.scopes : [];
+          if (scopes.includes("workingDir")) {
+            refreshWorkingDir();
+          }
+          if (scopes.includes("baseDir")) {
+            refreshBaseDir();
+          }
+          if (scopes.length === 0) {
+            refreshWorkingDir();
+            refreshBaseDir();
+          }
+        } catch {
+          // 忽略解析失败
+        }
+      };
+
+      fileWatchWs.onclose = () => {
+        if (stopped) return;
+        fileWatchReconnectTimer = setTimeout(() => {
+          fileWatchReconnectDelayRef.current = Math.min(
+            fileWatchReconnectDelayRef.current * 2,
+            MAX_RECONNECT_DELAY,
+          );
+          connectFileWatch();
+        }, fileWatchReconnectDelayRef.current);
+      };
+    }
+
     connect();
+    connectFileWatch();
+
+    const unsubscribe = useAppStore.subscribe((state, prevState) => {
+      if (
+        state.activeAgentId !== prevState.activeAgentId
+        || state.workingDirPath !== prevState.workingDirPath
+        || state.baseDirPath !== prevState.baseDirPath
+      ) {
+        sendFileWatchTarget();
+      }
+    });
 
     return () => {
       stopped = true;
       clearTimeout(reconnectTimer);
+      clearTimeout(fileWatchReconnectTimer);
+      unsubscribe();
       ws?.close();
+      fileWatchWs?.close();
       useAppStore.setState({ chatWs: null, onWsChunk: null });
     };
-  }, [setAgentState, setAgentContextTokens]);
+  }, [setAgentState, setAgentContextTokens, refreshWorkingDir, refreshBaseDir]);
 }

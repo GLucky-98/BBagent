@@ -82,7 +82,11 @@ export interface AppState {
   ) => void;
   closeConfigDialog: () => void;
 
+  workingDirRefreshKey: number;
+  baseDirRefreshKey: number;
   refreshFileTreeKey: number;
+  refreshWorkingDir: () => void;
+  refreshBaseDir: () => void;
   refreshFileTree: () => void;
 
   workingDirPath: string;
@@ -729,8 +733,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   openConfigDialog: (mode, type, agentId) => set({ configDialog: { open: true, mode, type, agentId } }),
   closeConfigDialog: () => set({ configDialog: { open: false, mode: "create", type: "", agentId: undefined } }),
 
+  workingDirRefreshKey: 0,
+  baseDirRefreshKey: 0,
   refreshFileTreeKey: 0,
-  refreshFileTree: () => set((state) => ({ refreshFileTreeKey: state.refreshFileTreeKey + 1 })),
+  refreshWorkingDir: () => set((state) => ({ workingDirRefreshKey: state.workingDirRefreshKey + 1 })),
+  refreshBaseDir: () => set((state) => ({ baseDirRefreshKey: state.baseDirRefreshKey + 1 })),
+  refreshFileTree: () => set((state) => ({
+    refreshFileTreeKey: state.refreshFileTreeKey + 1,
+    workingDirRefreshKey: state.workingDirRefreshKey + 1,
+    baseDirRefreshKey: state.baseDirRefreshKey + 1,
+  })),
 
   workingDirPath: "",
   setWorkingDirPath: (path) => set({ workingDirPath: path }),

@@ -11,7 +11,6 @@ import {
   Check,
 } from "lucide-react";
 import { api } from "../lib/api";
-import { useAppStore } from "../store";
 
 interface FolderPickerModalProps {
   open: boolean;
@@ -25,7 +24,6 @@ export function FolderPickerModal({ open, onClose, onSelect, title = "Select Fol
   const [dirs, setDirs] = useState<string[]>([]);
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const refreshFileTree = useAppStore((s) => s.refreshFileTree);
 
   // Inline action states
   const [creatingNew, setCreatingNew] = useState(false);
@@ -93,7 +91,6 @@ export function FolderPickerModal({ open, onClose, onSelect, title = "Select Fol
       const sep = currentPath.endsWith("/") ? "" : "/";
       await api.createDir(currentPath + sep + name);
       await loadDirs(currentPath);
-      refreshFileTree();
       setCreatingNew(false);
       setNewFolderName("");
     } catch (e) {
@@ -122,7 +119,6 @@ export function FolderPickerModal({ open, onClose, onSelect, title = "Select Fol
       const sep = currentPath.endsWith("/") ? "" : "/";
       await api.renameDir(currentPath + sep + renamingDir, currentPath + sep + newName);
       await loadDirs(currentPath);
-      refreshFileTree();
       setRenamingDir(null);
     } catch (e) {
       console.error("Failed to rename folder:", e);
@@ -140,7 +136,6 @@ export function FolderPickerModal({ open, onClose, onSelect, title = "Select Fol
     try {
       await api.deleteDir(fullPath, true);
       await loadDirs(currentPath);
-      refreshFileTree();
     } catch (e) {
       console.error("Failed to delete folder:", e);
     } finally {
