@@ -35,11 +35,13 @@ class Model(ABC):
     _DEFAULT_TIMEOUT = httpx.Timeout(60.0, read=300.0)
     _DEFAULT_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30)
 
-    def __init__(self, model: str, api_key: str, base_url: str, max_context_tokens: int = 200000):
+    def __init__(self, model: str, api_key: str, base_url: str, max_context_tokens: int = 200000, max_concurrent: int = 5):
         self.model = model
         self.api_key = api_key
         self.base_url_raw = base_url
         self.max_context_tokens = max_context_tokens
+        self.max_concurrent = max_concurrent
+        self._semaphore = asyncio.Semaphore(max_concurrent)
         self._async_client: httpx.AsyncClient | None = None
         self._active_requests: int = 0
 
@@ -90,6 +92,7 @@ class Model(ABC):
             "base_url": self.base_url_raw,
             "max_completion_tokens": self.max_completion_tokens,
             "max_context_tokens": self.max_context_tokens,
+            "max_concurrent": self.max_concurrent,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "thinking": self.thinking,
@@ -149,6 +152,7 @@ class AnthropicModel(Model):
                  base_url: str = "https://api.anthropic.com",
                  max_completion_tokens: int = 65536,
                  max_context_tokens: int = 200000,
+                 max_concurrent: int = 5,
                  temperature: float = 1,
                  top_p: float = 1,
                  thinking: bool = True,
@@ -158,7 +162,7 @@ class AnthropicModel(Model):
         self.base_url_raw = base_url
         self.base_url = base_url + '/v1/messages'
 
-        super().__init__(model, api_key, base_url, max_context_tokens=max_context_tokens)
+        super().__init__(model, api_key, base_url, max_context_tokens=max_context_tokens, max_concurrent=max_concurrent)
         
         self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
@@ -212,6 +216,7 @@ class AnthropicModel(Model):
     async def async_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
         payload = self.payload_construct(model_input)
         client = self.async_client
+        await self._semaphore.acquire()
         self._active_requests += 1
         try:
             for attempt in range(max_retries):
@@ -231,10 +236,12 @@ class AnthropicModel(Model):
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
         finally:
             self._active_requests -= 1
+            self._semaphore.release()
     
     async def async_stream_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0):
         payload = {**self.payload_construct(model_input), 'stream': True}
         client = self.async_client
+        await self._semaphore.acquire()
         self._active_requests += 1
 
         accumulated_message = {}
@@ -320,6 +327,7 @@ class AnthropicModel(Model):
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
         finally:
             self._active_requests -= 1
+            self._semaphore.release()
 
     def payload_construct(self, model_input: Model_Input) -> dict:
         payload = dict(self._base_payload)
@@ -413,6 +421,7 @@ class OpenAIModel(Model):
                  base_url: str = "https://api.openai.com/v1",
                  max_completion_tokens: int = 65536,
                  max_context_tokens: int = 200000,
+                 max_concurrent: int = 5,
                  temperature: float = 1.0,
                  top_p: float = 1.0,
                  thinking: bool = True,
@@ -421,7 +430,7 @@ class OpenAIModel(Model):
         self.provider = "openai"
         self.base_url_raw = base_url
 
-        super().__init__(model, api_key, base_url, max_context_tokens=max_context_tokens)
+        super().__init__(model, api_key, base_url, max_context_tokens=max_context_tokens, max_concurrent=max_concurrent)
         self.base_url = base_url.rstrip('/') + '/chat/completions'
         self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
@@ -637,6 +646,7 @@ class OpenAIModel(Model):
     async def async_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
         payload = self.payload_construct(model_input)
         client = self.async_client
+        await self._semaphore.acquire()
         self._active_requests += 1
         try:
             for attempt in range(max_retries):
@@ -656,11 +666,13 @@ class OpenAIModel(Model):
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
         finally:
             self._active_requests -= 1
+            self._semaphore.release()
 
     async def async_stream_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0):
         """异步流式调用，yield 事件（need_print, completed_tool_use, completed_message）"""
         payload = {**self.payload_construct(model_input), "stream": True, "stream_options": {"include_usage": True}}
         client = self.async_client
+        await self._semaphore.acquire()
         self._active_requests += 1
 
         accumulated_response = {}
@@ -776,6 +788,7 @@ class OpenAIModel(Model):
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
         finally:
             self._active_requests -= 1
+            self._semaphore.release()
 
 PROVIDER_REGISTRY["anthropic"] = AnthropicModel
 PROVIDER_REGISTRY["openai"] = OpenAIModel

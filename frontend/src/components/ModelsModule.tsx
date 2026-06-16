@@ -20,6 +20,7 @@ function NewModelForm({ onClose, editModel, copyModel }: { onClose: () => void; 
       baseUrl: src?.baseUrl ?? (src?.provider === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com"),
       maxContextTokens: src?.maxContextTokens ?? 200000,
       maxCompletionTokens: src?.maxCompletionTokens ?? 65536,
+      maxConcurrent: src?.maxConcurrent ?? 5,
       temperature: src?.temperature ?? 1,
       topP: src?.topP ?? 1,
       thinkingEnabled: src?.thinking ?? true,
@@ -31,6 +32,7 @@ function NewModelForm({ onClose, editModel, copyModel }: { onClose: () => void; 
       name: form.name, provider: form.provider, modelName: form.modelName,
       apiKey: form.apiKey, baseUrl: form.baseUrl,
       maxContextTokens: form.maxContextTokens, maxCompletionTokens: form.maxCompletionTokens,
+      maxConcurrent: form.maxConcurrent,
       temperature: form.temperature, topP: form.topP,
       thinking: form.thinkingEnabled,
     };
@@ -78,6 +80,10 @@ function NewModelForm({ onClose, editModel, copyModel }: { onClose: () => void; 
         </FieldRow>
         <FieldRow label="Max Completion Tokens" hint="Maximum tokens per response">
           <input type="number" value={form.maxCompletionTokens} onChange={(e) => setForm({ ...form, maxCompletionTokens: Number(e.target.value) })}
+            className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
+        </FieldRow>
+        <FieldRow label="Max Concurrent" hint="Maximum concurrent async requests (default 5)">
+          <input type="number" min="1" value={form.maxConcurrent} onChange={(e) => setForm({ ...form, maxConcurrent: Number(e.target.value) })}
             className="w-full px-2 py-1.5 text-sm rounded border border-(--color-border) bg-white focus:outline-none focus:ring-1 focus:ring-(--color-ring)" />
         </FieldRow>
         <FieldRow label="Temperature" hint="Controls randomness (0-2)">

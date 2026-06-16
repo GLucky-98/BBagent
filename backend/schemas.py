@@ -12,6 +12,7 @@ class ModelConfig(BaseModel):
     baseUrl: str
     maxContextTokens: int
     maxCompletionTokens: int
+    maxConcurrent: int = 5
     temperature: float = 1.0
     topP: float = 1.0
     thinking: bool = True
@@ -26,6 +27,7 @@ class ModelConfig(BaseModel):
             "base_url": self.baseUrl,
             "max_completion_tokens": self.maxCompletionTokens,
             "max_context_tokens": self.maxContextTokens,
+            "max_concurrent": self.maxConcurrent,
             "temperature": self.temperature,
             "top_p": self.topP,
             "thinking": self.thinking,

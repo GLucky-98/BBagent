@@ -7,6 +7,7 @@ export interface Model {
   baseUrl: string;
   maxContextTokens: number;
   maxCompletionTokens: number;
+  maxConcurrent?: number;
   temperature?: number;
   topP?: number;
   thinking?: boolean;
