@@ -863,12 +863,11 @@ Your available skills are:
         messages = self._normalize_input(messages)
         tools = list(self.tools.values())
 
-        self.logger.set_trace_id()
-        self.logger.info(
-            "SubAgent run started",
-            context={"agent_name": self.name}
-        )
-        try:
+        with self.logger.trace(inherit=True):
+            self.logger.info(
+                "SubAgent run started",
+                context={"agent_name": self.name}
+            )
             with self.logger.span("subagent_run"):
                 while True:
                     if self._force_stop:
@@ -926,5 +925,3 @@ Your available skills are:
                 context={"agent_name": self.name}
             )
             return text
-        finally:
-            self.logger.clear_trace_id()

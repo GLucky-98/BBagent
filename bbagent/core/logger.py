@@ -109,6 +109,16 @@ class AgentLogger:
         self._trace_id = ""
 
     @contextmanager
+    def trace(self, trace_id: str = "", inherit: bool = True):
+        previous = self._trace_id
+        if not (inherit and previous):
+            self.set_trace_id(trace_id)
+        try:
+            yield
+        finally:
+            self._trace_id = previous
+
+    @contextmanager
     def span(self, span_name: str):
         span_id = f"{span_name}_{uuid().hex[:6]}"
         self._span_stack.append(span_id)
@@ -237,6 +247,10 @@ class _NullLogger:
 
     def clear_trace_id(self):
         pass
+
+    @contextmanager
+    def trace(self, trace_id: str = "", inherit: bool = True):
+        yield
 
     @contextmanager
     def span(self, span_name: str):
