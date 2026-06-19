@@ -156,6 +156,7 @@ class ModelMessage(Message):
     usage_data: dict
     raw_json: str = ''
     thinking: str = ''
+    thinking_signature: str = ''
     tool_calls: List[ToolUseBlock] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
@@ -171,6 +172,7 @@ class ModelMessage(Message):
             "usage_data": self.usage_data,
             "raw_json": self.raw_json,
             "thinking": self.thinking,
+            "thinking_signature": self.thinking_signature,
             "tool_calls": [tc.to_dict() for tc in self.tool_calls],
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
@@ -186,6 +188,7 @@ class ModelMessage(Message):
             usage_data=data.get('usage_data', {}),
             raw_json=data.get('raw_json', ''),
             thinking=data.get('thinking', ''),
+            thinking_signature=data.get('thinking_signature', ''),
             tool_calls=[ContentBlock.from_dict(tc) for tc in data.get('tool_calls', [])],
             input_tokens=data.get('input_tokens', 0),
             output_tokens=data.get('output_tokens', data.get('token_num', 0)),

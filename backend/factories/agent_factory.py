@@ -493,6 +493,7 @@ class AgentFactory:
                     if old_model_id and old_model_id != new_model_id:
                         await self._model_factory.release(old_model_id)
                     if cfg:
+                        cfg.modelId = new_model_id
                         policy = dict(getattr(agent, "policy", {}) or {})
                         sub_model_id = policy.get("subAgentModel") or policy.get("sub_agent_model")
                         if not sub_model_id:

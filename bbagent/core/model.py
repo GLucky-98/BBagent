@@ -347,7 +347,7 @@ class AnthropicModel(Model):
                     else:
                         payload_messages.append({'role':'user', 'content':str(message.content)})
                 if isinstance(message, ModelMessage):
-                    payload_messages.append(json.loads(message.raw_json))
+                    payload_messages.append(self.model_message_to_payload(message))
                 if isinstance(message, ToolMessage):
                     if isinstance(message.content,list):
                         payload_messages.append({'role':'user', 'content':[{'type':'tool_result','tool_use_id':message.id,'content':self.content_block_parse(message.content)}]})
@@ -358,6 +358,42 @@ class AnthropicModel(Model):
         
         return payload
     
+    def model_message_to_payload(self, message: ModelMessage) -> dict:
+        """从 ModelMessage 结构化字段重建 Anthropic API 格式（不依赖 raw_json）"""
+        content = []
+        # thinking 块（带 signature 以保持扩展思考连续性）
+        if message.thinking:
+            thinking_block = {"type": "thinking", "thinking": message.thinking}
+            if message.thinking_signature:
+                thinking_block["signature"] = message.thinking_signature
+            content.append(thinking_block)
+        # 内容块
+        if isinstance(message.content, str):
+            if message.content:
+                content.append({"type": "text", "text": message.content})
+        elif isinstance(message.content, list):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    content.append({"type": "text", "text": block.text})
+                elif isinstance(block, ImageBlock):
+                    content.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "data": block.data,
+                            "media_type": block.image_type,
+                        },
+                    })
+        # tool_use 块
+        for tc in message.tool_calls:
+            content.append({
+                "type": "tool_use",
+                "id": tc.id,
+                "name": tc.name,
+                "input": tc.input,
+            })
+        return {"role": "assistant", "content": content}
+
     def content_block_parse(self, content_blocks: List[ContentBlock]) -> List[dict]:
         """解析内容块, 其实只负责HumanMessage和ToolMessage里的内容块解析"""
         result = []
@@ -378,6 +414,7 @@ class AnthropicModel(Model):
 
         tool_calls = []
         thinking = ''
+        thinking_signature = ''
         if isinstance(raw_content,list):
             content = []
             for block in raw_content:
@@ -385,6 +422,7 @@ class AnthropicModel(Model):
                     content.append(TextBlock(text=block['text']))
                 if block['type'] == 'thinking':
                     thinking += block['thinking']
+                    thinking_signature = block.get('signature', '') or thinking_signature
                 if block['type'] == 'image':
                     content.append(ImageBlock(data=block['source']['data'], image_type=block['source']['media_type']))
                 if block['type'] == 'tool_use':
@@ -401,11 +439,12 @@ class AnthropicModel(Model):
                             raw_json=raw_json,
                             content=content,
                             thinking=thinking,
+                            thinking_signature=thinking_signature,
                             tool_calls=tool_calls,
                             stop_reason=stop_reason,
                             usage_data=usage_data,
                             input_tokens=input_tokens,
-                            output_tokens=output_tokens)       
+                            output_tokens=output_tokens)
 
 
 
@@ -476,14 +515,7 @@ class OpenAIModel(Model):
                 messages.append({"role": "user", "content": content})
 
             elif isinstance(msg, ModelMessage):
-                raw_message = json.loads(msg.raw_json)
-                need_part = {
-                    'role': raw_message.get('role', 'assistant'),
-                    'content': raw_message.get('content'),
-                }
-                if 'tool_calls' in raw_message:
-                    need_part['tool_calls'] = raw_message['tool_calls']
-                messages.append(need_part)
+                messages.append(self.model_message_to_payload(msg))
 
             elif isinstance(msg, ToolMessage):
                 # 工具响应消息
@@ -515,6 +547,34 @@ class OpenAIModel(Model):
                 payload["tool_choice"] = "auto"
 
         return payload
+
+    def model_message_to_payload(self, message: ModelMessage) -> dict:
+        """从 ModelMessage 结构化字段重建 OpenAI API 格式（不依赖 raw_json）"""
+        # 拼接文本内容
+        if isinstance(message.content, str):
+            text = message.content
+        elif isinstance(message.content, list):
+            parts = [b.text for b in message.content if isinstance(b, TextBlock)]
+            text = "\n".join(parts)
+        else:
+            text = ""
+
+        result = {"role": "assistant", "content": text if text else None}
+
+        # tool_calls 转为 OpenAI function 格式
+        if message.tool_calls:
+            result["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.input, ensure_ascii=False),
+                    },
+                }
+                for tc in message.tool_calls
+            ]
+        return result
 
     def content_block_parse(self, content: Union[str, List[ContentBlock]]) -> Union[str, List[dict]]:
         """
