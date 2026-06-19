@@ -1,15 +1,12 @@
-from typing import List
 import hashlib
 import logging
 from datetime import datetime, timedelta
 
-from ...core.hook import HookContext
-from ...core.message import HumanMessage, TextBlock, Turn, Session
-from ...core.message import Message
 from ...core.agent import SubAgent
+from ...core.hook import HookContext
 from ...core.logger import AgentLogger
+from ...core.message import HumanMessage, Message, Session, TextBlock, Turn
 from ...core.model import Model
-
 from .memory import MemoryManager
 from .memory_tool import create_add_memory_tool, create_delete_memory_tool, inject_memory_context
 from .runtime import MemoryRuntime
@@ -139,7 +136,7 @@ def _format_message_content(msg: Message) -> str:
     return str(content)
 
 
-def _format_messages_for_extraction(messages: List[Message]) -> str:
+def _format_messages_for_extraction(messages: list[Message]) -> str:
     lines = []
     for msg in messages:
         role = getattr(msg, "role", "unknown")
@@ -166,7 +163,7 @@ Review the conversation above carefully. Identify information that is worth pres
 
 async def extract_memories(
     submodel: Model,
-    turns: List[Turn],
+    turns: list[Turn],
     memory_manager: MemoryManager,
     session_id: str,
     extract_prompt: str = EXTRACT_SYSTEM_PROMPT,
@@ -175,7 +172,7 @@ async def extract_memories(
     logger: AgentLogger = None,
     runtime: MemoryRuntime = None,
 ):
-    from ...built_in_tool import create_write_tool, Policy
+    from ...built_in_tool import Policy, create_write_tool
 
     if logger:
         logger.info(
@@ -225,31 +222,28 @@ async def extract_memories(
 
 
 def _group_turns_for_extraction(
-    turns: List[Turn],
-    small_turn_threshold: int,
+    turns: list[Turn],
     merge_threshold: int,
-) -> List[List[Turn]]:
+) -> list[list[Turn]]:
+    """Group turns so each group's total tokens does not exceed merge_threshold.
+
+    Single-threshold design: every turn participates in the same merge window.
+    A turn larger than merge_threshold naturally forms its own group.
+    """
     groups = []
     current_group = []
     current_group_tokens = 0
 
     for turn in turns:
         t = turn.token_count
-        if t < small_turn_threshold:
-            if current_group_tokens + t <= merge_threshold:
-                current_group.append(turn)
-                current_group_tokens += t
-            else:
-                if current_group:
-                    groups.append(current_group)
-                current_group = [turn]
-                current_group_tokens = t
+        if current_group_tokens + t <= merge_threshold:
+            current_group.append(turn)
+            current_group_tokens += t
         else:
             if current_group:
                 groups.append(current_group)
-            groups.append([turn])
-            current_group = []
-            current_group_tokens = 0
+            current_group = [turn]
+            current_group_tokens = t
 
     if current_group:
         groups.append(current_group)
@@ -300,7 +294,7 @@ async def clean_memory(
     logger: AgentLogger = None,
     runtime: MemoryRuntime = None,
 ) -> bool:
-    from ...built_in_tool import create_read_tool, Policy
+    from ...built_in_tool import Policy, create_read_tool
 
     delete_tool = create_delete_memory_tool(memory_manager, runtime=runtime)
     policy = Policy(cwd=str(memory_manager.memory_dir))
@@ -402,11 +396,10 @@ INJECT_USER_PREFIX = "[Relevant memories from past messages]\n{search_context}"
 
 
 async def do_extract_turns(
-    turns: List[Turn],
+    turns: list[Turn],
     session_id: str,
     max_context_tokens: int,
     merge_ratio: float,
-    small_turn_cap: int,
     submodel: Model,
     memory_manager: MemoryManager,
     extract_prompt: str,
@@ -416,8 +409,7 @@ async def do_extract_turns(
     runtime: MemoryRuntime = None,
 ):
     merge_threshold = int(max_context_tokens * merge_ratio)
-    small_threshold = min(int(merge_threshold / 3), small_turn_cap)
-    groups = _group_turns_for_extraction(turns, small_threshold, merge_threshold)
+    groups = _group_turns_for_extraction(turns, merge_threshold)
 
     if logger:
         logger.debug(
@@ -453,7 +445,6 @@ def create_memory_hook(
     extract_user_prompt: str = EXTRACT_USER_PROMPT,
     clean_user_prompt: str = CLEAN_USER_PROMPT,
     merge_ratio: float = 0.2,
-    small_turn_cap: int = 5000,
     max_inject: int = 5,
     max_candidates: int = 50,
     extract_turn_interval: int = 5,
@@ -490,7 +481,7 @@ def create_memory_hook(
 
         await do_extract_turns(
             completed_turns, session.id,
-            agent.model.max_context_tokens, merge_ratio, small_turn_cap,
+            agent.model.max_context_tokens, merge_ratio,
             submodel, memory_manager,
             extract_prompt, subagent_add_memory_tool_prompt, extract_user_prompt,
             agent.logger,
@@ -509,7 +500,7 @@ def create_memory_hook(
         try:
             await do_extract_turns(
                 turns, session.id,
-                max_context_tokens, merge_ratio, small_turn_cap,
+                max_context_tokens, merge_ratio,
                 submodel, memory_manager,
                 extract_prompt, subagent_add_memory_tool_prompt, extract_user_prompt,
                 logger,

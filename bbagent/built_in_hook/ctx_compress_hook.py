@@ -1,10 +1,9 @@
 import asyncio
 import uuid
 
-from ..core.hook import HookContext
 from ..core.agent import SubAgent
+from ..core.hook import HookContext
 from ..core.message import HumanMessage
-
 
 COMPRESS_PROMPT = """You are a conversation summarizer. Your task is to compress a conversation history into a concise summary.
 
@@ -24,12 +23,51 @@ COMPRESS_PREFIX = (
 )
 
 
+def _group_turns_for_compress(turns: list, merge_threshold: int, logger=None) -> list[list]:
+    """Group uncompressed turns so each group's total tokens does not exceed merge_threshold.
+
+    Single-threshold design: every turn participates in the same merge window.
+    A turn larger than merge_threshold naturally forms its own group because
+    the previous group is flushed before it is placed into a new one.
+    """
+    groups = []
+    current_group = []
+    current_group_tokens = 0
+
+    for turn in turns:
+        t = turn.token_count
+        if t > merge_threshold and logger:
+            logger.warning(
+                f"Turn exceeds merge_threshold ({t} > {merge_threshold}), standalone group",
+                context={"turn_token_count": t, "merge_threshold": merge_threshold},
+            )
+        if current_group_tokens + t <= merge_threshold:
+            current_group.append(turn)
+            current_group_tokens += t
+        else:
+            if current_group:
+                groups.append(current_group)
+            current_group = [turn]
+            current_group_tokens = t
+
+    if current_group:
+        groups.append(current_group)
+
+    for idx, group in enumerate(groups):
+        if len(group) > 5 and logger:
+            logger.info(
+                f"Group {idx + 1} has {len(group)} turns, may produce coarse summary",
+                context={"group_index": idx + 1, "turn_count_in_group": len(group)},
+            )
+
+    return groups
+
+
 async def compress_session(
     session,
     model,
     compression_threshold: float = 0.8,
     merge_ratio: float = 0.2,
-    small_turn_cap: int = 5000,
     keep_recent_turns: int = 3,
     compress_prompt: str = COMPRESS_PROMPT,
     compress_prefix: str = COMPRESS_PREFIX,
@@ -38,7 +76,6 @@ async def compress_session(
     max_context_tokens = model.max_context_tokens
     context_threshold = int(max_context_tokens * compression_threshold)
     merge_threshold = int(max_context_tokens * merge_ratio)
-    small_turn_threshold = min(int(merge_threshold / 3), small_turn_cap)
 
     # Phase 0: need at least 2 visible turns to make compression meaningful
     visible_turns = session.turns[session.window_start:]
@@ -96,30 +133,7 @@ async def compress_session(
                 context={"pending_turn_count": len(uncompressed_turns)},
             )
 
-        groups = []
-        current_group = []
-        current_group_tokens = 0
-
-        for turn in uncompressed_turns:
-            t = turn.token_count
-            if t < small_turn_threshold:
-                if current_group_tokens + t <= merge_threshold:
-                    current_group.append(turn)
-                    current_group_tokens += t
-                else:
-                    if current_group:
-                        groups.append(current_group)
-                    current_group = [turn]
-                    current_group_tokens = t
-            else:
-                if current_group:
-                    groups.append(current_group)
-                groups.append([turn])
-                current_group = []
-                current_group_tokens = 0
-
-        if current_group:
-            groups.append(current_group)
+        groups = _group_turns_for_compress(uncompressed_turns, merge_threshold, logger=logger)
 
         if logger:
             logger.debug(
@@ -272,7 +286,6 @@ async def compress_session(
 def create_ctx_compress_hook(
     compression_threshold: float = 0.8,
     merge_ratio: float = 0.2,
-    small_turn_cap: int = 5000,
     keep_recent_turns: int = 3,
     compress_prompt: str = COMPRESS_PROMPT,
     compress_prefix: str = COMPRESS_PREFIX,
@@ -319,7 +332,6 @@ def create_ctx_compress_hook(
             logger=agent.logger,
             compression_threshold=compression_threshold,
             merge_ratio=merge_ratio,
-            small_turn_cap=small_turn_cap,
             compress_prefix=compress_prefix,
             keep_recent_turns=keep_recent_turns,
         )

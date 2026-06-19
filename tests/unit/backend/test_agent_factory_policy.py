@@ -219,3 +219,31 @@ async def test_changing_main_model_refreshes_default_sub_agent_model(tmp_path):
     await agent_factory.update("agent-1", {"modelId": "new-main-model"})
 
     assert "new-main-model" in model_factory.acquired_submodels
+
+
+@pytest.mark.asyncio
+async def test_changing_main_model_updates_config_and_persistence(tmp_path):
+    agent_factory = AgentFactory(
+        tmp_path / "data",
+        FakeModelFactory(),
+        ToolFactory(tmp_path / "data"),
+        EmptyFactory(),
+        EmptyFactory(),
+    )
+
+    agent = await agent_factory.create(
+        AgentConfig(
+            id="agent-1",
+            name="ModelSwitchAgent",
+            modelId="old-main-model",
+        )
+    )
+
+    await agent_factory.update("agent-1", {"modelId": "new-main-model"})
+
+    cfg = agent_factory.get_agent_config("agent-1")
+    persisted = json.loads((agent.base_dir / "agent_config.json").read_text(encoding="utf-8"))
+
+    assert agent_factory._model_ids["agent-1"] == "new-main-model"
+    assert cfg.modelId == "new-main-model"
+    assert persisted["modelId"] == "new-main-model"

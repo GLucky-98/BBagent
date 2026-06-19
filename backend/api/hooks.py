@@ -54,7 +54,6 @@ _FIELD_TYPES: dict[str, str] = {
     "compression_threshold": "float",
     # Shared
     "merge_ratio": "float",
-    "small_turn_cap": "number",
 }
 
 
@@ -166,7 +165,6 @@ _SHARED_SECTIONS: list[dict] = [
                 ),
             ),
             _make_field("merge_ratio", "Merge Ratio"),
-            _make_field("small_turn_cap", "Small Turn Cap"),
         ],
     }
 ]

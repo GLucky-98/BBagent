@@ -27,7 +27,6 @@ from .todo import (
 KEEP_RECENT_TURNS = 3
 COMPRESSION_THRESHOLD = 0.8
 MERGE_RATIO = 0.2
-SMALL_TURN_CAP = 5000
 RRF_K = 60
 BM25_WEIGHT = 0.5
 VECTOR_WEIGHT = 0.5
@@ -144,11 +143,9 @@ class BuiltinHookConfig:
     # Token-ratio threshold (0..1) at which compression is triggered.
     compression_threshold: float = COMPRESSION_THRESHOLD
 
-    # === Shared by both memory and compress ===
+    # Shared by both memory and compress
     # Memory merge ratio; also used by compress to size the target token count.
     merge_ratio: float = MERGE_RATIO
-    # Token cap for "small" turns; used by both extraction and compression heuristics.
-    small_turn_cap: int = SMALL_TURN_CAP
 
 
 def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
@@ -200,7 +197,6 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
         extract_user_prompt=config.extract_user_prompt,
         clean_user_prompt=config.clean_user_prompt,
         merge_ratio=config.merge_ratio,
-        small_turn_cap=config.small_turn_cap,
         max_inject=config.max_inject,
         inject_rrf_k=config.rrf_k,
         inject_bm25_weight=config.bm25_weight,
@@ -240,7 +236,6 @@ def _setup_compress(agent: Agent, config: BuiltinHookConfig | dict = None) -> No
     check_compress, do_compress = create_ctx_compress_hook(
         config.compression_threshold,
         config.merge_ratio,
-        config.small_turn_cap,
         config.keep_recent_turns,
         compress_prompt=config.compress_prompt,
         compress_prefix=config.compress_prefix,
