@@ -19,19 +19,39 @@ def create_todo_hook(
     stream_inject_interval: int = 1,
 ):
     def todo_context_provider() -> str:
-        return _format_todo_context(manager)
+        if not runtime.inject_next_stream:
+            return ""
+        context = _format_todo_context(manager)
+        if not context:
+            runtime.clear_injection_request()
+            return ""
+        runtime.mark_injected()
+        return context
 
     async def inject_after_input(ctx: HookContext):
-        runtime.mark_injected()
+        if manager.current() is None:
+            runtime.clear_injection_request()
+            return
+        runtime.request_injection()
 
     async def remind_before_stream(ctx: HookContext):
-        runtime.tick_stream()
-        if (
-            runtime.last_injected_version == runtime.version
-            and runtime.stream_count_since_inject < max(1, stream_inject_interval)
-        ):
+        if manager.current() is None:
+            runtime.clear_injection_request()
+            runtime.stream_count_since_inject = 0
             return
-        runtime.mark_injected()
+
+        if runtime.inject_next_stream:
+            return
+
+        runtime.tick_stream()
+        interval = max(1, stream_inject_interval)
+
+        if runtime.last_injected_version != runtime.version:
+            runtime.request_injection()
+            return
+
+        if runtime.stream_count_since_inject >= interval:
+            runtime.request_injection()
 
     async def emit_on_tool_result(ctx: HookContext, _tool_msg):
         if not runtime.dirty:

@@ -8,6 +8,7 @@ class TodoRuntime:
     last_emitted_version: int = -1
     last_injected_version: int = -1
     stream_count_since_inject: int = 0
+    inject_next_stream: bool = False
 
     def mark_dirty(self) -> None:
         self.version += 1
@@ -20,6 +21,13 @@ class TodoRuntime:
     def mark_injected(self) -> None:
         self.last_injected_version = self.version
         self.stream_count_since_inject = 0
+        self.inject_next_stream = False
+
+    def request_injection(self) -> None:
+        self.inject_next_stream = True
+
+    def clear_injection_request(self) -> None:
+        self.inject_next_stream = False
 
     def tick_stream(self) -> None:
         self.stream_count_since_inject += 1
