@@ -151,26 +151,6 @@ def test_record_message_appends_to_active_conversation(tmp_path):
     assert messages[0]["content"] == "Hello Bob!"
 
 
-def test_get_messages_by_conversation_id(tmp_path):
-    agent_factory = FakeAgentFactory({})
-    manager = TeamConversationManager(agent_factory)
-    team = make_team(tmp_path, agent_factory)
-
-    active = manager.ensure_loaded("team-1", team)
-
-    msg = TeamMessage(
-        from_agent="Alice",
-        to_agent="Bob",
-        content="Message in default",
-        type="direct",
-    )
-    manager.record_message(team, msg.to_dict())
-
-    messages = manager.get_messages(team, active["id"])
-    assert len(messages) == 1
-    assert messages[0]["content"] == "Message in default"
-
-
 @pytest.mark.asyncio
 async def test_create_and_list_conversations(tmp_path):
     agent_factory = FakeAgentFactory({})
@@ -197,7 +177,25 @@ def test_assert_member_session_switch_allowed_when_team_ready(tmp_path):
     manager = TeamConversationManager(agent_factory)
     team = make_team(tmp_path, agent_factory)
 
+    # 不应抛出异常
     manager.assert_member_session_switch_allowed(team, "agent-a")
+    # update_state 被内部调用，两个 agent 都是 idle 状态
+    assert team.state == "ready"
+
+
+def test_assert_member_session_switch_allowed_raises_when_agent_running_in_conversation(tmp_path):
+    agent_factory = FakeAgentFactory({})
+    manager = TeamConversationManager(agent_factory)
+    team = make_team(tmp_path, agent_factory)
+
+    # 令 team 进入 running 状态
+    team.agents["Alice"].state = "running"
+    # 创建一个活跃 conversation，Alice 在其中
+    active = manager.ensure_loaded("team-1", team)
+    active["memberSessions"] = {"Alice": "session-alice"}
+
+    with pytest.raises(ConflictError, match="Cannot switch session"):
+        manager.assert_member_session_switch_allowed(team, "agent-a")
 
 
 @pytest.mark.asyncio

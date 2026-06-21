@@ -111,17 +111,40 @@ def test_input_channel_clear_timers_removes_all():
     assert len(channel.list_timers()) == 0
 
 
-def test_input_channel_start_and_stop_timer():
+def test_input_channel_start_and_stop_timer_while_not_running():
+    """channel 未运行时 start_timer 返回 False，不存在的 timer stop 也返回 False。"""
     channel = InputChannel()
 
     channel.every(60.0, name="pause", hint="Pauseable")
 
-    # 未启动状态下 start_timer 返回 False
     started = channel.start_timer("pause")
     assert started is False
 
-    # 不存在 → False
     assert channel.stop_timer("nonexistent") is False
+
+
+@pytest.mark.asyncio
+async def test_input_channel_start_and_stop_timer_success():
+    """channel.start() 自动启动所有 timer，通过 stop_timer/start_timer 可手动停止/重启。"""
+    channel = InputChannel()
+
+    channel.every(60.0, name="pause", hint="Pauseable")
+    await channel.start()
+
+    # start() 自动启动，先确认在运行
+    assert channel.list_timers()[0]["running"] is True
+
+    # stop_timer 停止并返回 True
+    stopped = channel.stop_timer("pause")
+    assert stopped is True
+    assert channel.list_timers()[0]["running"] is False
+
+    # start_timer 重新启动并返回 True
+    started = channel.start_timer("pause")
+    assert started is True
+    assert channel.list_timers()[0]["running"] is True
+
+    await channel.stop()
 
 
 def test_input_channel_drain_queue_on_stop():

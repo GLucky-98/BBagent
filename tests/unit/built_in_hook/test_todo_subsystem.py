@@ -155,13 +155,21 @@ async def test_todo_hooks_inject_context_and_emit_dirty_snapshot():
         todo_context_provider,
     ) = create_todo_hook(manager, runtime)
 
+    # AFTER_INPUT sets inject_next_stream, provider returns context once
     await inject_after_input(ctx)
+    assert runtime.inject_next_stream is True
     assert session.turns[-1].messages[0].content == "continue"
     assert todo_context_provider().startswith("[Current Todo List]")
+    assert runtime.inject_next_stream is False  # mark_injected clears the request
 
+    # Second call without a new request returns empty
+    assert todo_context_provider() == ""
+
+    # Version change triggers request in BEFORE_STREAM
     manager.update_item("a", status="in_progress")
     runtime.mark_dirty()
     await remind_before_stream(ctx)
+    assert runtime.inject_next_stream is True
     assert session.turns[-1].messages[0].content == "continue"
     assert "In progress:" in todo_context_provider()
 
@@ -210,3 +218,193 @@ def test_agent_runtime_context_is_transient_and_does_not_mutate_session(tmp_path
 
     assert model_input.messages[-1].content.startswith("[Current Todo List]")
     assert agent.session.turns[-1].messages[0].content == "do work"
+
+
+# ---------------------------------------------------------------------------
+# Throttle tests — provider is controlled by runtime inject_next_stream
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_provider_returns_empty_when_no_injection_requested():
+    """构造 active todo 但不设置 inject_next_stream, provider 返回空."""
+    manager = TodoManager()
+    runtime = TodoRuntime()
+    manager.create_list(
+        "Test",
+        [TodoItemInput(id="a", content="A")],
+    )
+    runtime.mark_dirty()
+
+    (
+        _, _, _, _, _,
+        todo_context_provider,
+    ) = create_todo_hook(manager, runtime)
+
+    assert todo_context_provider() == ""
+
+
+@pytest.mark.asyncio
+async def test_provider_returns_context_after_request_injection():
+    """设置 inject_next_stream 后 provider 返回 todo context。"""
+    manager = TodoManager()
+    runtime = TodoRuntime()
+    manager.create_list(
+        "Test",
+        [TodoItemInput(id="a", content="A")],
+    )
+    runtime.mark_dirty()
+
+    (
+        _, _, _, _, _,
+        todo_context_provider,
+    ) = create_todo_hook(manager, runtime)
+
+    runtime.request_injection()
+    assert todo_context_provider().startswith("[Current Todo List]")
+
+
+@pytest.mark.asyncio
+async def test_after_input_requests_injection():
+    """有 active todo 时 AFTER_INPUT 预约注入, provider 返回一份 context 然后清除标志."""
+    manager = TodoManager()
+    runtime = TodoRuntime()
+    manager.create_list(
+        "Test",
+        [TodoItemInput(id="a", content="A")],
+    )
+    runtime.mark_dirty()
+
+    (
+        inject_after_input,
+        remind_before_stream,
+        _, _, _,
+        todo_context_provider,
+    ) = create_todo_hook(manager, runtime)
+
+    ctx = HookContext()
+    ctx.agent = FakeAgent(Session(id="s"))
+
+    await inject_after_input(ctx)
+    assert runtime.inject_next_stream is True
+
+    await remind_before_stream(ctx)
+    # BEFORE_STREAM 看到已有请求, 保持不动
+    assert runtime.inject_next_stream is True
+
+    result = todo_context_provider()
+    assert result.startswith("[Current Todo List]")
+    assert runtime.inject_next_stream is False
+    assert runtime.last_injected_version == runtime.version
+
+    # 再次调用返回空
+    assert todo_context_provider() == ""
+
+
+@pytest.mark.asyncio
+async def test_version_change_triggers_injection():
+    """todo 版本变化后 BEFORE_STREAM 触发注入。"""
+    manager = TodoManager()
+    runtime = TodoRuntime()
+    manager.create_list(
+        "Test",
+        [TodoItemInput(id="a", content="A")],
+    )
+    runtime.mark_dirty()
+
+    (
+        inject_after_input,
+        remind_before_stream,
+        _, _, _,
+        todo_context_provider,
+    ) = create_todo_hook(manager, runtime)
+
+    ctx = HookContext()
+    ctx.agent = FakeAgent(Session(id="s"))
+
+    # 完成首次注入
+    await inject_after_input(ctx)
+    await remind_before_stream(ctx)
+    todo_context_provider()
+    assert runtime.last_injected_version == runtime.version
+
+    # 修改 todo 内容
+    manager.update_item("a", status="in_progress")
+    runtime.mark_dirty()
+
+    await remind_before_stream(ctx)
+    assert runtime.inject_next_stream is True
+
+    result = todo_context_provider()
+    assert "In progress:" in result
+
+
+@pytest.mark.asyncio
+async def test_interval_throttles_unchanged_todo():
+    """未变化的 todo 按 interval 节流, interval=3 时每 3 次注入一次."""
+    manager = TodoManager()
+    runtime = TodoRuntime()
+    manager.create_list(
+        "Test",
+        [TodoItemInput(id="a", content="A")],
+    )
+    runtime.mark_dirty()
+
+    (
+        inject_after_input,
+        remind_before_stream,
+        _, _, _,
+        todo_context_provider,
+    ) = create_todo_hook(manager, runtime, stream_inject_interval=3)
+
+    ctx = HookContext()
+    ctx.agent = FakeAgent(Session(id="s"))
+
+    # 首次注入
+    await inject_after_input(ctx)
+    await remind_before_stream(ctx)
+    result = todo_context_provider()
+    assert result.startswith("[Current Todo List]")
+
+    # 第 1 次 BEFORE_STREAM: counter 1, 1 < 3, 不注入
+    await remind_before_stream(ctx)
+    assert runtime.inject_next_stream is False
+    assert todo_context_provider() == ""
+
+    # 第 2 次 BEFORE_STREAM: counter 2, 2 < 3, 不注入
+    await remind_before_stream(ctx)
+    assert runtime.inject_next_stream is False
+    assert todo_context_provider() == ""
+
+    # 第 3 次 BEFORE_STREAM: counter 3, 3 >= 3, 注入
+    await remind_before_stream(ctx)
+    assert runtime.inject_next_stream is True
+    assert todo_context_provider().startswith("[Current Todo List]")
+
+
+@pytest.mark.asyncio
+async def test_no_active_todo_no_injection():
+    """无 active todo 时不注入, inject_next_stream 被清为 False."""
+    manager = TodoManager()
+    runtime = TodoRuntime()
+
+    (
+        inject_after_input,
+        remind_before_stream,
+        _, _, _,
+        todo_context_provider,
+    ) = create_todo_hook(manager, runtime)
+
+    ctx = HookContext()
+    ctx.agent = FakeAgent(Session(id="s"))
+
+    runtime.request_injection()
+
+    await inject_after_input(ctx)
+    assert runtime.inject_next_stream is False
+
+    # 再次设置后由 remind_before_stream 清除
+    runtime.request_injection()
+    await remind_before_stream(ctx)
+    assert runtime.inject_next_stream is False
+    assert todo_context_provider() == ""
