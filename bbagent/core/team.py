@@ -33,7 +33,7 @@ class TeamMessage:
         return cls(
             from_agent=data['from_agent'],
             to_agent=data['to_agent'],
-            content=Message._deserialize_content(data['content']),
+            content=Message._deserialize_content(data['content'], "user"),
             type=data['type'],
             timestamp=data.get('timestamp', 0),
         )
@@ -66,10 +66,10 @@ class AgentTeam:
             if agent.name != agent_name:
                 agent.change_name(agent_name)
 
-            agent.team_prompt = cls._build_team_prompt(config.team_description)
+            agent.set_runtime_prompt("team", cls._build_team_prompt(config.team_description), order=20)
 
             contacts = config.contacts.get(agent_name, {})
-            agent.teammate_prompt = cls._build_teammate_prompt(contacts)
+            agent.set_runtime_prompt("teammates", cls._build_teammate_prompt(contacts), order=30)
 
             team._contacts[agent_name] = set(contacts.keys())
 
@@ -130,7 +130,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
 
         if isinstance(content, str):
             return prefix + content
-        return [TextBlock(text=prefix), *content]
+        return [TextBlock(text=prefix, origin="system"), *content]
 
     def _inject_team_tools(self, agent: Agent):
         team = self

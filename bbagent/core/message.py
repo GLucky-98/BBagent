@@ -1,6 +1,6 @@
-import copy
 import json
-from typing import List
+import copy
+from typing import List, Literal, cast
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -16,42 +16,64 @@ __all__ = [
     'TextBlock',
     'ImageBlock',
     'ToolUseBlock',
+    'ContentOrigin',
     'estimate_message_tokens'
 ]
 
+ContentOrigin = Literal["user", "model", "tool", "system"]
+
 
 class ContentBlock:
+    origin: ContentOrigin
+
     def to_dict(self) -> dict:
         raise NotImplementedError
 
     @staticmethod
-    def from_dict(data: dict) -> 'ContentBlock':
+    def from_dict(data: dict, default_origin: ContentOrigin | None = None) -> 'ContentBlock':
         block_type = data.get('type', '')
+        origin = data.get('origin', default_origin)
         if block_type == 'text':
-            return TextBlock(text=data['text'])
+            return TextBlock(text=data['text'], origin=origin or 'user')
         elif block_type == 'image':
-            return ImageBlock(data=data['data'], image_type=data.get('image_type', 'base64'))
+            return ImageBlock(
+                data=data['data'],
+                image_type=data.get('image_type', 'base64'),
+                origin=origin or 'user',
+            )
         elif block_type == 'tooluse':
-            return ToolUseBlock(id=data['id'], name=data['name'], input=data['input'])
+            return ToolUseBlock(
+                id=data['id'],
+                name=data['name'],
+                input=data['input'],
+                origin=origin or 'model',
+            )
         raise ValueError(f"Unknown content block type: {block_type}")
 
 
 @dataclass
 class TextBlock(ContentBlock):
     text: str
+    origin: ContentOrigin = "user"
     type: str = "text"
 
     def to_dict(self) -> dict:
-        return {"type": self.type, "text": self.text}
+        return {"type": self.type, "text": self.text, "origin": self.origin}
 
 @dataclass
 class ImageBlock(ContentBlock):
     data: str
     image_type: str = 'base64'
+    origin: ContentOrigin = "user"
     type: str = "image"
 
     def to_dict(self) -> dict:
-        return {"type": self.type, "data": self.data, "image_type": self.image_type}
+        return {
+            "type": self.type,
+            "data": self.data,
+            "image_type": self.image_type,
+            "origin": self.origin,
+        }
 
 @dataclass
 class AudioBlock(ContentBlock):
@@ -66,24 +88,54 @@ class ToolUseBlock(ContentBlock):
     id: str
     name: str
     input: dict
+    origin: ContentOrigin = "model"
     type: str = "tooluse"
 
     def to_dict(self) -> dict:
-        return {"type": self.type, "id": self.id, "name": self.name, "input": self.input}
+        return {
+            "type": self.type,
+            "id": self.id,
+            "name": self.name,
+            "input": self.input,
+            "origin": self.origin,
+        }
 
 
 class Message:
+    content: List[ContentBlock] | str
+
     @staticmethod
     def _serialize_content(content):
         if isinstance(content, str):
-            return content
+            return [TextBlock(text=content, origin="user").to_dict()] if content else []
         return [block.to_dict() for block in content]
 
     @staticmethod
-    def _deserialize_content(content_data):
+    def _deserialize_content(content_data, default_origin: ContentOrigin) -> List[ContentBlock]:
         if isinstance(content_data, str):
-            return content_data
-        return [ContentBlock.from_dict(block) for block in content_data]
+            return [TextBlock(text=content_data, origin=default_origin)] if content_data else []
+        return [
+            ContentBlock.from_dict(block, default_origin=default_origin)
+            if isinstance(block, dict)
+            else block
+            for block in content_data
+        ]
+
+    @staticmethod
+    def _normalize_content(content, default_origin: ContentOrigin) -> List[ContentBlock]:
+        if isinstance(content, str):
+            return [TextBlock(text=content, origin=default_origin)] if content else []
+        result: List[ContentBlock] = []
+        for block in content or []:
+            if isinstance(block, ContentBlock):
+                if getattr(block, 'origin', None) is None:
+                    block.origin = default_origin
+                result.append(block)
+            elif isinstance(block, dict):
+                result.append(ContentBlock.from_dict(block, default_origin=default_origin))
+            else:
+                result.append(TextBlock(text=str(block), origin=default_origin))
+        return result
 
     def to_dict(self) -> dict:
         raise NotImplementedError
@@ -106,6 +158,9 @@ class HumanMessage(Message):
     role: str = "user"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
 
+    def __post_init__(self):
+        self.content = Message._normalize_content(self.content, "user")
+
     def to_dict(self) -> dict:
         return {
             "role": self.role,
@@ -116,7 +171,7 @@ class HumanMessage(Message):
     @classmethod
     def _from_dict(cls, data: dict) -> 'HumanMessage':
         return cls(
-            content=Message._deserialize_content(data['content']),
+            content=Message._deserialize_content(data['content'], "user"),
             timestamp=data.get('timestamp', 0),
         )
 
@@ -128,6 +183,12 @@ class ToolMessage(Message):
     content: List[ContentBlock] | str
     role: str = "tool"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
+
+    def __post_init__(self):
+        self.content = Message._normalize_content(self.content, "tool")
+        for block in self.content:
+            if getattr(block, "origin", None) == "user":
+                block.origin = "tool"
 
     def to_dict(self) -> dict:
         return {
@@ -143,7 +204,7 @@ class ToolMessage(Message):
         return cls(
             id=data['id'],
             name=data['name'],
-            content=Message._deserialize_content(data['content']),
+            content=Message._deserialize_content(data['content'], "tool"),
             timestamp=data.get('timestamp', 0),
         )
 
@@ -162,6 +223,17 @@ class ModelMessage(Message):
     output_tokens: int = 0
     role: str = "model"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
+
+    def __post_init__(self):
+        self.content = Message._normalize_content(self.content, "model")
+        for block in self.content:
+            if getattr(block, "origin", None) == "user":
+                block.origin = "model"
+        self.tool_calls = [
+            block if isinstance(block, ToolUseBlock)
+            else ContentBlock.from_dict(block, default_origin="model")
+            for block in self.tool_calls
+        ]
 
     def to_dict(self) -> dict:
         return {
@@ -183,13 +255,16 @@ class ModelMessage(Message):
     def _from_dict(cls, data: dict) -> 'ModelMessage':
         return cls(
             id=data['id'],
-            content=Message._deserialize_content(data['content']),
+            content=Message._deserialize_content(data['content'], "model"),
             stop_reason=data.get('stop_reason', ''),
             usage_data=data.get('usage_data', {}),
             raw_json=data.get('raw_json', ''),
             thinking=data.get('thinking', ''),
             thinking_signature=data.get('thinking_signature', ''),
-            tool_calls=[ContentBlock.from_dict(tc) for tc in data.get('tool_calls', [])],
+            tool_calls=[
+                cast(ToolUseBlock, ContentBlock.from_dict(tc, default_origin="model"))
+                for tc in data.get('tool_calls', [])
+            ],
             input_tokens=data.get('input_tokens', 0),
             output_tokens=data.get('output_tokens', data.get('token_num', 0)),
             timestamp=data.get('timestamp', 0),
@@ -240,9 +315,7 @@ class Turn:
 
     @staticmethod
     def _normalize_content(content) -> List[ContentBlock]:
-        if isinstance(content, str):
-            return [TextBlock(text=content)] if content else []
-        return list(content)
+        return Message._normalize_content(content, "system")
 
     def _message_to_blocks(self, msg: Message) -> List[ContentBlock]:
         role = self._role_label(msg)
@@ -254,21 +327,24 @@ class Turn:
         for block in content_blocks:
             if isinstance(block, TextBlock):
                 if block.text:
-                    result.append(TextBlock(text=f"{role} {block.text}"))
+                    result.append(TextBlock(text=f"{role} {block.text}", origin="system"))
                     text_emitted = True
                 continue
             if not text_emitted:
-                result.append(TextBlock(text=role))
+                result.append(TextBlock(text=role, origin="system"))
                 text_emitted = True
-            result.append(block)
+            system_block = copy.copy(block)
+            if getattr(system_block, "origin", None) is not None:
+                system_block.origin = "system"
+            result.append(system_block)
 
         if isinstance(msg, ModelMessage):
             for tc in msg.tool_calls:
                 input_str = json.dumps(tc.input, ensure_ascii=False)
-                result.append(TextBlock(text=f"{role} [ToolCall {tc.name}({input_str})]"))
+                result.append(TextBlock(text=f"{role} [ToolCall {tc.name}({input_str})]", origin="system"))
 
         if not text_emitted and not (isinstance(msg, ModelMessage) and msg.tool_calls):
-            result.append(TextBlock(text=role))
+            result.append(TextBlock(text=role, origin="system"))
 
         return result
 
@@ -276,8 +352,8 @@ class Turn:
         if header is None:
             header = self.DEFAULT_MERGE_HEADER
         blocks: List[ContentBlock] = [
-            TextBlock(text=header),
-            TextBlock(text=""),
+            TextBlock(text=header, origin="system"),
+            TextBlock(text="", origin="system"),
         ]
         for msg in self.messages:
             blocks.extend(self._message_to_blocks(msg))
@@ -431,10 +507,10 @@ class Session:
                     inherited_tools = list(old_turn.ever_used_tools)
                     self.turns.pop()
 
-                new_blocks = Turn._normalize_content(msg.content)
+                new_blocks = Message._normalize_content(msg.content, "user")
                 if prefix_blocks and new_blocks:
                     msg.content = prefix_blocks + [
-                        TextBlock(text=Turn.CURRENT_REQUEST_LABEL),
+                        TextBlock(text=Turn.CURRENT_REQUEST_LABEL, origin="system"),
                     ] + new_blocks
                 elif prefix_blocks:
                     msg.content = prefix_blocks
@@ -507,7 +583,7 @@ class Session:
             if not collected_summaries and not collected_keys:
                 return []
             inject_text = self._build_inject_text(collected_summaries, collected_keys)
-            return [HumanMessage(content=inject_text)]
+            return [HumanMessage(content=[TextBlock(text=inject_text, origin="system")])]
 
         if not collected_summaries and not collected_keys:
             result = []
@@ -522,16 +598,13 @@ class Session:
         if target_msgs:
             first_msg = target_msgs[0]
             if isinstance(first_msg, HumanMessage):
-                if isinstance(first_msg.content, str):
-                    new_first = HumanMessage(
-                        content=inject_text + first_msg.content,
-                        timestamp=first_msg.timestamp
-                    )
-                else:
-                    new_first = HumanMessage(
-                        content=[TextBlock(text=inject_text)] + list(first_msg.content),
-                        timestamp=first_msg.timestamp
-                    )
+                new_first = HumanMessage(
+                    content=[
+                        TextBlock(text=inject_text, origin="system"),
+                        *Message._normalize_content(first_msg.content, "user"),
+                    ],
+                    timestamp=first_msg.timestamp
+                )
                 target_msgs[0] = new_first
         result.extend(target_msgs)
         for turn in turns[inject_idx + 1:]:

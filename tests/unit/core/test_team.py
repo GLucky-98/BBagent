@@ -63,8 +63,12 @@ async def test_team_injects_tools_only_for_visible_contacts(tmp_path):
     assert {"send_message", "broadcast"} <= set(alice.tools)
     assert "send_message" not in bob.tools
     assert {"send_message", "broadcast"} <= set(carol.tools)
-    assert "Bob: Reviewer" in alice.teammate_prompt
-    assert alice.team_prompt.startswith("[Team Context]")
+    assert not hasattr(alice, "teammate_prompt")
+    assert not hasattr(alice, "team_prompt")
+    assert alice.runtime_prompts["team"]["content"].startswith("[Team Context]")
+    assert "Bob: Reviewer" in alice.runtime_prompts["teammates"]["content"]
+    assert "[Team Context]" in alice.construct_model_input().prompt
+    assert "Bob: Reviewer" in alice.construct_model_input().prompt
 
 
 @pytest.mark.asyncio
@@ -124,6 +128,7 @@ def test_team_message_round_trip_preserves_content_blocks():
 
     assert restored.from_agent == "Alice"
     assert restored.to_agent == "Bob"
-    assert restored.content == "hello"
+    assert isinstance(restored.content, list)
+    assert restored.content[0].text == "hello"
     assert restored.type == "direct"
     assert restored.timestamp == 123

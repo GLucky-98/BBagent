@@ -4,7 +4,11 @@ from bbagent.built_in_hook.memory.fingerprint import (
     extract_seen_memory_keys,
     memory_fingerprint,
 )
-from bbagent.built_in_hook.memory.memory_hook import INJECT_USER_PREFIX, create_memory_hook
+from bbagent.built_in_hook.memory.memory_hook import (
+    INJECT_USER_PREFIX,
+    _format_messages_for_extraction,
+    create_memory_hook,
+)
 from bbagent.built_in_hook.memory.memory_tool import create_add_memory_tool, inject_memory_context
 from bbagent.built_in_hook.memory.runtime import MemoryRuntime
 from bbagent.core.hook import HookContext
@@ -34,6 +38,9 @@ class DummyLogger:
                 return False
 
         return Span()
+
+    def trace(self, *args, **kwargs):
+        return self.span("trace")
 
     def set_trace_id(self, *_args, **_kwargs):
         pass
@@ -248,8 +255,9 @@ async def test_inject_memory_context_filters_seen_memories_and_oversamples():
     )
 
     assert manager.search_sizes == [3]
-    assert "[ID: 1]" not in model.prompts[0]
-    assert "[ID: 2]" in model.prompts[0]
+    prompt_text = " ".join(block.text for block in model.prompts[0] if isinstance(block, TextBlock))
+    assert "[ID: 1]" not in prompt_text
+    assert "[ID: 2]" in prompt_text
     assert context == "- User works with FastAPI."
     assert manager.accessed == ["2"]
 
@@ -304,6 +312,47 @@ def test_extract_seen_memory_keys_parses_only_prefixed_user_messages():
 
     assert memory_fingerprint("User works with FastAPI.") in seen
     assert memory_fingerprint("User prefers dark mode.") not in seen
+
+
+def test_memory_extraction_format_skips_system_origin_blocks():
+    messages = [
+        HumanMessage(
+            content=[
+                TextBlock(text="[Relevant memories]\n- Already injected", origin="system"),
+                TextBlock(text="My real request", origin="user"),
+            ]
+        )
+    ]
+
+    formatted = _format_messages_for_extraction(messages)
+
+    assert "My real request" in formatted
+    assert "Already injected" not in formatted
+
+
+@pytest.mark.asyncio
+async def test_memory_injection_uses_system_origin_block():
+    runtime = MemoryRuntime(logger=DummyLogger())
+    session = Session(id="session-1")
+    session.turns = [Turn(messages=[HumanMessage(content="What do I like?")])]
+    agent = FakeAgent(session)
+    ctx = HookContext()
+    ctx.agent = agent
+
+    hooks = create_memory_hook(
+        memory_manager=FakeMemoryManager([{"id": "1", "content": "User likes tests."}]),
+        submodel=SelectingModel(["1"]),
+        runtime=runtime,
+    )
+    inject_memory_hook = hooks[3]
+
+    await inject_memory_hook(ctx)
+
+    content = session.turns[-1].messages[0].content
+    assert content[0].origin == "system"
+    assert content[0].text.startswith("[Relevant memories from past messages]")
+    assert content[1].origin == "user"
+    assert content[1].text == "What do I like?"
 
 
 @pytest.mark.asyncio

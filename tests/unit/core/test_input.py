@@ -18,7 +18,7 @@ def test_agent_event_to_human_message_with_string_payload():
     msg = event.to_human_message()
 
     assert isinstance(msg, HumanMessage)
-    assert msg.content == "Hello, agent!"
+    assert msg.content[0].text == "Hello, agent!"
 
 
 def test_agent_event_to_human_message_with_human_message_payload():
@@ -47,7 +47,7 @@ def test_input_channel_push_puts_event_on_queue():
     assert event.source_id == "user"
     msg = event.payload
     assert isinstance(msg, HumanMessage)
-    assert msg.content == "Hello"
+    assert msg.content[0].text == "Hello"
 
 
 def test_input_channel_push_ignores_when_not_running():

@@ -372,18 +372,7 @@ class AnthropicModel(Model):
             if message.content:
                 content.append({"type": "text", "text": message.content})
         elif isinstance(message.content, list):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    content.append({"type": "text", "text": block.text})
-                elif isinstance(block, ImageBlock):
-                    content.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "data": block.data,
-                            "media_type": block.image_type,
-                        },
-                    })
+            content.extend(self.content_block_parse(message.content))
         # tool_use 块
         for tc in message.tool_calls:
             content.append({
@@ -416,15 +405,21 @@ class AnthropicModel(Model):
         thinking = ''
         thinking_signature = ''
         if isinstance(raw_content,list):
-            content = []
+            content: list[ContentBlock] = []
             for block in raw_content:
                 if block['type'] == 'text':
-                    content.append(TextBlock(text=block['text']))
+                    content.append(TextBlock(text=block['text'], origin="model"))
                 if block['type'] == 'thinking':
                     thinking += block['thinking']
                     thinking_signature = block.get('signature', '') or thinking_signature
                 if block['type'] == 'image':
-                    content.append(ImageBlock(data=block['source']['data'], image_type=block['source']['media_type']))
+                    content.append(
+                        ImageBlock(
+                            data=block['source']['data'],
+                            image_type=block['source']['media_type'],
+                            origin="model",
+                        )
+                    )
                 if block['type'] == 'tool_use':
                     tool_calls.append(ToolUseBlock(id=block['id'], name=block['name'], input=block['input']))
         else:
@@ -550,16 +545,11 @@ class OpenAIModel(Model):
 
     def model_message_to_payload(self, message: ModelMessage) -> dict:
         """从 ModelMessage 结构化字段重建 OpenAI API 格式（不依赖 raw_json）"""
-        # 拼接文本内容
-        if isinstance(message.content, str):
-            text = message.content
-        elif isinstance(message.content, list):
-            parts = [b.text for b in message.content if isinstance(b, TextBlock)]
-            text = "\n".join(parts)
-        else:
-            text = ""
+        content = self.content_block_parse(message.content)
+        result = {"role": "assistant", "content": content if content else None}
 
-        result = {"role": "assistant", "content": text if text else None}
+        if message.thinking:
+            result["reasoning_content"] = message.thinking
 
         # tool_calls 转为 OpenAI function 格式
         if message.tool_calls:
@@ -662,10 +652,10 @@ class OpenAIModel(Model):
 
     def _parse_content_parts(self, parts: list) -> List[ContentBlock]:
         """将 OpenAI 响应中的 content parts 转换为内部 ContentBlock 列表"""
-        blocks = []
+        blocks: list[ContentBlock] = []
         for part in parts:
             if part.get("type") == "text":
-                blocks.append(TextBlock(text=part["text"]))
+                blocks.append(TextBlock(text=part["text"], origin="model"))
             elif part.get("type") == "image_url":
                 # 通常响应不会有 image_url，但保留兼容
                 url = part["image_url"]["url"]
@@ -675,9 +665,9 @@ class OpenAIModel(Model):
                     match = re.match(r"data:image/(\w+);base64,(.+)", url)
                     if match:
                         img_type, data = match.groups()
-                        blocks.append(ImageBlock(data=data, image_type=img_type))
+                        blocks.append(ImageBlock(data=data, image_type=img_type, origin="model"))
             elif part.get("type") == "refusal":
-                blocks.append(TextBlock(text=f"[Refusal: {part['refusal']}]"))
+                blocks.append(TextBlock(text=f"[Refusal: {part['refusal']}]", origin="model"))
         return blocks
 
     def invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:

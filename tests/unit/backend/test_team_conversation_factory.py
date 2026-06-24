@@ -106,7 +106,7 @@ def test_team_message_round_trip():
 
     assert restored.from_agent == "Alice"
     assert restored.to_agent == "Bob"
-    assert restored.content == "Team update"
+    assert restored.content[0].text == "Team update"
     assert restored.type == "broadcast"
 
 
@@ -122,7 +122,7 @@ def test_team_message_serialization_includes_all_fields():
 
     assert data["from_agent"] == "Agent1"
     assert data["to_agent"] == "Agent2"
-    assert data["content"] == "Hello"
+    assert data["content"][0]["text"] == "Hello"
     assert data["type"] == "direct"
     assert "timestamp" in data
 
@@ -148,7 +148,7 @@ def test_record_message_appends_to_active_conversation(tmp_path):
     assert len(messages) == 1
     assert messages[0]["from_agent"] == "Alice"
     assert messages[0]["to_agent"] == "Bob"
-    assert messages[0]["content"] == "Hello Bob!"
+    assert messages[0]["content"][0]["text"] == "Hello Bob!"
 
 
 @pytest.mark.asyncio

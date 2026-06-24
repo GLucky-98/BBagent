@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import copy
 import json
 import shutil
 import sys
@@ -59,17 +58,22 @@ class AgentState:
 class Agent:
     def __init__(self,agent_config:AgentConfig):
         self.name = agent_config.name
+
         self.model = agent_config.model
 
         self.base_dir = agent_config.base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
+
         self.system_prompt_path = self.base_dir / 'system_prompt.md'
         self.system_prompt = agent_config.system_prompt
         if not self.system_prompt_path.exists():
             self.system_prompt_path.write_text(agent_config.system_prompt, encoding='utf-8')
+        self.runtime_prompts_path = self.base_dir / 'runtime_prompts.md'
+        self.runtime_prompts: dict[str, dict[str, str | int]] = {}
+        self._write_runtime_prompts_file()
+
         self.session_dir = self.base_dir / 'session'
         self.session_dir.mkdir(parents=True, exist_ok=True)
-
         self.session = agent_config.session
 
         self.tools: dict[str, Tool] = {}
@@ -81,11 +85,9 @@ class Agent:
             self._add_load_skills_tool()
             for skill in agent_config.skills:
                 self.skills[skill.name] = skill
-        self.skill_prompt = self._load_skill_prompt()
-
-        self.team_prompt = ""
-        self.teammate_prompt = ""
-        self.runtime_context_providers: list[Callable[[], str]] = []
+        skill_prompt = self._load_skill_prompt()
+        if skill_prompt:
+            self.set_runtime_prompt("skills", skill_prompt, order=40)
 
         self.hook = AgentHook()
         self.hook.set_context(self)
@@ -155,6 +157,14 @@ class Agent:
             deprecated = new_base / f'system_prompt_deprecated_{timestamp}.md'
             shutil.move(str(new_system_prompt), str(deprecated))
         shutil.copy2(old_base / 'system_prompt.md', new_system_prompt)
+        new_runtime_prompts = new_base / 'runtime_prompts.md'
+        old_runtime_prompts = old_base / 'runtime_prompts.md'
+        if new_runtime_prompts.exists():
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            deprecated = new_base / f'runtime_prompts_deprecated_{timestamp}.md'
+            shutil.move(str(new_runtime_prompts), str(deprecated))
+        if old_runtime_prompts.exists():
+            shutil.copy2(old_runtime_prompts, new_runtime_prompts)
 
         new_session = new_base / 'session'
         if new_session.exists():
@@ -165,11 +175,53 @@ class Agent:
 
         self.base_dir = new_base
         self.system_prompt_path = new_system_prompt
+        self.runtime_prompts_path = new_runtime_prompts
         self.session_dir = new_session
 
     def change_system_prompt(self, prompt: str):
         self.system_prompt = prompt
         self.system_prompt_path.write_text(prompt, encoding='utf-8')
+
+    def set_runtime_prompt(self, key: str, prompt: str, order: int = 100) -> None:
+        if not prompt:
+            self.remove_runtime_prompt(key)
+            return
+        self.runtime_prompts[key] = {"content": prompt, "order": order}
+        self._write_runtime_prompts_file()
+
+    def remove_runtime_prompt(self, key: str) -> None:
+        self.runtime_prompts.pop(key, None)
+        self._write_runtime_prompts_file()
+
+    def render_runtime_prompts(self) -> str:
+        rendered = [
+            str(item["content"])
+            for _key, item in sorted(
+                self.runtime_prompts.items(),
+                key=lambda pair: (int(pair[1].get("order", 100)), pair[0]),
+            )
+            if str(item.get("content", "")).strip()
+        ]
+        if not rendered:
+            return ""
+        return "\n\n" + "\n\n".join(rendered)
+
+    def _write_runtime_prompts_file(self) -> None:
+        lines = [
+            "# Runtime Prompts",
+            "",
+            "This file is generated for inspection only. Runtime prompts are rebuilt from agent/team/skill/hook configuration and are not loaded from this file.",
+        ]
+        for key, item in sorted(
+            self.runtime_prompts.items(),
+            key=lambda pair: (int(pair[1].get("order", 100)), pair[0]),
+        ):
+            content = str(item.get("content", "")).rstrip()
+            if not content:
+                continue
+            lines.extend(["", f"## {key}", "", content])
+        lines.append("")
+        self.runtime_prompts_path.write_text("\n".join(lines), encoding='utf-8')
 
     async def load_session(self, session_file_path: Path | str):
         await self.hook.trigger(HookType.NEW_SESSION)
@@ -303,6 +355,8 @@ class Agent:
 
     def _load_skill_prompt(self):
         """从 skills.md 加载技能提示词，文件不存在时使用默认值"""
+        if not self.skills:
+            return ''
         skill_system_prompt = ["""You have access to the following skills. When you need to use a specific skill, call the `load_skill` tool with the skill name to get its full capabilities, usage instructions, and detailed behavior.
 
 Your available skills are:
@@ -315,48 +369,25 @@ Your available skills are:
         if not self.skills and new_skills:
             self._add_load_skills_tool()
         self.skills.update(new_skills)
-        self.skill_prompt = self._load_skill_prompt()
+        self.set_runtime_prompt("skills", self._load_skill_prompt(), order=40)
 
     def remove_skills(self, skill_names: List[str]):
-        """移除指定名称的 skills，并刷新 skill_prompt。"""
+        """移除指定名称的 skills，并刷新 runtime skill prompt。"""
         if not skill_names:
             return
         for name in skill_names:
             self.skills.pop(name, None)
         if not self.skills:
-            self.skill_prompt = ''
+            self.remove_runtime_prompt("skills")
         else:
-            self.skill_prompt = self._load_skill_prompt()
+            self.set_runtime_prompt("skills", self._load_skill_prompt(), order=40)
 
     def construct_model_input(self) -> Model_Input:
         self._ensure_session()
         tools = list(self.tools.values())
-        prompt = self.system_prompt + self.team_prompt + self.teammate_prompt + self.skill_prompt
+        prompt = self.system_prompt + self.render_runtime_prompts()
         messages = self.session.get_visible_context()
-        runtime_contexts = [
-            context.strip()
-            for provider in self.runtime_context_providers
-            if (context := provider().strip())
-        ]
-        if runtime_contexts:
-            messages = self._prepend_runtime_context(messages, "\n\n".join(runtime_contexts) + "\n\n")
         return Model_Input(prompt=prompt, tools=tools, messages=messages)
-
-    def _prepend_runtime_context(self, messages: list[Message], context: str) -> list[Message]:
-        if not messages:
-            return [HumanMessage(content=context)]
-
-        result = copy.deepcopy(messages)
-        for idx in range(len(result) - 1, -1, -1):
-            msg = result[idx]
-            if not isinstance(msg, HumanMessage):
-                continue
-            if isinstance(msg.content, str):
-                msg.content = context + msg.content
-            elif isinstance(msg.content, list):
-                msg.content = [TextBlock(text=context), *msg.content]
-            return result
-        return [HumanMessage(content=context), *result]
 
     def _interrupt_requested(self) -> bool:
         if self.hook.should_break():
@@ -863,7 +894,9 @@ Your available skills are:
         messages = self._normalize_input(messages)
         tools = list(self.tools.values())
 
-        with self.logger.trace(inherit=True):
+        trace = getattr(self.logger, "trace", None)
+        trace_context = trace(inherit=True) if trace else contextlib.nullcontext()
+        with trace_context:
             self.logger.info(
                 "SubAgent run started",
                 context={"agent_name": self.name}

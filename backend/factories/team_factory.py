@@ -267,8 +267,8 @@ class TeamFactory:
         ]
         if team_tool_names:
             agent.remove_tools(team_tool_names)
-        agent.team_prompt = ""
-        agent.teammate_prompt = ""
+        agent.remove_runtime_prompt("team")
+        agent.remove_runtime_prompt("teammates")
 
     @staticmethod
     def _normalize_contacts(

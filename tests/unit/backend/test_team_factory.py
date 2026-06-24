@@ -164,8 +164,10 @@ async def test_update_team_members_removes_member_from_runtime_and_config(tmp_pa
     assert updated is team_factory.teams["team-id"]
     assert list(team_factory._team_meta["team-id"]["memberIds"]) == ["alice-id"]
     assert set(team_factory.teams["team-id"].agents) == {"Alice"}
-    assert bob.team_prompt == ""
-    assert bob.teammate_prompt == ""
+    assert not hasattr(bob, "team_prompt")
+    assert not hasattr(bob, "teammate_prompt")
+    assert "team" not in bob.runtime_prompts
+    assert "teammates" not in bob.runtime_prompts
     assert "send_message" not in bob.tools
     assert agent_factory.deleted == ["bob-id"]
     assert json.loads((team_dir / "team_config.json").read_text(encoding="utf-8"))["memberIds"] == ["alice-id"]

@@ -31,6 +31,16 @@ def _mark_if_changed(result, runtime: TodoRuntime) -> None:
         runtime.mark_dirty()
 
 
+def _format_current_state(manager: TodoManager) -> str:
+    formatted = manager.format_for_model()
+    return formatted if formatted else "No active todo list."
+
+
+def _tool_response(message: str, manager: TodoManager, runtime: TodoRuntime) -> str:
+    runtime.mark_status_shown()
+    return f"{message}\n\n{_format_current_state(manager)}"
+
+
 def create_todo_tools(manager: TodoManager, runtime: TodoRuntime) -> list[Tool]:
     async def todo_create(title: str, items: list[TodoItemInputModel]) -> str:
         item_inputs = [
@@ -44,7 +54,7 @@ def create_todo_tools(manager: TodoManager, runtime: TodoRuntime) -> list[Tool]:
         ]
         result = manager.create_list(title, item_inputs)
         _mark_if_changed(result, runtime)
-        return result.message
+        return _tool_response(result.message, manager, runtime)
 
     async def todo_update(
         item_id: str,
@@ -61,16 +71,16 @@ def create_todo_tools(manager: TodoManager, runtime: TodoRuntime) -> list[Tool]:
             notes=notes,
         )
         _mark_if_changed(result, runtime)
-        return result.message
+        return _tool_response(result.message, manager, runtime)
 
     async def todo_list() -> str:
-        formatted = manager.format_for_model()
-        return formatted if formatted else "No active todo list."
+        runtime.mark_status_shown()
+        return _format_current_state(manager)
 
     async def todo_clear(reason: str = "") -> str:
         result = manager.clear(reason)
         _mark_if_changed(result, runtime)
-        return result.message
+        return _tool_response(result.message, manager, runtime)
 
     return [
         Tool(todo_create, name="todo_create", description=TODO_CREATE_DESCRIPTION, source="hook"),

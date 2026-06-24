@@ -126,21 +126,22 @@ ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT = (
 )
 
 
-def _format_message_content(msg: Message) -> str:
-    content = msg.content
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        texts = [block.text for block in content if isinstance(block, TextBlock)]
-        return " ".join(texts)
-    return str(content)
+def _format_message_content(msg: Message, include_system: bool = True) -> str:
+    texts = []
+    for block in msg.content:
+        if not isinstance(block, TextBlock):
+            continue
+        if not include_system and block.origin == "system":
+            continue
+        texts.append(block.text)
+    return " ".join(texts)
 
 
 def _format_messages_for_extraction(messages: list[Message]) -> str:
     lines = []
     for msg in messages:
         role = getattr(msg, "role", "unknown")
-        text = _format_message_content(msg)
+        text = _format_message_content(msg, include_system=False)
         if not text.strip():
             continue
         if role == "user":
@@ -675,7 +676,7 @@ def create_memory_hook(
             return
 
         last_msg = session.turns[-1].messages[0]
-        query = _format_message_content(last_msg)
+        query = _format_message_content(last_msg, include_system=False)
 
         query_hash = hashlib.md5(query.encode()).hexdigest()
         if query_hash == _last_inject_hash:
@@ -718,11 +719,7 @@ def create_memory_hook(
         )
 
         prefix = inject_user_prompt.format(search_context=context) + "\n\n"
-        content = last_msg.content
-        if isinstance(content, str):
-            last_msg.content = prefix + content
-        elif isinstance(content, list):
-            last_msg.content = [TextBlock(text=prefix)] + content
+        last_msg.content = [TextBlock(text=prefix, origin="system")] + last_msg.content
         runtime.mark_memory_keys_seen(session.id, selected_memory_keys)
 
     return (

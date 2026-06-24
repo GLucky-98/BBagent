@@ -114,7 +114,7 @@ async def test_input_channel_owns_queue_and_ignores_pushes_while_stopped():
     await channel.start()
     channel.push("accepted")
     event = channel.queue.get_nowait()
-    assert event.to_human_message().content == "accepted"
+    assert event.to_human_message().content[0].text == "accepted"
 
     channel.push("discarded on stop")
     await channel.stop()

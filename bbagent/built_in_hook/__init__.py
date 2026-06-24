@@ -219,7 +219,7 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
         memory_dir=memory_manager.memory_dir,
         add_tool_name=add_tool.name,
     )
-    agent.change_system_prompt(agent.system_prompt + prompt)
+    agent.set_runtime_prompt("built_in.memory", prompt, order=100)
 
 
 def _setup_compress(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
@@ -258,12 +258,10 @@ def _setup_todo(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
     agent.add_tools(create_todo_tools(manager, runtime))
 
     (
-        inject_after_input,
         remind_before_stream,
         emit_on_tool_result,
         clear_on_new_session,
         cleanup_after_run,
-        todo_context_provider,
     ) = create_todo_hook(
         manager,
         runtime,
@@ -271,14 +269,12 @@ def _setup_todo(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
     )
 
     hook = agent.hook
-    hook.register(func=inject_after_input, hook_type=HookType.AFTER_INPUT, priority=110)
     hook.register(func=remind_before_stream, hook_type=HookType.BEFORE_STREAM, priority=110)
     hook.register(func=emit_on_tool_result, hook_type=HookType.ON_TOOL_RESULT, priority=100)
     hook.register(func=clear_on_new_session, hook_type=HookType.NEW_SESSION, priority=90)
     hook.register(func=cleanup_after_run, hook_type=HookType.AFTER_RUN, priority=110)
-    agent.runtime_context_providers.append(todo_context_provider)
 
-    agent.change_system_prompt(agent.system_prompt + config.todo_system_prompt)
+    agent.set_runtime_prompt("built_in.todo", config.todo_system_prompt, order=110)
 
 
 HOOK_CREATOR = {

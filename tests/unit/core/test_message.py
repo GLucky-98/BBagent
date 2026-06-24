@@ -5,6 +5,7 @@ import pytest
 from bbagent.core.message import (
     ContentBlock,
     HumanMessage,
+    ImageBlock,
     ModelMessage,
     Session,
     TextBlock,
@@ -36,6 +37,33 @@ def test_message_round_trip_preserves_structured_content():
     assert restored.content[0].text == "I will call a tool."
     assert restored.tool_calls[0].name == "read"
     assert restored.tool_calls[0].input == {"path": "README.md"}
+    assert restored.content[0].origin == "model"
+    assert restored.tool_calls[0].origin == "model"
+
+
+def test_message_content_is_normalized_to_origin_blocks():
+    human = HumanMessage(content="hi")
+    model = ModelMessage(id="m1", content="hello", stop_reason="end_turn", usage_data={})
+    tool = ToolMessage(id="t1", name="read", content="ok")
+
+    assert isinstance(human.content, list)
+    assert human.content[0].origin == "user"
+    assert model.content[0].origin == "model"
+    assert tool.content[0].origin == "tool"
+
+
+def test_content_block_serialization_includes_origin():
+    assert TextBlock(text="hello", origin="system").to_dict() == {
+        "type": "text",
+        "text": "hello",
+        "origin": "system",
+    }
+    assert ImageBlock(data="abc", image_type="png", origin="user").to_dict() == {
+        "type": "image",
+        "data": "abc",
+        "image_type": "png",
+        "origin": "user",
+    }
 
 
 def test_unknown_content_block_type_is_rejected():
@@ -73,6 +101,7 @@ def test_session_persists_and_loads_completed_turn(tmp_path):
     session.save()
 
     loaded = Session.load(session.id, session.dir)
+    jsonl_text = (session.dir / f"{session.id}.jsonl").read_text(encoding="utf-8")
 
     assert loaded.id == session.id
     assert loaded.turn_count == 1
@@ -86,6 +115,9 @@ def test_session_persists_and_loads_completed_turn(tmp_path):
     assert loaded.ever_used_tools == ["read"]
     assert loaded.total_input_cost_tokens == 20
     assert loaded.total_output_cost_tokens == 8
+    assert '"origin": "user"' in jsonl_text
+    assert '"origin": "tool"' in jsonl_text
+    assert '"origin": "model"' in jsonl_text
 
 
 def test_session_load_restores_turn_metadata(tmp_path):

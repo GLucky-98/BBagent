@@ -229,6 +229,52 @@ def test_agent_change_system_prompt_updates_file_and_in_memory(tmp_path):
     assert agent.system_prompt_path.read_text(encoding="utf-8") == "Updated prompt."
 
 
+def test_agent_runtime_prompts_are_ordered_and_rendered(tmp_path):
+    agent = Agent(
+        AgentConfig(
+            model=EchoToolModel(),
+            name="RuntimePromptAgent",
+            base_dir=tmp_path,
+            system_prompt="Base prompt.",
+        )
+    )
+
+    agent.set_runtime_prompt("z-last", "Last prompt.", order=30)
+    agent.set_runtime_prompt("a-first", "First prompt.", order=20)
+    agent.set_runtime_prompt("m-middle", "Middle prompt.", order=30)
+
+    model_input = agent.construct_model_input()
+
+    assert model_input.prompt.index("Base prompt.") < model_input.prompt.index("First prompt.")
+    assert model_input.prompt.index("First prompt.") < model_input.prompt.index("Middle prompt.")
+    assert model_input.prompt.index("Middle prompt.") < model_input.prompt.index("Last prompt.")
+    runtime_file = agent.runtime_prompts_path.read_text(encoding="utf-8")
+    assert "## a-first" in runtime_file
+    assert "## m-middle" in runtime_file
+    assert runtime_file.index("## a-first") < runtime_file.index("## m-middle")
+
+
+def test_agent_runtime_prompt_remove_and_system_prompt_update_are_separate(tmp_path):
+    agent = Agent(
+        AgentConfig(
+            model=EchoToolModel(),
+            name="RuntimePromptRemoveAgent",
+            base_dir=tmp_path,
+            system_prompt="Base prompt.",
+        )
+    )
+
+    agent.set_runtime_prompt("built_in.todo", "Todo prompt.", order=110)
+    agent.change_system_prompt("Updated base.")
+    assert "Updated base." in agent.construct_model_input().prompt
+    assert "Todo prompt." in agent.construct_model_input().prompt
+
+    agent.remove_runtime_prompt("built_in.todo")
+
+    assert "Todo prompt." not in agent.construct_model_input().prompt
+    assert "## built_in.todo" not in agent.runtime_prompts_path.read_text(encoding="utf-8")
+
+
 def test_agent_session_is_auto_created(tmp_path):
     agent = Agent(
         AgentConfig(
