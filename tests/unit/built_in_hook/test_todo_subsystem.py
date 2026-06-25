@@ -94,8 +94,8 @@ def test_todo_manager_clears_when_all_items_terminal():
     first = manager.update_item("a", status="done")
     second = manager.update_item("b", status="cancelled")
 
-    assert first.completed_and_cleared is False
-    assert second.completed_and_cleared is True
+    assert first.changed is True
+    assert second.changed is True
     assert "Todo list completed and cleared." in second.message
     assert manager.current() is None
 
@@ -129,6 +129,36 @@ async def test_todo_tools_mark_runtime_dirty_and_report_completion():
     assert "No active todo list." in done_result
     assert runtime.version == 2
     assert runtime.stream_count_since_inject == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_todo_tool_call_does_not_mark_runtime_dirty():
+    manager = TodoManager()
+    runtime = TodoRuntime()
+    tools = {tool.name: tool for tool in create_todo_tools(manager, runtime)}
+
+    result = await tools["todo_create"].async_invoke({
+        "title": "Bad dependencies",
+        "items": [{"id": "a", "content": "A", "blocked_by": ["missing"]}],
+    })
+
+    assert "unknown dependencies" in result
+    assert runtime.dirty is False
+    assert runtime.version == 0
+
+
+def test_todo_create_schema_describes_inputs():
+    manager = TodoManager()
+    runtime = TodoRuntime()
+    tools = {tool.name: tool for tool in create_todo_tools(manager, runtime)}
+    schema = tools["todo_create"].input_schema
+
+    assert "Input fields:" in tools["todo_create"].description
+    item_schema = schema["properties"]["items"]["items"]
+    assert "notes" not in item_schema["properties"]
+    assert "Short stable id" in item_schema["properties"]["id"]["description"]
+    assert "actual work item" in item_schema["properties"]["content"]["description"]
+    assert "must be done or cancelled" in item_schema["properties"]["blocked_by"]["description"]
 
 
 class FakeAgent:

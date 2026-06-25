@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
@@ -16,9 +15,6 @@ class TodoItem:
     content: str
     status: TodoStatus = "pending"
     blocked_by: list[str] = field(default_factory=list)
-    notes: str = ""
-    created_at: str = ""
-    updated_at: str = ""
 
     def to_dict(self, terminal_ids: set[str] | None = None) -> dict:
         terminal_ids = terminal_ids or set()
@@ -32,8 +28,6 @@ class TodoList:
     id: str
     title: str
     items: list[TodoItem]
-    created_at: str
-    updated_at: str = ""
 
 
 @dataclass
@@ -41,19 +35,12 @@ class TodoItemInput:
     id: str
     content: str
     blocked_by: list[str] = field(default_factory=list)
-    notes: str = ""
 
 
 @dataclass
 class TodoMutationResult:
     changed: bool
     message: str
-    completed_and_cleared: bool = False
-    snapshot: dict | None = None
-
-
-def _now() -> str:
-    return datetime.now().isoformat()
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -77,15 +64,11 @@ class TodoManager:
         if not items:
             return TodoMutationResult(False, "Todo list must contain at least one item.")
 
-        now = _now()
         todo_items = [
             TodoItem(
                 id=item.id.strip(),
                 content=item.content.strip(),
                 blocked_by=_dedupe([dep.strip() for dep in item.blocked_by if dep.strip()]),
-                notes=item.notes,
-                created_at=now,
-                updated_at=now,
             )
             for item in items
         ]
@@ -98,17 +81,10 @@ class TodoManager:
             id=f"todo-{uuid4().hex[:12]}",
             title=title.strip(),
             items=todo_items,
-            created_at=now,
-            updated_at=now,
         )
         self._current = todo_list
         self._recalculate_blocked_items()
-        snapshot = self.snapshot()
-        return TodoMutationResult(
-            True,
-            f"Created todo list '{todo_list.title}' with {len(todo_items)} items.",
-            snapshot=snapshot,
-        )
+        return TodoMutationResult(True, f"Created todo list '{todo_list.title}' with {len(todo_items)} items.")
 
     def update_item(
         self,
@@ -116,7 +92,6 @@ class TodoManager:
         status: TodoStatus | None = None,
         content: str | None = None,
         blocked_by: list[str] | None = None,
-        notes: str | None = None,
     ) -> TodoMutationResult:
         if self._current is None:
             return TodoMutationResult(False, "No active todo list. Use todo_create first.")
@@ -134,9 +109,6 @@ class TodoManager:
                 content=existing.content,
                 status=existing.status,
                 blocked_by=list(existing.blocked_by),
-                notes=existing.notes,
-                created_at=existing.created_at,
-                updated_at=existing.updated_at,
             )
             for existing in self._current.items
         ]
@@ -146,8 +118,6 @@ class TodoManager:
             candidate.content = content.strip()
         if blocked_by is not None:
             candidate.blocked_by = _dedupe([dep.strip() for dep in blocked_by if dep.strip()])
-        if notes is not None:
-            candidate.notes = notes
         if status is not None:
             candidate.status = status
 
@@ -166,29 +136,16 @@ class TodoManager:
             item.content = candidate.content
         if blocked_by is not None:
             item.blocked_by = candidate.blocked_by
-        if notes is not None:
-            item.notes = candidate.notes
         if status is not None:
             item.status = candidate.status
 
-        item.updated_at = _now()
-        self._current.updated_at = item.updated_at
         self._recalculate_blocked_items()
 
         if self._is_complete():
             self._current = None
-            return TodoMutationResult(
-                True,
-                f"Updated todo item '{item_id}'.\nTodo list completed and cleared.",
-                completed_and_cleared=True,
-                snapshot=None,
-            )
+            return TodoMutationResult(True, f"Updated todo item '{item_id}'.\nTodo list completed and cleared.")
 
-        return TodoMutationResult(
-            True,
-            f"Updated todo item '{item_id}'.",
-            snapshot=self.snapshot(),
-        )
+        return TodoMutationResult(True, f"Updated todo item '{item_id}'.")
 
     def clear(self, reason: str = "") -> TodoMutationResult:
         if self._current is None:
@@ -197,7 +154,7 @@ class TodoManager:
         message = "Cleared active todo list."
         if reason.strip():
             message += f" Reason: {reason.strip()}"
-        return TodoMutationResult(True, message, snapshot=None)
+        return TodoMutationResult(True, message)
 
     def current(self) -> TodoList | None:
         return self._current
@@ -244,8 +201,6 @@ class TodoManager:
                 lines.append(f"- {item.id}: {item.content}")
                 if item.blocked_by:
                     lines.append(f"  blocked_by: {', '.join(item.blocked_by)}")
-                if item.notes:
-                    lines.append(f"  notes: {item.notes}")
             lines.append("")
         return "\n".join(lines).strip()
 
@@ -324,17 +279,14 @@ class TodoManager:
     def _recalculate_blocked_items(self) -> None:
         if self._current is None:
             return
-        now = _now()
         for item in self._current.items:
             if item.status in TERMINAL_STATUSES:
                 continue
             unresolved = self._unresolved_dependencies(item)
             if unresolved and item.status != "blocked":
                 item.status = "blocked"
-                item.updated_at = now
             elif not unresolved and item.status == "blocked" and item.blocked_by:
                 item.status = "pending"
-                item.updated_at = now
 
     def _is_complete(self) -> bool:
         if self._current is None:

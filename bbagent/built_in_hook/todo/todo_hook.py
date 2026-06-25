@@ -44,7 +44,7 @@ def _inject_todo_context_to_last_message(ctx: HookContext, context: str) -> bool
 def create_todo_hook(
     manager: TodoManager,
     runtime: TodoRuntime,
-    stream_inject_interval: int = 1,
+    stream_inject_interval: int = 3,
 ):
     async def remind_before_stream(ctx: HookContext):
         if manager.current() is None:
