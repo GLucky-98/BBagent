@@ -75,7 +75,7 @@ export function OnboardingView() {
   return (
     <div className="flex-1 flex items-center justify-center bg-(--color-secondary)/30 px-8">
       <div className="w-[920px] max-w-[95vw] grid grid-cols-[1fr_1.1fr] gap-12 items-start">
-        {/* 左栏：标题 + 进度 */}
+        {/* left column: title + progress */}
         <div className="pt-4">
           <div className="text-[11px] font-semibold tracking-[0.2em] uppercase text-(--color-primary) mb-3">
             Getting Started
@@ -87,7 +87,7 @@ export function OnboardingView() {
             Building Block Agent &mdash; Stack Agents, Compose Teams
           </p>
 
-          {/* 进度 */}
+          {/* progress */}
           <div className="mt-8 space-y-2">
             <div className="flex items-center justify-between text-[11px]">
               <span className="font-medium text-(--color-ink-2)">
@@ -104,7 +104,7 @@ export function OnboardingView() {
           </div>
         </div>
 
-        {/* 右栏：步骤卡片 */}
+        {/* right column: step card */}
         <div className="bg-(--color-background) rounded-2xl border border-(--color-rule-soft) p-6 space-y-1">
           {steps.map((step) => {
             const status = step.completed

@@ -31,7 +31,7 @@ class InputEvent:
 
 
 def _parse_time(time_str: str) -> dt_time:
-    """解析时间字符串, 支持 HH:MM 或 HH:MM:SS 格式"""
+    """Parse time string, supports HH:MM or HH:MM:SS format"""
     parts = time_str.strip().split(":")
     if len(parts) == 2:
         return dt_time(int(parts[0]), int(parts[1]))
@@ -42,7 +42,7 @@ def _parse_time(time_str: str) -> dt_time:
 
 
 def _seconds_until(target_time: dt_time) -> float:
-    """计算从现在到目标时间的秒数(如果目标时间已过, 则计算到明天)"""
+    """Calculate seconds from now to target time (if target time has passed, calculate to tomorrow)"""
     now = datetime.now()
     target = datetime.combine(now.date(), target_time)
 
@@ -67,17 +67,17 @@ class InputChannel:
     async def start(self):
         self._running = True
         self._timers = []
-        # 启动间隔触发任务
+        # start interval-triggered tasks
         for seconds, name, hint in self._interval_configs:
             task = self._create_interval_task(seconds, name, hint)
             self._timers.append((name, task))
-        # 启动时间点触发任务
+        # start time-point-triggered tasks
         for time_str, name, hint in self._at_configs:
             task = self._create_at_task(time_str, name, hint)
             self._timers.append((name, task))
 
     def _create_interval_task(self, seconds: float, name: str, hint: str) -> asyncio.Task:
-        """创建间隔触发任务"""
+        """Create interval-triggered task"""
         async def _loop():
             while self._running:
                 await asyncio.sleep(seconds)
@@ -93,7 +93,7 @@ class InputChannel:
         return asyncio.create_task(_loop())
 
     def _create_at_task(self, time_str: str, name: str, hint: str) -> asyncio.Task:
-        """创建时间点触发任务"""
+        """Create time-point-triggered task"""
         async def _loop():
             while self._running:
                 target_time = _parse_time(time_str)
@@ -137,7 +137,7 @@ class InputChannel:
         self._queue.put_nowait(event)
 
     def every(self, seconds: float, name: str = "", hint: str = "") -> 'InputChannel':
-        """创建间隔触发任务"""
+        """Create interval-triggered task"""
         # upsert: if name exists, update config and restart
         for i, (_, n, _) in enumerate(self._interval_configs):
             if n == name:
@@ -154,14 +154,14 @@ class InputChannel:
         return self
 
     def at(self, time_str: str, name: str = "", hint: str = "") -> 'InputChannel':
-        """创建时间点触发任务
+        """Create time-point-triggered task
 
         Args:
-            time_str: 时间字符串, 格式为 "HH:MM" 或 "HH:MM:SS"
-            name: 任务名称
-            hint: 任务提示
+            time_str: time string, format is "HH:MM" or "HH:MM:SS"
+            name: task name
+            hint: task hint
         """
-        # 验证时间格式
+        # validate time format
         _parse_time(time_str)
 
         # upsert: if name exists, update config and restart
@@ -187,14 +187,14 @@ class InputChannel:
                 del self._timers[i]
 
     def cancel(self, name: str) -> bool:
-        """按 name 取消一个 timer(删除配置 + 停止任务). 返回是否实际取消了一个."""
+        """Cancel a timer by name (delete config + stop task). Returns whether one was actually cancelled."""
         removed = False
-        # 从间隔配置中删除
+        # remove from interval configs
         for i in range(len(self._interval_configs) - 1, -1, -1):
             if self._interval_configs[i][1] == name:
                 del self._interval_configs[i]
                 removed = True
-        # 从时间点配置中删除
+        # remove from time-point configs
         for i in range(len(self._at_configs) - 1, -1, -1):
             if self._at_configs[i][1] == name:
                 del self._at_configs[i]
@@ -203,18 +203,18 @@ class InputChannel:
         return removed
 
     def start_timer(self, name: str) -> bool:
-        """从已有配置启动任务(不删除配置). 返回是否成功启动."""
+        """Start task from existing config (without deleting config). Returns whether it started successfully."""
         config = None
         config_type = None
 
-        # 查找间隔配置
+        # find interval config
         for s, n, h in self._interval_configs:
             if n == name:
                 config = (s, n, h)
                 config_type = "interval"
                 break
 
-        # 查找时间点配置
+        # find time-point config
         if config is None:
             for t, n, h in self._at_configs:
                 if n == name:
@@ -240,7 +240,7 @@ class InputChannel:
         return False
 
     def stop_timer(self, name: str) -> bool:
-        """停止任务但保留配置。返回是否成功停止。"""
+        """Stop task but keep config. Returns whether it stopped successfully."""
         found = False
         for tname, _ in self._timers:
             if tname == name:
@@ -252,11 +252,11 @@ class InputChannel:
         return True
 
     def list_timers(self) -> list[dict]:
-        """返回当前所有 timer 配置及运行状态的快照。"""
+        """Return a snapshot of all current timer configs and running states."""
         running_names = {name for name, _ in self._timers}
         result = []
 
-        # 间隔触发任务
+        # interval-triggered tasks
         for seconds, name, hint in self._interval_configs:
             result.append({
                 "type": "interval",
@@ -266,7 +266,7 @@ class InputChannel:
                 "running": name in running_names
             })
 
-        # 时间点触发任务
+        # time-point-triggered tasks
         for time_str, name, hint in self._at_configs:
             result.append({
                 "type": "at",
@@ -279,7 +279,7 @@ class InputChannel:
         return result
 
     def clear_timers(self) -> None:
-        """清空所有 timer 配置并取消所有任务。"""
+        """Clear all timer configs and cancel all tasks."""
         for _, task in self._timers:
             task.cancel()
         self._timers.clear()

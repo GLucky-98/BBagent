@@ -41,7 +41,7 @@ async def list_teams():
     result = []
     stale_ids: list[str] = []
     for team_id, team in state_manager.team_factory.teams.items():
-        # 检查 team_config.json 是否存在(可能在新结构 teams/{id}/{name}/ 或旧结构 teams/{id}/)
+        # check whether team_config.json exists (may be in new structure teams/{id}/{name}/ or old structure teams/{id}/)
         found = False
         if team.base_dir:
             found = (team.base_dir / "team_config.json").exists()
@@ -194,8 +194,8 @@ async def start_team(team_id: str):
         await state_manager.start_agent(aid)
     await team.start()
 
-    # 等待所有 agent 事件循环启动完毕(状态不再为 Ready)
-    for _ in range(30):  # 最多等 3 秒
+    # wait for all agent event loops to start (state no longer Ready)
+    for _ in range(30):  # wait up to 3 seconds
         team.update_state()
         if team.state != "ready":
             break

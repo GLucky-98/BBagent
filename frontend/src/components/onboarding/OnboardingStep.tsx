@@ -27,7 +27,7 @@ export function OnboardingStep({
         status !== "in_progress" && "hover:bg-(--color-secondary)/60"
       )}
     >
-      {/* 序号圆 */}
+      {/* number circle */}
       <div
         className={cn(
           "w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0",

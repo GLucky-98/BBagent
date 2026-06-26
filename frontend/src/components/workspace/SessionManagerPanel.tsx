@@ -3,7 +3,7 @@ import { X, ChevronDown, ChevronRight, Trash2, GitFork, ArrowRightLeft, Loader2,
 import { useAppStore } from "../../store";
 import type { GlobalSessionIndex, TurnInfo } from "../../types";
 
-// ── 按 agent_id 分组 ──
+// ── group by agent_id ──
 function groupByAgent(sessions: GlobalSessionIndex[]) {
   const map = new Map<string, { agentId: string; agentName: string; sessions: GlobalSessionIndex[] }>();
   for (const s of sessions) {
@@ -14,14 +14,14 @@ function groupByAgent(sessions: GlobalSessionIndex[]) {
     }
     group.sessions.push(s);
   }
-  // 每个 agent 内按 timestamp 降序
+  // within each agent, sort by timestamp descending
   for (const g of map.values()) {
     g.sessions.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }
   return Array.from(map.values());
 }
 
-// ── L3: Turn 行 ──
+// ── L3: Turn row ──
 function TurnRow({
   turn,
   sessionId,
@@ -66,7 +66,7 @@ function TurnRow({
   );
 }
 
-// ── L2: Session 行 ──
+// ── L2: Session row ──
 function SessionRow({
   session,
   currentAgentId,
@@ -179,7 +179,7 @@ function SessionRow({
   );
 }
 
-// ── L1: Agent 分组 ──
+// ── L1: Agent group ──
 function AgentGroup({
   agentName,
   sessions,
@@ -215,7 +215,7 @@ function AgentGroup({
   );
 }
 
-// ── 主面板 ──
+// ── main panel ──
 interface Props {
   width: number;
 }
@@ -243,7 +243,7 @@ export function SessionManagerPanel({ width }: Props) {
       className="shrink-0 border-l border-(--color-rule-soft) bg-(--color-background) flex flex-col overflow-hidden"
       style={{ width }}
     >
-      {/* 标题栏 */}
+      {/* title bar */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-(--color-rule-soft) shrink-0">
         <span className="text-[13px] font-semibold text-(--color-foreground)">Sessions</span>
         <button
@@ -254,7 +254,7 @@ export function SessionManagerPanel({ width }: Props) {
         </button>
       </div>
 
-      {/* 内容区 */}
+      {/* content area */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-12 text-(--color-ink-3)">

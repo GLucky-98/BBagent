@@ -880,8 +880,8 @@ function TeamForm({
       result[m.name] = {};
       const existing = currentContacts[m.name] ?? {};
       for (const other of memberList) {
-        if (other.name === m.name) continue; // 不创建 self-key
-        // 只保留已有的 contacts 条目，不自动添加新条目
+        if (other.name === m.name) continue; // do not create self-key
+        // only keep existing contacts entries, do not auto-add new entries
         if (other.name in existing) {
           result[m.name][other.name] = existing[other.name];
         }
@@ -1104,8 +1104,8 @@ function TeamForm({
     );
   }
 
-  // Step 2: Contacts — 为每个 agent 的每个队友设置 role 描述和可见性
-  // contacts 格式: { agentName: { otherName: role } }，不含 self-key
+  // Step 2: Contacts — set role description and visibility for each agent's teammates
+  // contacts format: { agentName: { otherName: role } }, no self-key
   return (
     <div className="p-6 flex flex-col max-h-[75vh]">
       <h2 className="text-lg font-semibold mb-1">Configure Contacts</h2>

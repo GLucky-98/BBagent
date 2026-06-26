@@ -276,7 +276,7 @@ class AgentFactory:
             except NotFoundError as e:
                 raise NotFoundError(
                     ErrorCode.MODEL_NOT_FOUND,
-                    f"创建 Agent '{config.name}' 失败:模型 '{config.modelId}' 不存在",
+                    f"Failed to create Agent '{config.name}': model '{config.modelId}' does not exist",
                 ) from e
 
             agent: Agent | None = None
@@ -360,7 +360,7 @@ class AgentFactory:
                 await self.stop(agent_id)
             except Exception as e:
                 logger.warning("Error stopping agent '%s' before delete: %s", agent.name, e)
-                # stop 失败时保险保存 session metadata
+                # save session metadata as safeguard when stop fails
                 if agent.session is not None and agent.session.dir is not None:
                     try:
                         agent.session.save()
@@ -387,7 +387,7 @@ class AgentFactory:
             if old_model_id:
                 await self._model_factory.release(old_model_id)
 
-            # 移除该 agent 的 session 索引
+            # remove this agent's session index
             self._remove_session_index(agent_id)
 
             if base_dir is not None:
@@ -668,7 +668,7 @@ class AgentFactory:
                             })
 
         async def _wrapped_output(chunk):
-            # 三者独立执行:任一失败不影响其他
+            # three run independently: any failure does not affect others
             results = await asyncio.gather(
                 _push_per_agent(chunk, dispatcher),
                 _push_global(chunk, global_disp, agent_id),
@@ -708,9 +708,9 @@ class AgentFactory:
 
             self._update_json_started(agent_id, started=True)
 
-            # 轮询等待 agent 事件循环真正启动(状态不再是 Ready),
-            # 避免 API 返回 Ready 后 WebSocket 又推 Waiting 导致状态闪烁
-            for _ in range(30):  # 最多等 3 秒
+            # poll and wait for agent event loop to actually start (state no longer Ready),
+            # avoid API returning Ready then WebSocket pushing Waiting causing flicker
+            for _ in range(30):  # wait up to 3 seconds
                 if agent.state != AgentState.Ready:
                     break
                 await asyncio.sleep(0.1)
@@ -728,7 +728,7 @@ class AgentFactory:
         with log_operation(logger, "stop_agent", agent_name=agent.name):
             agent.clear_timers()
 
-            # stop 之前落盘 session metadata
+            # persist session metadata before stop
             if agent.session is not None and agent.session.dir is not None:
                 try:
                     agent.session.save()
@@ -866,10 +866,10 @@ class AgentFactory:
                 continue
             for msg in turn.messages:
                 msg_dict = msg.to_dict()
-                ts = msg_dict.get("timestamp", 0) * 1000  # 秒 → 毫秒,统一前端时间格式
+                ts = msg_dict.get("timestamp", 0) * 1000  # seconds → milliseconds, unify frontend time format
                 message_id = msg_dict.get("id", "")
 
-                # ── ToolMessage: 直接输出 tool_result ──
+                # ── ToolMessage: directly output tool_result ──
                 if msg_dict.get("role") == "tool":
                     tool_name = msg_dict.get("name", "")
                     raw_content = msg_dict.get("content", "")
@@ -903,7 +903,7 @@ class AgentFactory:
                     })
 
                 content = msg_dict.get("content", "")
-                # ModelMessage 的 role 是 "model",前端期望 "assistant"
+                # ModelMessage's role is "model", frontend expects "assistant"
                 display_role = "assistant" if msg_dict.get("role") == "model" else msg_dict.get("role", "")
                 if isinstance(content, str):
                     if content.strip():
@@ -915,7 +915,7 @@ class AgentFactory:
                             "timestamp": ts,
                         })
                 elif isinstance(content, list):
-                    # HumanMessage (role=="user"): 合并所有 text block,避免拆成多条用户消息
+                    # HumanMessage (role=="user"): merge all text blocks, avoid splitting into multiple user messages
                     if msg_dict.get("role") == "user":
                         merged = "\n".join(
                             b.get("text", "") for b in content if b.get("type") == "text"
@@ -940,7 +940,7 @@ class AgentFactory:
                                         "timestamp": ts,
                                     })
 
-                # tool_calls: 仅从 tool_calls 字段输出(content 中的 tooluse 已在上面处理,避免重复)
+                # tool_calls: only output from tool_calls field (tooluse in content already handled above, avoid duplication)
                 for tc in msg_dict.get("tool_calls", []):
                     tc_input = tc.get("input", {})
                     result.append({
@@ -1311,13 +1311,13 @@ class AgentFactory:
             logger.warning(f"Failed to update lastSessionId for '{agent.name}': {e}")
 
     def _refresh_session_index(self, agent_id: str):
-        """通知 SessionManager 刷新该 agent 的 session 索引."""
+        """Notify SessionManager to refresh this agent's session index."""
         from backend.state import state_manager
         if state_manager.session_manager:
             state_manager.session_manager.refresh_agent_index(agent_id)
 
     def _remove_session_index(self, agent_id: str):
-        """移除该 agent 的所有 session 索引(agent 被删除时调用)."""
+        """Remove all session indexes for this agent (called when agent is deleted)."""
         from backend.state import state_manager
         if state_manager.session_manager:
             sm = state_manager.session_manager

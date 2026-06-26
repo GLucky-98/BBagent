@@ -1,11 +1,11 @@
-"""SessionManager — 全局 Session 管理、索引、缓存、Fork 操作.
+"""SessionManager — global Session management, indexing, caching, Fork operations.
 
-职责:
-  - 启动时扫描所有 agent 的 session 目录构建轻量索引
-  - 提供全局 session 列表(按 agent 过滤)
-  - 提供单个 session 详情 + turn 摘要
-  - 从任意 turn 位置 fork session
-  - LRU 缓存避免重复加载 Session 对象
+Responsibilities:
+  - On startup, scan all agent's session directories to build lightweight indexes
+  - Provide global session list (filter by agent)
+  - Provide single session detail + turn summary
+  - Fork session from any turn position
+  - LRU cache to avoid repeatedly loading Session objects
 """
 
 import asyncio
@@ -23,7 +23,7 @@ logger = get_backend_logger("state.session_factory")
 
 @dataclass
 class SessionIndex:
-    """轻量索引,不包含完整消息数据,仅用于列表展示和路由."""
+    """Lightweight index, does not contain full message data, only for list display and routing."""
     session_id: str
     agent_id: str
     agent_name: str
@@ -44,11 +44,11 @@ class SessionManager:
         self._index_built = False
 
     # ------------------------------------------------------------------
-    # 索引构建
+    # index building
     # ------------------------------------------------------------------
 
     def build_index(self) -> None:
-        """启动时调用,扫描所有 agent 的 session 目录构建索引."""
+        """Called on startup, scans all agent session directories to build index."""
         self._index.clear()
         self._cache.clear()
         for agent_id, agent in self._agent_factory.agents.items():
@@ -57,7 +57,7 @@ class SessionManager:
         logger.info("Session index built: %d sessions", len(self._index))
 
     def _index_agent(self, agent_id: str, agent) -> None:
-        """为单个 agent 构建 session 索引."""
+        """Build session index for a single agent."""
         agent_name = agent.name
         session_dir = agent.session_dir
         if not session_dir or not session_dir.exists():
@@ -85,27 +85,27 @@ class SessionManager:
             )
 
     def refresh_agent_index(self, agent_id: str) -> None:
-        """agent 的 session 发生变化后增量刷新该 agent 的索引."""
+        """Incrementally refresh this agent's index after its sessions change."""
         agent = self._agent_factory.agents.get(agent_id)
         if not agent:
             return
-        # 移除该 agent 的旧索引和缓存
+        # remove this agent's old index and cache
         to_remove = [sid for sid, idx in self._index.items()
                      if idx.agent_id == agent_id]
         for sid in to_remove:
             self._index.pop(sid, None)
             self._cache.pop(sid, None)
-        # 重建该 agent 的索引
+        # rebuild this agent's index
         self._index_agent(agent_id, agent)
 
     def _refresh_active_status(self) -> None:
-        """刷新所有 agent 的 is_active 状态,并移除已不存在的 session 索引."""
-        # 收集每个 agent 的当前 active session id
+        """Refresh is_active status for all agents and remove indexes for non-existent sessions."""
+        # collect each agent's current active session id
         active_ids: dict[str, str] = {}
         for agent_id, agent in self._agent_factory.agents.items():
             active_ids[agent_id] = agent.session.id if agent.session else ''
 
-        # 更新 is_active,并检查索引中的 session 目录是否还存在
+        # update is_active and check whether session dirs in index still exist
         stale = []
         for sid, idx in self._index.items():
             idx.is_active = (sid == active_ids.get(idx.agent_id, ''))
@@ -116,11 +116,11 @@ class SessionManager:
             self._cache.pop(sid, None)
 
     # ------------------------------------------------------------------
-    # 列表 & 详情
+    # list & detail
     # ------------------------------------------------------------------
 
     def list_sessions(self, agent_id: str | None = None) -> list[dict]:
-        """返回 session 列表摘要.刷新 is_active 状态后返回."""
+        """Return session list summary. Refreshes is_active status before returning."""
         self._refresh_active_status()
         results = []
         for _sid, idx in self._index.items():
@@ -131,7 +131,7 @@ class SessionManager:
         return results
 
     async def get_session_detail(self, session_id: str) -> dict:
-        """返回 session 详情 + turn 摘要列表."""
+        """Return session detail + turn summary list."""
         idx = self._index.get(session_id)
         if not idx:
             raise NotFoundError(
@@ -169,12 +169,12 @@ class SessionManager:
 
     async def fork_at_turn(self, session_id: str, turn_index: int,
                            target_agent_id: str | None = None) -> dict:
-        """从指定 session 的指定 turn 位置 fork."""
-        # 1. 加载源 session
+        """Fork from a specific turn position of a given session."""
+        # 1. load source session
         source = await self._load_session(session_id)
         src_idx = self._index.get(session_id)
 
-        # 2. 确定 fork 目标
+        # 2. determine fork target
         if target_agent_id:
             agent = self._agent_factory.agents.get(target_agent_id)
             if not agent:
@@ -200,10 +200,10 @@ class SessionManager:
                 f"Session '{session_id}' not found in index",
             )
 
-        # 3. 执行 fork
+        # 3. perform fork
         new_session = source.fork(session_root=fork_root, at=turn_index)
 
-        # 4. 写入 fork 来源信息
+        # 4. write fork source info
         source_agent_id = src_idx.agent_id if src_idx else None
         if source_agent_id and target_agent_id != source_agent_id:
             for turn in new_session.turns:
@@ -213,7 +213,7 @@ class SessionManager:
         new_session.fork_turn_index = turn_index
         new_session.save()
 
-        # 5. 更新索引(新 session 标记为 active)
+        # 5. update index (mark new session as active)
         self._index[new_session.id] = SessionIndex(
             session_id=new_session.id,
             agent_id=target_agent_id,
@@ -226,15 +226,15 @@ class SessionManager:
             session_dir=str(new_session.dir),
         )
 
-        # 5.1 将该 agent 其他 session 标记为非 active
+        # 5.1 mark this agent's other sessions as non-active
         for sid, idx in self._index.items():
             if idx.agent_id == target_agent_id and sid != new_session.id:
                 idx.is_active = False
 
-        # 6. 加入缓存
+        # 6. add to cache
         self._cache_put(new_session.id, new_session)
 
-        # 7. 让目标 agent 切换到新 session
+        # 7. switch target agent to new session
         await self._agent_factory.switch_session(target_agent_id, new_session.id)
 
         return {
@@ -246,18 +246,18 @@ class SessionManager:
         }
 
     # ------------------------------------------------------------------
-    # 删除
+    # delete
     # ------------------------------------------------------------------
 
     def delete_session(self, session_id: str) -> bool:
-        """删除 session(含文件清理)."""
+        """Delete session (including file cleanup)."""
         idx = self._index.get(session_id)
         if not idx:
             raise NotFoundError(
                 ErrorCode.SESSION_NOT_FOUND,
                 f"Session '{session_id}' not found",
             )
-        # 不允许删除当前活跃 session
+        # disallow deleting the currently active session
         if idx.is_active:
             raise ConflictError(
                 ErrorCode.SESSION_SWITCH_FAILED,
@@ -271,11 +271,11 @@ class SessionManager:
         return True
 
     # ------------------------------------------------------------------
-    # 缓存
+    # cache
     # ------------------------------------------------------------------
 
     def _load_session_sync(self, session_id: str) -> Session:
-        """同步加载 Session(用于非 async 上下文)."""
+        """Synchronously load Session (for non-async contexts)."""
         if session_id in self._cache:
             self._cache.move_to_end(session_id)
             return self._cache[session_id]
@@ -290,7 +290,7 @@ class SessionManager:
         return session
 
     async def _load_session(self, session_id: str) -> Session:
-        """带 LRU 缓存的异步加载,用线程池避免阻塞事件循环."""
+        """Async load with LRU cache, uses thread pool to avoid blocking the event loop."""
         if session_id in self._cache:
             self._cache.move_to_end(session_id)
             return self._cache[session_id]
@@ -311,11 +311,11 @@ class SessionManager:
         return session
 
     def _cache_put(self, session_id: str, session: Session) -> None:
-        """放入缓存,超出容量时淘汰最久未访问的非活跃 session."""
+        """Put into cache, evict least-recently-used non-active session when over capacity."""
         self._cache[session_id] = session
         self._cache.move_to_end(session_id)
         while len(self._cache) > self._cache_capacity:
-            # 找到第一个非活跃的 session 淘汰
+            # find the first non-active session to evict
             evicted = False
             for sid in list(self._cache.keys()):
                 si = self._index.get(sid)
@@ -324,16 +324,16 @@ class SessionManager:
                     evicted = True
                     break
             if not evicted:
-                # 全是活跃 session,停止淘汰
+                # all sessions are active, stop eviction
                 break
 
     # ------------------------------------------------------------------
-    # 辅助方法
+    # helper methods
     # ------------------------------------------------------------------
 
     @staticmethod
     def _user_message_preview(turn: Turn) -> str:
-        """提取 turn 中第一条 UserMessage 的文本预览."""
+        """Extract text preview of the first UserMessage in the turn."""
         for msg in turn.messages:
             if isinstance(msg, HumanMessage):
                 return SessionManager._extract_text(msg)[:120]
@@ -348,15 +348,15 @@ class SessionManager:
 
     @staticmethod
     def _parse_md(md_path: Path) -> dict:
-        """读取 session 元数据(只读顶层 key:value,不解析 turns)."""
+        """Read session metadata (only reads top-level key:value, does not parse turns)."""
         text = md_path.read_text(encoding='utf-8')
         result = {}
         for line in text.split('\n'):
             stripped = line.strip()
             if not stripped or stripped.startswith('#'):
-                continue  # 跳过空行和标题
+                continue  # skip blank lines and title
             if stripped == '---' or stripped.startswith('## '):
-                break  # 遇到分隔线或 turn 标题就停止
+                break  # stop at separator lines or turn titles
             if ':' in stripped:
                 key, _, value = stripped.partition(':')
                 result[key.strip()] = value.strip()

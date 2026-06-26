@@ -1068,7 +1068,7 @@ export function TeamGraphView({ width }: { width: number }) {
           <button
             onClick={closeTeamGraph}
             className="p-1 rounded hover:bg-(--color-secondary) text-(--color-ink-3) transition-colors"
-            title="关闭"
+            title="Close"
           >
             <X className="w-4 h-4" />
           </button>

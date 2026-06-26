@@ -112,13 +112,13 @@ class TeamFactory:
             if agent:
                 agents[agent.name] = agent
 
-        # Reconstruct contacts — 直接透传,格式为 {agentName: {otherName: role}}
+        # Reconstruct contacts — pass through directly, format is {agentName: {otherName: role}}
         contacts: dict[str, dict[str, str]] = {}
         for agent_name, contact_dict in raw.get("contacts", {}).items():
             contacts[agent_name] = {
                 other: role
                 for other, role in contact_dict.items()
-                if other != agent_name  # 防御性过滤 self-key
+                if other != agent_name  # defensive filter for self-key
             }
 
         core_config = CoreTeamConfig(
@@ -167,18 +167,18 @@ class TeamFactory:
     # ------------------------------------------------------------------
 
     async def create(self, config: TeamConfig, member_configs: list[AgentConfig] | None = None) -> tuple[AgentTeam, str]:
-        """创建团队.
+        """Create a team.
 
-        流程:
-        1. 生成 team_id
-        2. 通过 AgentFactory 逐个创建成员 Agent(agent 自动落盘到 data/agents/)
-        3. 构建 core AgentTeam 实例
-        4. 落盘 team_config.json
-        失败时回滚已创建的 agent.
+        Flow:
+        1. generate team_id
+        2. create member agents one by one via AgentFactory (agents auto-persist to data/agents/)
+        3. build core AgentTeam instance
+        4. persist team_config.json
+        Rolls back created agents on failure.
         """
         team_id = _next_id()
 
-        # --- 步骤0: 校验 member name 唯一性 ---
+        # --- step 0: validate member name uniqueness ---
         seen_names: set[str] = set()
         for member_cfg in (member_configs or []):
             name = member_cfg.name.strip()
@@ -186,8 +186,8 @@ class TeamFactory:
                 raise ValueError(f"Duplicate member name '{name}' in team '{config.name}'")
             seen_names.add(name)
 
-        # --- 步骤1: 创建成员 Agent ---
-        # team 的 workingDir 是所有 member agent 共享的工作目录
+        # --- step 1: create member agents ---
+        # team's workingDir is the shared working directory for all member agents
         team_working_dir = config.workingDir or ""
         created_agent_ids: list[str] = []
         agents: dict[str, Agent] = {}
@@ -198,19 +198,19 @@ class TeamFactory:
                         update={"workingDir": team_working_dir}
                     )
                 agent = await self._agent_factory.create(member_cfg)
-                # AgentFactory.create() 内部设置了 config.id = agent_id
-                # member_cfg 是引用传递,所以 .id 已被赋值
+                # AgentFactory.create() sets config.id = agent_id internally
+                # member_cfg is passed by reference, so .id has been assigned
                 created_agent_ids.append(member_cfg.id)
                 agents[agent.name] = agent
         except Exception:
-            # 回滚:删除已创建的 agent
+            # rollback: delete already-created agents
             for aid in created_agent_ids:
                 with contextlib.suppress(Exception):
                     await self._agent_factory.delete(aid)
             raise
 
-        # --- 步骤2: 构建 core AgentTeam ---
-        # contacts 格式: {agentName: {otherName: role}},不含 self-key
+        # --- step 2: build core AgentTeam ---
+        # contacts format: {agentName: {otherName: role}}, no self-key
         contacts = config.contacts or {}
 
         core_config = CoreTeamConfig(
@@ -221,7 +221,7 @@ class TeamFactory:
         )
         team = AgentTeam.create(core_config)
 
-        # --- 步骤3: 落盘 team_config.json ---
+        # --- step 3: persist team_config.json ---
         team_dir = self._data_dir / "teams" / team_id / config.name
         team_dir.mkdir(parents=True, exist_ok=True)
         team.base_dir = team_dir
@@ -448,7 +448,7 @@ class TeamFactory:
         if not team:
             return False
 
-        # 级联删除所有 member agents
+        # cascade delete all member agents
         meta = self._team_meta.get(team_id, {})
         member_ids: list[str] = meta.get("memberIds", [])
         for aid in member_ids:
@@ -462,7 +462,7 @@ class TeamFactory:
         self._team_meta.pop(team_id, None)
         self._started.discard(team_id)
         self._dispatchers.pop(team_id, None)
-        # 删除 teams/{id}/ 目录(team.base_dir 的父目录)
+        # delete teams/{id}/ directory (parent of team.base_dir)
         if team.base_dir:
             team_root = team.base_dir.parent
             if team_root.exists():

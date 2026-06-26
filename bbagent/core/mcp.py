@@ -55,7 +55,7 @@ class MCPServerConfig:
             f.write(self.to_json(indent))
 
 # ------------------------------------------------------------
-# MCP JSON-RPC 消息构造辅助函数
+# MCP JSON-RPC message construction helper functions
 # ------------------------------------------------------------
 def make_request(id: int, method: str, params: dict | None = None) -> str:
     req = {
@@ -77,7 +77,7 @@ def make_notification(method: str, params: dict | None = None) -> str:
     return json.dumps(notif)
 
 # ------------------------------------------------------------
-# MCP 客户端类
+# MCP client class
 # ------------------------------------------------------------
 class MCPClient:
     def __init__(self, mcp_server_config: MCPServerConfig, logger: logging.Logger | None = None):
@@ -98,7 +98,7 @@ class MCPClient:
         log_func(msg, extra={"context": context or {}})
 
     async def start(self):
-        """启动 MCP 服务器子进程并开始读取消息"""
+        """Start MCP server subprocess and begin reading messages"""
         self.process = await asyncio.create_subprocess_exec(
             *self.command,
             stdin=subprocess.PIPE,
@@ -110,7 +110,7 @@ class MCPClient:
         self._background_tasks.append(asyncio.create_task(self._read_stderr()))
 
     async def _read_stdout(self):
-        """持续读取服务器 stdout,解析 JSON-RPC 消息"""
+        """Continuously read server stdout, parse JSON-RPC messages"""
         if not self.process or not self.process.stdout:
             return
 
@@ -154,7 +154,7 @@ class MCPClient:
                 break
 
     async def _read_stderr(self):
-        """将服务器 stderr 输出打印到控制台(便于调试)"""
+        """Print server stderr output to console (for debugging)"""
         if not self.process or not self.process.stderr:
             return
         async for line in self.process.stderr:
@@ -171,7 +171,7 @@ class MCPClient:
             self._log(f"Received notification: {method} {params}", level="debug")
 
     async def send_request(self, method: str, params: dict | None = None) -> Any:
-        """发送 JSON-RPC 请求并等待响应"""
+        """Send JSON-RPC request and wait for response"""
         if not self.process or not self.process.stdin:
             raise RuntimeError("Process not started or stdin closed")
 
@@ -184,7 +184,7 @@ class MCPClient:
         self.process.stdin.write((req_str + "\n").encode())
         await self.process.stdin.drain()
 
-        # 等待响应(带超时)
+        # wait for response (with timeout)
         try:
             result = await asyncio.wait_for(future, timeout=30.0)
             return result
@@ -193,7 +193,7 @@ class MCPClient:
             raise TimeoutError(f"Request {method} timed out") from None
 
     async def send_notification(self, method: str, params: dict | None = None):
-        """发送通知(不等待响应)"""
+        """Send notification (without waiting for response)"""
         if not self.process or not self.process.stdin:
             raise RuntimeError("Process not started or stdin closed")
 
@@ -202,26 +202,26 @@ class MCPClient:
         await self.process.stdin.drain()
 
     async def initialize(self):
-        """执行 MCP 初始化握手"""
-        # 1. 发送 initialize 请求
+        """Perform MCP initialization handshake"""
+        # 1. send initialize request
         server_info = await self.send_request("initialize", {
             "protocolVersion": "2024-11-05",
-            "capabilities": {},  # 客户端能力(本例为空)
+            "capabilities": {},  # client capabilities (empty in this case)
             "clientInfo": {
                 "name": self.name,
                 "version": "0.1.0"
             }
         })
 
-        # ⭐ 2. 服务器可能主动推送工具列表,注册 Future 等待
-        # MCP 协议允许服务器在初始化后主动推送
+        # ⭐ 2. server may proactively push tool list, register Future to wait
+        # MCP protocol allows server to proactively push after initialization
         tools_future = asyncio.get_event_loop().create_future()
-        self.pending_requests[2] = tools_future  # 注册 id=2
+        self.pending_requests[2] = tools_future  # register id=2
 
-        # 3. 发送 initialized 通知(握手完成)
+        # 3. send initialized notification (handshake complete)
         await self.send_notification("notifications/initialized")
 
-        # ⭐ 4. 等待服务器主动推送的工具列表(最多等3秒)
+        # ⭐ 4. wait for server-pushed tool list (up to 3 seconds)
         try:
             tools_result = await asyncio.wait_for(tools_future, timeout=3.0)
             if tools_result:
@@ -235,17 +235,17 @@ class MCPClient:
         return server_info
 
     async def list_tools(self) -> list[dict]:
-        """获取服务器提供的工具列表"""
-        # ⭐ 如果初始化时服务器已经推送了工具,直接返回
+        """Get the list of tools provided by the server"""
+        # ⭐ if server already pushed tools during init, return directly
         if self._initial_tools:
             return self._initial_tools
 
-        # 否则发送请求获取
+        # otherwise send request to fetch
         result = await self.send_request("tools/list")
         return result.get("tools", [])
 
     async def call_tool(self, name: str, arguments: dict) -> Any:
-        """调用指定工具"""
+        """Call the specified tool"""
         result = await self.send_request("tools/call", {
             "name": name,
             "arguments": arguments
@@ -253,12 +253,12 @@ class MCPClient:
         return result
 
     async def create_tools(self) -> list:
-        """获取工具列表并包装为 MCPTool 对象"""
+        """Get tool list and wrap as MCPTool objects"""
         tools_data = await self.list_tools()
         return [MCPTool(self, t) for t in tools_data]
 
     async def close(self):
-        """关闭子进程"""
+        """Close subprocess"""
         if self.process:
             for task in self._background_tasks:
                 task.cancel()
@@ -290,8 +290,8 @@ class MCPTool(Tool):
     @staticmethod
     def create_tool_from_config(mcp_client: MCPClient, config: dict[str, Any]):
         """
-        根据工具配置字典生成一个可调用函数.
-        配置格式示例:
+        Generate a callable function from a tool config dict.
+        Config format example:
         {
             "name": "text_to_image",
             "description": "Generate a image from a prompt...",
@@ -304,22 +304,22 @@ class MCPTool(Tool):
                     "prompt_optimizer": {"type": "boolean", "default": True},
                     "output_directory": {"type": "string"}
                 },
-                "required": ["output_directory"]  # 可选,但我们可以从 default 判断
+                "required": ["output_directory"]  # optional, but we can infer from default
             }
         }
-        返回的函数具有:
+        The returned function has:
             - __name__ == config["name"]
             - __doc__ == config["description"]
-            - 参数签名与 inputSchema 一致,并包含正确的默认值
+            - parameter signature matches inputSchema, with correct default values
         """
         func_name = make_safe_mcp_runtime_name(mcp_client.name, config["name"])
         func_doc = config["description"]
         schema = config["inputSchema"]
         properties = schema.get("properties", {})
 
-        # 存储默认值映射
+        # store default value mapping
         defaults = {}
-        # 存储参数类型注解映射(可选,用于增强可读性)
+        # store parameter type annotation mapping (optional, for readability)
         annotations = {}
 
         type_mapping = {
@@ -334,21 +334,21 @@ class MCPTool(Tool):
             param_type = type_mapping.get(param_type_str, str)
             annotations[param_name] = param_type
 
-            # 处理默认值
+            # handle default values
             if "default" in param_info:
                 default_val = param_info["default"]
                 defaults[param_name] = default_val
-                # 有默认值的参数在签名中表示为 param=default
+                # params with defaults are represented as param=default in signature
             else:
-                # 无默认值,必填参数
+                # no default value, required parameter
                 defaults[param_name] = inspect.Parameter.empty
 
-        # 构建 inspect.Parameter 对象
+        # build inspect.Parameter objects
         parameters = []
         for param_name, param_type in annotations.items():
             default = defaults.get(param_name, inspect.Parameter.empty)
-            # 如果参数有默认值,kind 为 POSITIONAL_OR_KEYWORD,否则也是
-            # 注意:我们仅支持位置或关键字参数,简单处理
+            # if param has default, kind is POSITIONAL_OR_KEYWORD, otherwise also
+            # note: we only support positional or keyword params, simple handling
             kind = inspect.Parameter.POSITIONAL_OR_KEYWORD
             param = inspect.Parameter(
                 name=param_name,
@@ -358,11 +358,11 @@ class MCPTool(Tool):
             )
             parameters.append(param)
 
-        # 创建函数签名
+        # create function signature
         sig = inspect.Signature(parameters=parameters)
 
         async def tool_func(*args, **kwargs):
-            # 绑定参数,应用默认值
+            # bind parameters, apply defaults
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
             arguments = bound.arguments
@@ -370,7 +370,7 @@ class MCPTool(Tool):
             result = await mcp_client.call_tool(config["name"], arguments)
             return json.dumps(result)
 
-        # 设置函数元信息
+        # set function metadata
         tool_func.__name__ = func_name
         tool_func.__doc__ = func_doc
         tool_func.__signature__ = sig
@@ -440,10 +440,10 @@ def parse_config_file(file_path: str) -> list[MCPServerConfig]:
 
 
 def load_configs(config_dir: str) -> dict[str, MCPServerConfig]:
-    """扫描目录下所有 JSON 文件,加载符合格式的 MCP 配置
+    """Scan all JSON files in directory, load MCP configs matching the format
 
     Returns:
-        Dict[str, MCPServerConfig]: 以 name 为 key 的配置字典
+        Dict[str, MCPServerConfig]: config dict keyed by name
     """
     result: dict[str, MCPServerConfig] = {}
     if not os.path.isdir(config_dir):

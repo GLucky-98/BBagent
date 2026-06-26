@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
     loaded = len(state_manager.agent_factory.agents)
     logger.info("BBagent API started — %d agent(s) loaded (ready)", loaded)
     yield
-    # 关闭时统一落盘所有 active session 的 metadata
+    # persist metadata for all active sessions on shutdown
     logger.info("BBagent API shutting down — saving sessions")
     agent_factory = state_manager.agent_factory
     for _agent_id, agent in list(agent_factory.agents.items()):

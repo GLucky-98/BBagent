@@ -21,7 +21,7 @@ const TurnDots = memo(function TurnDots({
   const [tooltipVisible, setTooltipVisible] = useState(false);
   const navRef = useRef<HTMLDivElement>(null);
 
-  // 使用 IntersectionObserver 跟踪当前可视区域内的 turn（替代 scroll 事件 O(n) DOM 查询）
+  // use IntersectionObserver to track turns in the visible area (replaces scroll event O(n) DOM queries)
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el || turns.length === 0) return;
@@ -51,7 +51,7 @@ const TurnDots = memo(function TurnDots({
       { root: el, rootMargin: '-60px 0px 0px 0px', threshold: 0 }
     );
 
-    // 观察所有 turn 元素
+    // observe all turn elements
     const targets: Element[] = [];
     for (let i = 0; i < turns.length; i++) {
       const turnEl = el.querySelector(`[data-message-id="${turns[i].id}"]`);
@@ -61,7 +61,7 @@ const TurnDots = memo(function TurnDots({
       }
     }
 
-    // 初始计算
+    // initial calculation
     requestAnimationFrame(() => {
       const containerRect = el.getBoundingClientRect();
       for (let i = 0; i < turns.length; i++) {
@@ -294,7 +294,7 @@ const GroupSection = memo(function GroupSection({
     );
   }
 
-  // ── Thinking: 斜体标签 + Brain 图标，保持灰色调但用虚线边框区分 ──
+  // ── Thinking: italic label + Brain icon, keep gray tones but distinguish with dashed border ──
   if (msg.chunkType === "thinking") {
     return (
       <div className={cn("my-2 rounded-lg border border-dashed border-(--color-border) bg-(--color-tint) min-w-0", showDivider && "mt-2")}>
@@ -319,7 +319,7 @@ const GroupSection = memo(function GroupSection({
     );
   }
 
-  // ── Tool Use: Wrench 图标 + 工具名高亮 + 参数摘要 ──
+  // ── Tool Use: Wrench icon + tool name highlight + parameter summary ──
   if (msg.chunkType === "tool_use") {
     const toolInput = msg.toolInput || {};
     const inputKeys = Object.keys(toolInput);
@@ -357,7 +357,7 @@ const GroupSection = memo(function GroupSection({
     );
   }
 
-  // ── Tool Result: FileText 图标 + 工具名 ──
+  // ── Tool Result: FileText icon + tool name ──
   if (msg.chunkType === "tool_result") {
     const displayContent = msg.content || "";
 
@@ -546,7 +546,7 @@ export function ChatWindow() {
   };
   const messages = selectedAgent?.messages || EMPTY_MESSAGES;
 
-  // 提取所有 turn（每轮对话由一个 user message 或 input_event 开始）
+  // extract all turns (each conversation turn starts with a user message or input_event)
   const turns = useMemo(() => {
     return messages.filter(
       (m) => m.role === "user" || m.chunkType === "input_event"
@@ -568,7 +568,7 @@ export function ChatWindow() {
 
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior }); };
 
-  // 检测用户是否主动向上滚动
+  // detect if user actively scrolled up
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -580,12 +580,12 @@ export function ChatWindow() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // 仅在非用户主动滚动时自动滚底
+  // only auto-scroll to bottom when not user-active scrolling
   useEffect(() => {
     if (!isUserScrollingRef.current) scrollToBottom();
   }, [selectedAgent?.messages]);
 
-  // ── 注册 onWsChunk：由 useGlobalAgentState 的 shared WS 统一下发非 agent_state 消息 ──
+  // ── register onWsChunk: non-agent_state messages are dispatched uniformly by useGlobalAgentState's shared WS ──
 
   useEffect(() => {
     const handler = (chunk: Record<string, unknown>) => {
@@ -661,7 +661,7 @@ export function ChatWindow() {
         const results = chunk.content;
         if (Array.isArray(results)) {
           for (const r of results) {
-            // ToolMessage 经过 _make_serializable 后是 dict: {role, id, name, content, timestamp}
+            // ToolMessage after _make_serializable is a dict: {role, id, name, content, timestamp}
             const rDict = r as Record<string, unknown>;
             const toolName = (rDict.name as string) || "";
             const rawContent = rDict.content;
@@ -769,10 +769,10 @@ export function ChatWindow() {
           sourceAgent: sourceTag || undefined,
         });
       } else if (chunk.type === "stream_chunk" && chunk.chunk_type === "completed_message") {
-        // 用 completed_message 中的最终完整内容替换流式拼接的消息
+        // replace streaming concatenated message with final complete content from completed_message
         const completedMsg = chunk.content as Record<string, unknown> | undefined;
         if (completedMsg && currentAssistantMsgIdRef.current) {
-          // 提取最终文本内容
+          // extract final text content
           const rawContent = completedMsg.content;
           let finalContent: string;
           if (typeof rawContent === "string") {
@@ -788,7 +788,7 @@ export function ChatWindow() {
           } else {
             finalContent = streamBufferRef.current;
           }
-          // 用最终内容替换流式消息（确保 markdown 渲染完整）
+          // replace streaming message with final content (ensure markdown renders completely)
           if (finalContent) {
             flushSync(() => patchMessage(agentId, currentAssistantMsgIdRef.current!, { content: finalContent }));
           }
@@ -847,14 +847,14 @@ export function ChatWindow() {
     // loadAgentMessages() replaces the entire message list — if replay chunks
     // arrive before HTTP completes, they will be wiped by the replacement.
     const init = async () => {
-      // 主动拉取一次 agent 当前状态，确保切换后立即显示正确状态
+      // actively fetch agent's current state to ensure correct state displays immediately after switch
       try {
         const stateInfo = await api.getAgentState(id);
         if (stateInfo?.state) {
           setAgentState(id, stateInfo.state as "ready" | "waiting" | "running" | "error");
         }
       } catch {
-        // 静默失败，WS switched 消息会兜底
+        // silent failure, WS switched message will cover it
       }
 
       await loadAgentMessages(id);

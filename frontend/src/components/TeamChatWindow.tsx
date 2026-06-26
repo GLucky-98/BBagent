@@ -139,7 +139,7 @@ export function TeamChatWindow() {
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "instant" }); };
   useEffect(() => { scrollToBottom(); }, [messages]);
 
-  // 点击外部关闭下拉
+  // close dropdown on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -150,7 +150,7 @@ export function TeamChatWindow() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // 加载历史消息
+  // load history messages
   useEffect(() => {
     if (!teamId) return;
     loadTeamConversations(teamId);
@@ -346,7 +346,7 @@ export function TeamChatWindow() {
       </div>
       <div className="px-8 py-4 border-t border-(--color-rule-soft) bg-(--color-background)">
         <div className="max-w-[720px] mx-auto">
-          {/* 已选 agent tags */}
+          {/* selected agent tags */}
           {selectedAgents.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 mb-2">
               {selectedAgents.map((name) => (
@@ -367,7 +367,7 @@ export function TeamChatWindow() {
             </div>
           )}
           <div className="flex items-end gap-2 bg-(--color-tint) border border-(--color-border) rounded-xl p-2.5 transition-all focus-within:bg-white focus-within:border-(--color-primary) focus-within:shadow-[0_0_0_3px_rgba(0,102,204,0.12)]">
-            {/* Agent 选择下拉 */}
+            {/* Agent selection dropdown */}
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setShowDropdown(!showDropdown)}
@@ -389,7 +389,7 @@ export function TeamChatWindow() {
               </button>
               {showDropdown && (
                 <div className="absolute bottom-full left-0 mb-1 w-52 bg-(--color-popover) rounded-xl shadow-[0_4px_16px_rgba(0,0,0,0.08)] border border-(--color-border) z-50">
-                  {/* 全选 */}
+                  {/* select all */}
                   <button
                     onClick={selectAll}
                     className="w-full text-left px-3 py-2 text-[13px] hover:bg-(--color-secondary) flex items-center gap-2 border-b border-(--color-rule-soft)"
@@ -425,7 +425,7 @@ export function TeamChatWindow() {
                 </div>
               )}
             </div>
-            {/* 输入框 */}
+            {/* input box */}
             <textarea
               ref={inputRef}
               value={input}

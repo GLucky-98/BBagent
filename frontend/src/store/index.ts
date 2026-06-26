@@ -452,8 +452,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => {
         const existing = state.teamMessages[teamId] || [];
         const httpMsgs = normalizeTeamMessages(messages || []);
-        // 合并策略：HTTP 消息为基准，保留在此期间通过 WS 实时到达的更新消息
-        // （timestamp > HTTP 最新消息的时间戳，说明是 HTTP 请求期间 WS 推送的）
+        // merge strategy: HTTP messages as baseline, keep WS real-time updates that arrived during this period
+        // (timestamp > HTTP latest message timestamp means pushed by WS during HTTP request)
         const latestHttpTs = httpMsgs.length > 0 ? httpMsgs[httpMsgs.length - 1].timestamp : 0;
         const wsOnly = existing.filter((m) => m.timestamp > latestHttpTs);
         return {
@@ -1047,7 +1047,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({
         agents: s.agents.map((a) =>
           a.id === id ? { ...a, messages: messages.map((m: Record<string, unknown>, i: number) => {
-            // content 可能是 string 或 list[dict]（后端 TextBlock 列表），统一转为 string
+            // content may be string or list[dict] (backend TextBlock list), unify to string
             let contentStr: string;
             const raw = m.content;
             if (typeof raw === "string") {
@@ -1486,7 +1486,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const result = await api.forkSession(sessionId, turnIndex, targetAgentId);
       get().addToast(`Forked to new session: ${result.sessionId?.substring(0, 16)}...`, "info");
-      // 后端已切换 agent 到新 session，前端刷新消息和 session 列表
+      // backend has switched agent to new session, frontend refreshes messages and session list
       const activeId = get().activeAgentId;
       if (activeId) {
         await get().loadAgentMessages(activeId);
@@ -1519,7 +1519,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleSessionPanel: () => {
     set((s) => {
       const next = !s.sessionPanelOpen;
-      // 打开 session 面板时关闭文件预览，反之亦然
+      // close file preview when opening session panel, and vice versa
       return {
         sessionPanelOpen: next,
         previewFile: next ? null : s.previewFile,

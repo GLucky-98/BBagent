@@ -26,7 +26,7 @@ class HookType(Enum):
 
 
 class HookContext:
-    """Hook 与 Agent 之间的数据桥梁"""
+    """Data bridge between Hook and Agent"""
 
     def __init__(self):
         self.agent = None
@@ -92,7 +92,7 @@ class AgentHook:
         self.context.agent = agent
 
     def hook(self, hook_type: HookType, priority: int | None = None, critical: bool = False):
-        """装饰器:注册 Hook"""
+        """Decorator: register Hook"""
         if priority is None:
             priority = self.DEFAULT_PRIORITY
 
@@ -110,7 +110,7 @@ class AgentHook:
 
     def register(self, hook_type: HookType, func: Callable,
                  priority: int | None = None, critical: bool = False):
-        """函数方式注册 Hook"""
+        """Register Hook via function"""
         if priority is None:
             priority = self.DEFAULT_PRIORITY
 
@@ -123,7 +123,7 @@ class AgentHook:
         self._register(h)
 
     def unregister(self, hook_type: HookType, name: str | None = None):
-        """注销 Hook,不指定 name 则注销该类型下的所有 Hook"""
+        """Unregister Hook, if name not specified unregister all Hooks of that type"""
         if name is None:
             self._hooks[hook_type] = []
         else:

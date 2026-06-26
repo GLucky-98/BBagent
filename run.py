@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-BBagent 一键启动脚本
-用法: python run.py
+BBagent one-click start script
+Usage: python run.py
 """
 import argparse
 import os

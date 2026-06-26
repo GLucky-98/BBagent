@@ -21,8 +21,8 @@ function App() {
   const closeSettings = useAppStore((s) => s.closeSettings);
   const settingsActiveTab = useAppStore((s) => s.settingsActiveTab);
 
-  // 全局 agent_state 监听：必须在 App 级别始终存活，确保
-  // 未选中 tab 时的 start/stop 操作也能更新指示灯和按钮状态。
+  // global agent_state listener: must stay alive at App level to ensure
+  // start/stop operations update indicator and button states even when no tab is selected.
   useGlobalAgentState();
 
   useEffect(() => {

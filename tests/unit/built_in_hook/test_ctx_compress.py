@@ -111,7 +111,7 @@ async def test_compress_runs_when_multiple_turns_exist(tmp_path):
     session = Session.create(tmp_path)
     for i in range(3):
         add_complete_turn(session, f"q{i}", f"a{i}")
-    # 设置高的 token count 以触发压缩
+    # set high token count to trigger compression
     for turn in session.turns:
         turn.token_count = 100_000
     session.save()

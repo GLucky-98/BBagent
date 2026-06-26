@@ -373,7 +373,7 @@ class Session:
         self.total_output_cost_tokens = 0
         self._prev_context_total: int = 0
 
-        # Fork 来源追踪
+        # Fork source tracking
         self.parent_session_id: str = ''
         self.fork_turn_index: int = -1
 
@@ -417,19 +417,19 @@ class Session:
         return session
 
     def fork(self, session_root: str | Path | None = None, at: int | None = None) -> 'Session':
-        """基于当前 Session 创建一个独立的副本 Session.
+        """Create an independent copy Session based on the current Session.
 
         Args:
-            session_root: fork 副本的根目录;None 时使用默认的 {self.dir}/fork
-            at: 复制到第几个 turn(含).None 表示复制所有 turn;
-                支持负数索引(-1 表示最后一个 turn).
+            session_root: root directory of the fork copy; when None, defaults to {self.dir}/fork
+            at: copy up to which turn (inclusive). None means copy all turns;
+                supports negative indexing (-1 means the last turn).
 
         Returns:
-            与原 Session 完全独立的新 Session 实例.
+            A new Session instance fully independent from the original.
 
         Raises:
-            IndexError: at 越界或 session 没有任何 turn
-            ValueError: 纯内存 session(dir=None)无法 fork
+            IndexError: at out of range or session has no turns
+            ValueError: pure in-memory session (dir=None) cannot be forked
         """
         n = len(self.turns)
         if at is not None:

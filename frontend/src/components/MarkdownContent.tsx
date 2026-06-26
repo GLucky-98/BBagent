@@ -16,7 +16,7 @@ function extractText(children: React.ReactNode): string {
   return "";
 }
 
-// ── prism-react-renderer 支持的语言列表 ──
+// ── prism-react-renderer supported language list ──
 const SUPPORTED_LANGUAGES = new Set([
   "text", "bash", "c", "clike", "cpp", "css", "dart", "diff", "go", "graphql",
   "ini", "java", "javascript", "json", "kotlin", "latex", "less", "lua",
@@ -26,7 +26,7 @@ const SUPPORTED_LANGUAGES = new Set([
   "wasm", "yaml", "zig",
 ]);
 
-// 语言别名映射（常见别名 → 支持的语言名）
+// language alias mapping (common aliases → supported language names)
 const LANGUAGE_ALIASES: Record<string, string> = {
   sh: "bash", shell: "bash", zsh: "bash", fish: "bash",
   js: "javascript", ts: "typescript", jsx: "tsx", py: "python",
@@ -72,7 +72,7 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language: string
   );
 });
 
-// ── 修复流式 Markdown 中未闭合的代码块 ──
+// ── fix unclosed code blocks in streaming Markdown ──
 function fixStreamingMarkdown(content: string): string {
   const lines = content.split('\n');
   let fenceCount = 0;
@@ -88,30 +88,30 @@ function fixStreamingMarkdown(content: string): string {
   return content;
 }
 
-// ── 预处理：修复 LLM 输出的非标准 Markdown 语法 ──
-// LLM（尤其是中文场景）常省略 Markdown 标记后的必需空格，导致解析失败。
-// 例如：`##标题` → `## 标题`，`-列表项` → `- 列表项`，`1.条目` → `1. 条目`
+// ── preprocess: fix non-standard Markdown syntax from LLM output ──
+// LLM (especially in Chinese contexts) often omits required spaces after Markdown markers, causing parse failures.
+// e.g. `##Title` → `## Title`, `-listitem` → `- listitem`, `1.item` → `1. item`
 //
-// 同时将字面量转义序列（\n, \t）转为真实字符，防止 JSON 双编码导致换行丢失。
+// Also converts literal escape sequences (\n, \t) to real characters, preventing line break loss from JSON double-encoding.
 function normalizeMarkdown(content: string): string {
   return content
-    // 1. 将字面量 \n, \t 转为真实字符
+    // 1. convert literal \n, \t to real characters
     .replace(/\\n/g, '\n')
     .replace(/\\t/g, '\t')
-    // 2. 逐行修复 Markdown 标记缺少空格的问题
+    // 2. fix Markdown markers missing spaces line by line
     .split('\n')
     .map((line) => {
-      // 修复标题缺少空格：##text → ## text（## 后面紧跟非空格、非#字符）
+      // fix heading missing space: ##text → ## text (## followed by non-space, non-# char)
       const headingMatch = line.match(/^(#{1,6})([^\s#])/);
       if (headingMatch) {
         return headingMatch[1] + ' ' + headingMatch[2] + line.slice(headingMatch[0].length);
       }
-      // 修复无序列表缺少空格：-text → - text（但不匹配 ---, --text 等分隔线）
+      // fix unordered list missing space: -text → - text (but does not match ---, --text etc. separators)
       const ulMatch = line.match(/^([-*+])([^\s\-*+])/);
       if (ulMatch) {
         return ulMatch[1] + ' ' + ulMatch[2] + line.slice(ulMatch[0].length);
       }
-      // 修复有序列表缺少空格：1.text → 1. text
+      // fix ordered list missing space: 1.text → 1. text
       const olMatch = line.match(/^(\d+\.)([^\s])/);
       if (olMatch) {
         return olMatch[1] + ' ' + olMatch[2] + line.slice(olMatch[0].length);
@@ -158,17 +158,17 @@ export const MarkdownContent = memo(function MarkdownContent({
           },
           code: ({ className, children }) => {
             const codeText = extractText(children);
-            // 有 language- 前缀 → 指定了语言的代码块
+            // has language- prefix → code block with specified language
             if (className && className.includes("language-")) {
               const language = className.replace("language-", "").trim();
               const codeContent = codeText.replace(/\n$/, "");
               return <CodeBlock language={language} code={codeContent} />;
             }
-            // 包含换行 → 没有指定语言的围栏代码块（```\n...\n```），不是行内代码
+            // contains newline → fenced code block without specified language (```\n...\n```), not inline code
             if (codeText.includes('\n')) {
               return <CodeBlock language="" code={codeText.replace(/\n$/, "")} />;
             }
-            // 行内代码
+            // inline code
             return (
               <code className="px-1.5 py-0.5 rounded bg-(--color-tint) text-(--color-foreground) text-[12.5px] font-mono border border-(--color-border) whitespace-nowrap">
                 {children}

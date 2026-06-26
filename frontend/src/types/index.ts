@@ -13,12 +13,12 @@ export interface Model {
   thinking?: boolean;
 }
 
-// Tool 同时表示内置工具和 MCP 工具（unified-id 设计）：
-// - id: 唯一 template_id（UUID）。前端用作 React key 和 agent.toolIds 的存储值
-// - name: builtin 为短名（如 'bash'），MCP 工具为 rawName
-// - source: 工具来源 ("built_in" | "mcp" | "hook" | "team")
-// - mcpServerId: 仅 MCP 工具设置，引用 MCPServerConfig.id
-// - mcpServerName: 仅 UI 分组用，引用 MCPServerConfig.name（不用于路由）
+// Tool represents both built-in tools and MCP tools (unified-id design):
+// - id: unique template_id (UUID). Frontend uses as React key and storage value for agent.toolIds
+// - name: builtin is short name (e.g. 'bash'), MCP tool is rawName
+// - source: tool source ("built_in" | "mcp" | "hook" | "team")
+// - mcpServerId: only set for MCP tools, references MCPServerConfig.id
+// - mcpServerName: only for UI grouping, references MCPServerConfig.name (not used for routing)
 export interface Tool {
   id: string;
   name: string;
@@ -65,7 +65,7 @@ export interface Message {
   runtime?: boolean;
 }
 
-// Team 聊天消息，对应后端 TeamMessage
+// Team chat message, corresponds to backend TeamMessage
 export interface TeamChatMessage {
   fromAgent: string;
   toAgent: string;
@@ -118,7 +118,7 @@ export interface ToolPolicy {
 
 // === Agent runtime types (discriminated union) ===
 
-// 共有运行时字段
+// shared runtime fields
 interface AgentBase {
   id: string;
   name: string;
@@ -128,7 +128,7 @@ interface AgentBase {
   currentSessionId: string;
 }
 
-// Single Agent 运行时类型
+// Single Agent runtime type
 export interface SingleAgent extends AgentBase {
   type: "single";
   baseDir: string;
@@ -142,7 +142,7 @@ export interface SingleAgent extends AgentBase {
   toolPolicy: ToolPolicy;
 }
 
-// Team 运行时类型
+// Team runtime type
 export interface Team extends AgentBase {
   type: "team";
   baseDir: string;
@@ -152,10 +152,10 @@ export interface Team extends AgentBase {
   contacts: Record<string, Record<string, string>>;
 }
 
-// 可辨识联合
+// discriminated union
 export type Agent = SingleAgent | Team;
 
-// 类型守卫
+// type guards
 export function isSingleAgent(agent: Agent): agent is SingleAgent {
   return agent.type === "single";
 }
@@ -166,7 +166,7 @@ export function isTeam(agent: Agent): agent is Team {
 
 // === API Payload types ===
 
-// 创建 Single Agent 的请求体
+// request body to create a Single Agent
 export interface CreateAgentPayload {
   name: string;
   modelId: string;
@@ -179,7 +179,7 @@ export interface CreateAgentPayload {
   toolPolicy: ToolPolicy;
 }
 
-// 创建 Team 的请求体（包含 member 配置列表）
+// request body to create a Team (includes member config list)
 export interface CreateTeamPayload {
   name: string;
   teamDescription: string;
@@ -188,7 +188,7 @@ export interface CreateTeamPayload {
   contacts: Record<string, Record<string, string>>;
 }
 
-// 更新 payload（所有字段可选）
+// update payload (all fields optional)
 export type UpdateAgentPayload = Partial<CreateAgentPayload>;
 export type UpdateTeamPayload = Partial<CreateTeamPayload> & {
   deleteRemovedMemberIds?: string[];
@@ -248,7 +248,7 @@ export type SettingsTab = "models" | "skills" | "mcps" | "prompts";
 
 // === Global Session Manager types ===
 
-// 全局 session 索引（对应 GET /api/sessions 返回的 SessionIndex）
+// global session index (corresponds to SessionIndex returned by GET /api/sessions)
 export interface GlobalSessionIndex {
   session_id: string;
   agent_id: string;
@@ -260,7 +260,7 @@ export interface GlobalSessionIndex {
   fork_turn_index: number;
 }
 
-// Session 详情（对应 GET /api/sessions/{id}）
+// session detail (corresponds to GET /api/sessions/{id})
 export interface SessionDetail {
   sessionId: string;
   agentId: string;
@@ -272,7 +272,7 @@ export interface SessionDetail {
   turns: TurnInfo[];
 }
 
-// Turn 信息
+// Turn info
 export interface TurnInfo {
   index: number;
   userMessage: string;

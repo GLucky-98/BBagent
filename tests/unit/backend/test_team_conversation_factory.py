@@ -142,7 +142,7 @@ def test_record_message_appends_to_active_conversation(tmp_path):
 
     manager.record_message(team, msg.to_dict())
 
-    # 通过 conversation_id 从文件直接读取
+    # read directly from file via conversation_id
     messages = manager.get_messages(team, active["id"])
     assert len(messages) == 1
     assert messages[0]["from_agent"] == "Alice"
@@ -176,9 +176,9 @@ def test_assert_member_session_switch_allowed_when_team_ready(tmp_path):
     manager = TeamConversationManager(agent_factory)
     team = make_team(tmp_path, agent_factory)
 
-    # 不应抛出异常
+    # should not raise
     manager.assert_member_session_switch_allowed(team, "agent-a")
-    # update_state 被内部调用,两个 agent 都是 idle 状态
+    # update_state called internally, both agents are idle
     assert team.state == "ready"
 
 
@@ -187,9 +187,9 @@ def test_assert_member_session_switch_allowed_raises_when_agent_running_in_conve
     manager = TeamConversationManager(agent_factory)
     team = make_team(tmp_path, agent_factory)
 
-    # 令 team 进入 running 状态
+    # make team enter running state
     team.agents["Alice"].state = "running"
-    # 创建一个活跃 conversation,Alice 在其中
+    # create an active conversation, Alice is in it
     active = manager.ensure_loaded("team-1", team)
     active["memberSessions"] = {"Alice": "session-alice"}
 
@@ -203,7 +203,7 @@ async def test_create_conversation_fails_when_team_not_ready(tmp_path):
     manager = TeamConversationManager(agent_factory)
     team = make_team(tmp_path, agent_factory)
 
-    # 让成员 agent 处于 running 状态 → update_state() 推导为 running
+    # make member agent running → update_state() derives as running
     team.agents["Alice"].state = "running"
 
     with pytest.raises(ConflictError, match="not ready"):

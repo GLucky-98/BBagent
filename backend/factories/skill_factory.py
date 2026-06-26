@@ -1,7 +1,7 @@
 """SkillFactory — manages SkillConfig CRUD and Skill instance cache.
 
-每个 SkillConfig 持久化为 data/skills/{id}.json。
-Skill 实例采用懒加载: import 时 scan 直接实例化, load 从 JSON 恢复后通过 get_instance 按需创建。
+Each SkillConfig is persisted as data/skills/{id}.json.
+Skill instances use lazy loading: on import scan directly instantiates, on load restores from JSON then get_instance creates on demand.
 """
 
 import json
@@ -41,7 +41,7 @@ class SkillFactory:
 
     @staticmethod
     def _load_single_skill(skill_dir: Path) -> Skill | None:
-        """从单个 skill 目录加载 Skill 实例。"""
+        """Load Skill instance from a single skill directory."""
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
             return None
@@ -59,7 +59,7 @@ class SkillFactory:
     # --- load ---
 
     def load(self):
-        """从 data/skills/*.json 恢复所有 SkillConfig。Skill 实例后续懒加载。"""
+        """Restore all SkillConfigs from data/skills/*.json. Skill instances lazy-loaded afterwards."""
         skills_dir = self._skills_dir()
         self._configs = {}
         self._instances = {}
@@ -81,7 +81,7 @@ class SkillFactory:
         return self._configs.get(skill_id)
 
     def get_instance(self, skill_id: str) -> Skill | None:
-        """获取 Skill 运行时实例。首次调用时从源目录懒加载并缓存。"""
+        """Get Skill runtime instance. Lazy-loads from source directory on first call and caches."""
         if skill_id in self._instances:
             return self._instances[skill_id]
 
@@ -108,10 +108,10 @@ class SkillFactory:
     # --- import ---
 
     def import_dir(self, dir_path: Path) -> tuple[list[SkillConfig], list[str]]:
-        """扫描目录, 生成 SkillConfig 并落盘, 同时创建 Skill 实例缓存。
+        """Scan directory, generate SkillConfig and persist, also create Skill instance cache.
 
         Returns:
-            (added, skipped): imported configs 和已存在被跳过的 skill name 列表。
+            (added, skipped): imported configs and list of already-existing skipped skill names.
         """
         scanned = scan_skills(dir_path)
         added: list[SkillConfig] = []
@@ -141,7 +141,7 @@ class SkillFactory:
     # --- delete ---
 
     def delete(self, skill_id: str) -> bool:
-        """删除单个 SkillConfig 和对应的缓存 Skill 实例。"""
+        """Delete a single SkillConfig and its cached Skill instance."""
         if skill_id not in self._configs:
             return False
         del self._configs[skill_id]
@@ -152,7 +152,7 @@ class SkillFactory:
     # --- refresh ---
 
     def refresh(self, skill_id: str) -> SkillConfig | None:
-        """重新从源文件加载 skill 并更新 config + 清除实例缓存。"""
+        """Reload skill from source file and update config + clear instance cache."""
         config = self._configs.get(skill_id)
         if not config:
             return None

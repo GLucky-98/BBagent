@@ -20,7 +20,7 @@ class ModelConfig(BaseModel):
 
     @property
     def core_dict(self) -> dict:
-        """转换为 Model.from_config_dict() 所需格式"""
+        """Convert to format required by Model.from_config_dict()"""
         return {
             "provider": self.provider,
             "model": self.modelName,

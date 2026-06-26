@@ -259,16 +259,16 @@ class Agent:
     # Timer Management
     # ========================================================================
     def add_timer(self, seconds: float, name: str = "", hint: str = "") -> None:
-        """添加间隔触发的定时任务"""
+        """Add interval-triggered timer task"""
         self.input.every(seconds, name, hint)
 
     def add_at_timer(self, time_str: str, name: str = "", hint: str = "") -> None:
-        """添加时间点触发的定时任务
+        """Add time-point-triggered timer task
 
         Args:
-            time_str: 时间字符串,格式为 "HH:MM" 或 "HH:MM:SS"
-            name: 任务名称
-            hint: 任务提示
+            time_str: time string, format is "HH:MM" or "HH:MM:SS"
+            name: task name
+            hint: task hint
         """
         self.input.at(time_str, name, hint)
 
@@ -276,15 +276,15 @@ class Agent:
         return self.input.list_timers()
 
     def update_timer(self, name: str, seconds: float | None = None, time_str: str | None = None, hint: str | None = None) -> bool:
-        """更新定时任务配置
+        """Update timer configuration
 
         Args:
-            name: 任务名称
-            seconds: 新的间隔秒数(间隔触发任务)
-            time_str: 新的时间点(时间点触发任务)
-            hint: 新的任务提示
+            name: task name
+            seconds: new interval seconds (interval-triggered task)
+            time_str: new time point (time-point-triggered task)
+            hint: new task hint
         """
-        # 查找间隔配置
+        # find interval config
         for s, n, h in self.input._interval_configs:
             if n == name:
                 new_seconds = seconds if seconds is not None else s
@@ -292,7 +292,7 @@ class Agent:
                 self.input.every(new_seconds, name, new_hint)
                 return True
 
-        # 查找时间点配置
+        # find time-point config
         for t, n, h in self.input._at_configs:
             if n == name:
                 new_time = time_str if time_str is not None else t
@@ -353,7 +353,7 @@ class Agent:
         self.add_tools([load_skill])
 
     def _load_skill_prompt(self):
-        """从 skills.md 加载技能提示词,文件不存在时使用默认值"""
+        """Load skill prompts from skills.md, uses default value if file does not exist"""
         if not self.skills:
             return ''
         skill_system_prompt = ["""You have access to the following skills. When you need to use a specific skill, call the `load_skill` tool with the skill name to get its full capabilities, usage instructions, and detailed behavior.
@@ -371,7 +371,7 @@ Your available skills are:
         self.set_runtime_prompt("skills", self._load_skill_prompt(), order=40)
 
     def remove_skills(self, skill_names: list[str]):
-        """移除指定名称的 skills,并刷新 runtime skill prompt."""
+        """Remove skills with specified names, and refresh runtime skill prompt."""
         if not skill_names:
             return
         for name in skill_names:
@@ -797,7 +797,7 @@ Your available skills are:
             await self.input.stop()
 
     # ========================================================================
-    # 输出回调
+    # output callback
     # ========================================================================
     def on_output(self, callback: Callable):
         self._output_callback = callback
@@ -822,7 +822,7 @@ Your available skills are:
         * ``{"type": "event", "event_type": "agent_input", "source_id": str, "content": str}``
         * ``{"type": "event", "event_type": "interrupted", "content": str}``
         * ``{"type": "event", "event_type": "agent_state", "state": AgentState}`` —
-          当 ``self.session`` 存在时会被自动附加 ``"context_tokens": int`` 字段
+          when ``self.session`` exists, ``"context_tokens": int`` field is automatically appended
         * ``{"type": "event", "event_type": "error", "content": str}``
         """
         if chunk.get("event_type") == "agent_state" and self.session:
@@ -906,7 +906,7 @@ Your available skills are:
         self.skill_prompt += new_prompt
 
     def remove_skills(self, skill_names: list[str]):
-        """移除指定名称的 skills,并刷新 skill_prompt."""
+        """Remove skills with specified names, and refresh skill_prompt."""
         if not skill_names:
             return
         for name in skill_names:

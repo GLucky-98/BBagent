@@ -276,7 +276,7 @@ def test_setup_todo_sets_runtime_prompt_without_changing_base_system_prompt(tmp_
 
 @pytest.mark.asyncio
 async def test_interval_throttles_unchanged_todo():
-    """未变化的 todo 按 interval 节流, interval=3 时第 4 次 stream 注入."""
+    """Unchanged todo is throttled by interval, injects on 4th stream when interval=3."""
     manager = TodoManager()
     runtime = TodoRuntime()
     manager.create_list(
@@ -295,22 +295,22 @@ async def test_interval_throttles_unchanged_todo():
     session.turns = [Turn(messages=[HumanMessage(content="continue")])]
     ctx.agent = FakeAgent(session)
 
-    # 第 1 次 BEFORE_STREAM: counter 1, 1 <= 3, 不注入
+    # 1st BEFORE_STREAM: counter 1, 1 <= 3, no injection
     await remind_before_stream(ctx)
     assert runtime.stream_count_since_inject == 1
     assert _text_blocks(session.turns[-1].messages[-1])[0].text == "continue"
 
-    # 第 2 次 BEFORE_STREAM: counter 2, 2 <= 3, 不注入
+    # 2nd BEFORE_STREAM: counter 2, 2 <= 3, no injection
     await remind_before_stream(ctx)
     assert runtime.stream_count_since_inject == 2
     assert _text_blocks(session.turns[-1].messages[-1])[0].text == "continue"
 
-    # 第 3 次 BEFORE_STREAM: counter 3, 3 <= 3, 不注入
+    # 3rd BEFORE_STREAM: counter 3, 3 <= 3, no injection
     await remind_before_stream(ctx)
     assert runtime.stream_count_since_inject == 3
     assert _text_blocks(session.turns[-1].messages[-1])[0].text == "continue"
 
-    # 第 4 次 BEFORE_STREAM: counter 4, 4 > 3, 注入并清零
+    # 4th BEFORE_STREAM: counter 4, 4 > 3, inject and reset
     await remind_before_stream(ctx)
     blocks = _text_blocks(session.turns[-1].messages[-1])
     assert blocks[0].text.startswith("[Current Todo List]")
@@ -369,7 +369,7 @@ async def test_todo_tool_results_reset_before_stream_counter():
 
 @pytest.mark.asyncio
 async def test_no_active_todo_no_injection():
-    """无 active todo 时不注入, stream counter 被清零."""
+    """No injection when there is no active todo, stream counter is reset."""
     manager = TodoManager()
     runtime = TodoRuntime()
     runtime.stream_count_since_inject = 3

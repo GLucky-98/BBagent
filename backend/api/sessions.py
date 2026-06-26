@@ -1,7 +1,7 @@
-"""全局 Session 管理 API.
+"""Global Session management API.
 
-提供跨 agent 的 session 列表、详情、fork、删除等操作.
-现有 Agent 级 session API(GET /api/agents/{id}/sessions)保持不变.
+Provides cross-agent session list, detail, fork, delete operations.
+Existing Agent-level session API (GET /api/agents/{id}/sessions) remains unchanged.
 """
 
 from fastapi import APIRouter, HTTPException, Query
@@ -15,13 +15,13 @@ router = APIRouter()
 
 @router.get("")
 async def list_sessions(agent_id: str = Query(default=None)):
-    """全局 session 列表,支持按 agent 过滤."""
+    """Global session list, supports filtering by agent."""
     return state_manager.list_all_sessions(agent_id=agent_id)
 
 
 @router.get("/{session_id}")
 async def get_session_detail(session_id: str):
-    """session 详情 + turn 摘要列表."""
+    """session detail + turn summary list."""
     try:
         return await state_manager.get_session_detail(session_id)
     except AppError as e:
@@ -30,7 +30,7 @@ async def get_session_detail(session_id: str):
 
 @router.post("/{session_id}/fork")
 async def fork_session(session_id: str, body: SessionForkRequest):
-    """从指定 turn fork session."""
+    """Fork session from a specific turn."""
     try:
         return await state_manager.fork_session_at_turn(
             session_id=session_id,
@@ -43,14 +43,14 @@ async def fork_session(session_id: str, body: SessionForkRequest):
 
 @router.post("/reindex")
 async def reindex_sessions():
-    """重建全局 session 索引."""
+    """Rebuild global session index."""
     state_manager.reindex_sessions()
     return {"ok": True}
 
 
 @router.delete("/{session_id}")
 async def delete_session(session_id: str):
-    """删除 session(含文件清理)."""
+    """Delete session (including file cleanup)."""
     try:
         return {"ok": state_manager.delete_session(session_id)}
     except AppError as e:

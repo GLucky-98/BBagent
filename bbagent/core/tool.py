@@ -8,29 +8,29 @@ from pydantic import BaseModel, TypeAdapter
 ToolSource = Literal["built_in", "hook", "mcp", "team"]
 
 # ------------------------------------------------------------
-# pydantic 输入参数类型解析辅助函数
+# pydantic input parameter type parsing helper function
 # ------------------------------------------------------------
 def inline_refs(schema: dict) -> dict:
     """
-    将 JSON Schema 中的 $defs 内联到所有 $ref 位置,并删除 $defs 键.
+    Inline $defs in JSON Schema into all $ref positions, and remove the $defs key.
     """
-    schema = copy.deepcopy(schema)          # 避免修改原数据
-    defs = schema.pop("$defs", {})           # 取出 $defs 并删除
+    schema = copy.deepcopy(schema)          # avoid modifying original data
+    defs = schema.pop("$defs", {})           # extract $defs and remove it
 
     def _resolve_ref(obj):
         if isinstance(obj, dict):
             if "$ref" in obj:
                 ref_path = obj["$ref"]
-                # 只处理 #/$defs/xxx 形式的引用
+                # only handle #/$defs/xxx style references
                 if ref_path.startswith("#/$defs/"):
                     ref_name = ref_path.split("/")[-1]
                     if ref_name in defs:
-                        # 递归展开定义(定义内部可能还有 $ref)
+                        # recursively expand definition (may contain nested $ref)
                         resolved = _resolve_ref(defs[ref_name])
-                        # 替换当前对象为展开后的定义
+                        # replace current object with expanded definition
                         obj.clear()
                         obj.update(resolved)
-                # 其他外部引用保留原样(可根据需求处理)
+                # other external references kept as-is (handle as needed)
             else:
                 for key, value in obj.items():
                     obj[key] = _resolve_ref(value)
@@ -43,7 +43,7 @@ def inline_refs(schema: dict) -> dict:
 
 
 # ------------------------------------------------------------
-# Tool类
+# Tool class
 # ------------------------------------------------------------
 class Tool:
     """
@@ -52,8 +52,8 @@ class Tool:
             description
             inputschema
             function
-            invoke (同步调用)
-            async_invoke (异步调用)
+            invoke (sync call)
+            async_invoke (async call)
     """
     def __init__(self, func:Callable, name:str | None = None, description:str | None = None, input_schema:dict | None = None,
                  source: ToolSource | None = None):
@@ -159,7 +159,7 @@ class Tool:
 
 
 # ------------------------------------------------------------
-# Tool装饰器
+# Tool decorator
 # ------------------------------------------------------------
 def tool(func:Callable):
 

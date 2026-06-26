@@ -3,13 +3,13 @@ import { useAppStore } from "../store";
 import { createChatWs, createFileWatchWs } from "../lib/api";
 
 /**
- * 唯一的 WebSocket 持有者。
+ * The sole WebSocket holder.
  *
- * 挂载在 App 根级别，始终存活。处理两类消息：
- *   - agent_state → 直接更新 store.agentStates（全局状态指示灯）
- *   - 其他消息   → 委托给 store.onWsChunk（由 ChatWindow 注册）
+ * Mounted at App root level, always alive. Handles two types of messages:
+ *   - agent_state → directly updates store.agentStates (global status indicator)
+ *   - other messages → delegates to store.onWsChunk (registered by ChatWindow)
  *
- * ChatWindow 通过 store.chatWs 发送消息（switch_agent、user_message 等）。
+ * ChatWindow sends messages via store.chatWs (switch_agent, user_message, etc.).
  */
 export function useGlobalAgentState() {
   const setAgentState = useAppStore((s) => s.setAgentState);
@@ -53,7 +53,7 @@ export function useGlobalAgentState() {
         try {
           const chunk = JSON.parse(event.data);
 
-          // agent_state 始终由 hook 处理，不走 ChatWindow 回调
+          // agent_state is always handled by hook, does not go through ChatWindow callback
           if (chunk.type === "event" && chunk.event_type === "agent_state") {
             setAgentState(
               chunk.agent_id || "",
@@ -65,13 +65,13 @@ export function useGlobalAgentState() {
             return;
           }
 
-          // 其他所有消息委托给 ChatWindow 注册的回调
+          // all other messages delegate to callback registered by ChatWindow
           const handler = useAppStore.getState().onWsChunk;
           if (handler) {
             handler(chunk);
           }
         } catch {
-          // 忽略解析失败
+          // ignore parse failure
         }
       };
 
@@ -114,7 +114,7 @@ export function useGlobalAgentState() {
             refreshBaseDir();
           }
         } catch {
-          // 忽略解析失败
+          // ignore parse failure
         }
       };
 

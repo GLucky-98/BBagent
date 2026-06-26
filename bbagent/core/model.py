@@ -84,7 +84,7 @@ class Model(ABC):
         pass
 
     def to_config_dict(self) -> dict:
-        """子类需设置 self.provider, self.max_completion_tokens, self.temperature, self.top_p, self.thinking, self.extra_args"""
+        """Subclass must set self.provider, self.max_completion_tokens, self.temperature, self.top_p, self.thinking, self.extra_args"""
         config = {
             "provider": self.provider,
             "model": self.model,
@@ -356,21 +356,21 @@ class AnthropicModel(Model):
         return payload
 
     def model_message_to_payload(self, message: ModelMessage) -> dict:
-        """从 ModelMessage 结构化字段重建 Anthropic API 格式(不依赖 raw_json)"""
+        """Rebuild Anthropic API format from ModelMessage structured fields (without relying on raw_json)"""
         content = []
-        # thinking 块(带 signature 以保持扩展思考连续性)
+        # thinking block (with signature to maintain extended thinking continuity)
         if message.thinking:
             thinking_block = {"type": "thinking", "thinking": message.thinking}
             if message.thinking_signature:
                 thinking_block["signature"] = message.thinking_signature
             content.append(thinking_block)
-        # 内容块
+        # content block
         if isinstance(message.content, str):
             if message.content:
                 content.append({"type": "text", "text": message.content})
         elif isinstance(message.content, list):
             content.extend(self.content_block_parse(message.content))
-        # tool_use 块
+        # tool_use block
         for tc in message.tool_calls:
             content.append({
                 "type": "tool_use",
@@ -381,7 +381,7 @@ class AnthropicModel(Model):
         return {"role": "assistant", "content": content}
 
     def content_block_parse(self, content_blocks: list[ContentBlock]) -> list[dict]:
-        """解析内容块, 其实只负责HumanMessage和ToolMessage里的内容块解析"""
+        """Parse content blocks, actually only handles content block parsing in HumanMessage and ToolMessage"""
         result = []
         for block in content_blocks:
             if isinstance(block, TextBlock):
@@ -491,18 +491,18 @@ class OpenAIModel(Model):
         self._base_payload = dict(self.payload)
 
     def payload_construct(self, model_input: Model_Input) -> dict:
-        """根据 Model_Input 构建 OpenAI 请求 payload"""
+        """Build OpenAI request payload from Model_Input"""
         payload = dict(self._base_payload)
         messages = []
 
-        # 1. 处理 system prompt(OpenAI 使用 system 角色)
+        # 1. handle system prompt (OpenAI uses system role)
         if model_input.prompt:
             messages.append({"role": "system", "content": model_input.prompt})
 
-        # 2. 转换历史消息
+        # 2. convert history messages
         for msg in model_input.messages:
             if isinstance(msg, HumanMessage):
-                # 用户消息:可以是纯文本或 content block 列表
+                # user message: can be plain text or content block list
                 content = self.content_block_parse(msg.content)
                 messages.append({"role": "user", "content": content})
 
@@ -510,7 +510,7 @@ class OpenAIModel(Model):
                 messages.append(self.model_message_to_payload(msg))
 
             elif isinstance(msg, ToolMessage):
-                # 工具响应消息
+                # tool response message
                 content = self.content_block_parse(msg.content)
                 messages.append({
                     "role": "tool",
@@ -520,35 +520,35 @@ class OpenAIModel(Model):
 
         payload["messages"] = messages
 
-        # 3. 处理工具定义
+        # 3. handle tool definitions
         if model_input.tools:
             tools = []
             for tool in model_input.tools:
-                # 将我们的 Tool 对象转换为 OpenAI function 格式
+                # convert our Tool object to OpenAI function format
                 tools.append({
                     "type": "function",
                     "function": {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": tool.input_schema,  # 假定 parameters 已是 JSON Schema dict
+                        "parameters": tool.input_schema,  # assume parameters is already a JSON Schema dict
                     }
                 })
             payload["tools"] = tools
-            # 默认自动选择工具,可扩展为接收 tool_choice 参数
+            # default to auto tool selection, can be extended to accept tool_choice parameter
             if "tool_choice" not in payload:
                 payload["tool_choice"] = "auto"
 
         return payload
 
     def model_message_to_payload(self, message: ModelMessage) -> dict:
-        """从 ModelMessage 结构化字段重建 OpenAI API 格式(不依赖 raw_json)"""
+        """Rebuild OpenAI API format from ModelMessage structured fields (without relying on raw_json)"""
         content = self.content_block_parse(message.content)
         result = {"role": "assistant", "content": content if content else None}
 
         if message.thinking:
             result["reasoning_content"] = message.thinking
 
-        # tool_calls 转为 OpenAI function 格式
+        # convert tool_calls to OpenAI function format
         if message.tool_calls:
             result["tool_calls"] = [
                 {
@@ -565,8 +565,8 @@ class OpenAIModel(Model):
 
     def content_block_parse(self, content: str | list[ContentBlock]) -> str | list[dict]:
         """
-        将内部 ContentBlock 列表或纯文本转换为 OpenAI API 接受的格式
-        返回字符串或 list of content parts
+        Convert internal ContentBlock list or plain text to format accepted by OpenAI API.
+        Returns string or list of content parts.
         """
         if isinstance(content, str):
             return content
@@ -578,7 +578,7 @@ class OpenAIModel(Model):
             if isinstance(block, TextBlock):
                 parts.append({"type": "text", "text": block.text})
             elif isinstance(block, ImageBlock):
-                # OpenAI 使用 image_url 类型,需要 data:image/...;base64,xxx
+                # OpenAI uses image_url type, needs data:image/...;base64,xxx
                 mime = f"image/{block.image_type}" if block.image_type != "svg" else "image/svg+xml"
                 data_url = f"data:{mime};base64,{block.data}"
                 parts.append({
@@ -588,7 +588,7 @@ class OpenAIModel(Model):
         return parts
 
     def model_response_parse(self, response: dict) -> ModelMessage:
-        """解析 OpenAI 响应,返回 ModelMessage 对象"""
+        """Parse OpenAI response, return ModelMessage object"""
         msg_id = response.get("id", "")
         choice = response["choices"][0]
         message = choice["message"]
@@ -596,19 +596,19 @@ class OpenAIModel(Model):
         usage = response.get("usage", {})
         raw_json = json.dumps(message, ensure_ascii=False)
 
-        # 解析 content (可能为 None 或字符串)
+        # parse content (may be None or string)
         raw_content = message.get("content")
         if raw_content is None:
             content = []
         elif isinstance(raw_content, str):
             content = raw_content
         else:
-            # 如果是 list (多模态响应,少见),递归处理
+            # if list (multimodal response, rare), recurse
             content = self._parse_content_parts(raw_content)
 
         thinking = message.get("reasoning_content", "")
 
-        # 解析 tool_calls
+        # parse tool_calls
         tool_calls = []
         if message.get("tool_calls"):
             for tc in message["tool_calls"]:
@@ -648,16 +648,16 @@ class OpenAIModel(Model):
 
 
     def _parse_content_parts(self, parts: list) -> list[ContentBlock]:
-        """将 OpenAI 响应中的 content parts 转换为内部 ContentBlock 列表"""
+        """Convert content parts in OpenAI response to internal ContentBlock list"""
         blocks: list[ContentBlock] = []
         for part in parts:
             if part.get("type") == "text":
                 blocks.append(TextBlock(text=part["text"], origin="model"))
             elif part.get("type") == "image_url":
-                # 通常响应不会有 image_url,但保留兼容
+                # response usually has no image_url, but kept for compatibility
                 url = part["image_url"]["url"]
                 if url.startswith("data:"):
-                    # 解析 base64
+                    # parse base64
                     import re
                     match = re.match(r"data:image/(\w+);base64,(.+)", url)
                     if match:
@@ -716,7 +716,7 @@ class OpenAIModel(Model):
             self._semaphore.release()
 
     async def async_stream_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0):
-        """异步流式调用,yield 事件(need_print, completed_tool_use, completed_message)"""
+        """Async streaming call, yields events (need_print, completed_tool_use, completed_message)"""
         payload = {**self.payload_construct(model_input), "stream": True, "stream_options": {"include_usage": True}}
         client = self.async_client
         await self._semaphore.acquire()
