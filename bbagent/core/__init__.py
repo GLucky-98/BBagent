@@ -1,5 +1,5 @@
 from .agent import Agent, AgentConfig, AgentState, SubAgent
-from .hook import AgentHook, Hook, HookType, HookControl, HookContext
+from .hook import AgentHook, Hook, HookType, HookContext
 from .input import AgentEvent, EventType, InputChannel
 from .logger import AgentLogger, StructuredFormatter, ContextFilter
 from .mcp import (
@@ -39,7 +39,6 @@ __all__ = [
     "AgentHook",
     "Hook",
     "HookType",
-    "HookControl",
     "HookContext",
     "AgentEvent",
     "EventType",

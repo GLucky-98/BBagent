@@ -930,7 +930,6 @@ class AgentFactory:
                             result.append({
                                 "role": "user",
                                 "content": merged,
-                                "source_agent": agent.name,
                                 "timestamp": ts,
                             })
                     else:

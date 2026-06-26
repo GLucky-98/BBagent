@@ -150,7 +150,8 @@ async def chat_ws(websocket: WebSocket):
                         if current_agent_id else None
                     )
                     if agent:
-                        agent.input.push(msg["content"])
+                        source_id = msg.get("message_id") or "user"
+                        agent.input.push(msg["content"], source_id=source_id)
 
                 elif msg_type == "interrupt":
                     agent = (

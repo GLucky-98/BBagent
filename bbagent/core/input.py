@@ -3,7 +3,6 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-from uuid import uuid4 as uuid
 
 from .message import ContentBlock, HumanMessage
 
@@ -20,7 +19,6 @@ class AgentEvent:
     source_id: str
     payload: Any
     timestamp: float = field(default_factory=time.time)
-    correlation_id: str = field(default_factory=lambda: uuid().hex[:12])
 
     def to_human_message(self) -> HumanMessage:
         if isinstance(self.payload, HumanMessage):

@@ -52,7 +52,6 @@ def test_get_messages_merges_user_text_blocks_and_outputs_millisecond_timestamp(
         {
             "role": "user",
             "content": "first\nsecond",
-            "source_agent": "Helper",
             "timestamp": 1_700_000_000_000,
         },
         {

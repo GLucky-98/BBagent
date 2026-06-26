@@ -63,9 +63,6 @@ class AgentTeam:
         team = cls(config.name, config.team_description)
 
         for agent_name, agent in config.agents.items():
-            if agent.name != agent_name:
-                agent.change_name(agent_name)
-
             agent.set_runtime_prompt("team", cls._build_team_prompt(config.team_description), order=20)
 
             contacts = config.contacts.get(agent_name, {})

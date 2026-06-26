@@ -56,6 +56,9 @@ class AgentState:
 
 
 class Agent:
+    # ========================================================================
+    # Initialization
+    # ========================================================================
     def __init__(self,agent_config:AgentConfig):
         self.name = agent_config.name
 
@@ -106,122 +109,22 @@ class Agent:
 
         self.state = AgentState.Ready
 
+    # ========================================================================
+    # Properties
+    # ========================================================================
+    @property
+    def is_running(self) -> bool:
+        return self._loop_running
+
+    # ========================================================================
+    # Session Management
+    # ========================================================================
     def _ensure_session(self):
         if self.session is None:
             self.session = Session.create(self.session_dir)
 
     def set_session(self, session: Session):
         self.session = session
-
-    def add_timer(self, seconds: float, name: str = "", hint: str = "") -> None:
-        self.input.every(seconds, name, hint)
-
-    def list_timers(self) -> list[dict]:
-        return self.input.list_timers()
-
-    def update_timer(self, name: str, seconds: float = None, hint: str = None) -> bool:
-        for s, n, h in self.input._timer_configs:
-            if n == name:
-                new_seconds = seconds if seconds is not None else s
-                new_hint = hint if hint is not None else h
-                self.input.every(new_seconds, name, new_hint)
-                return True
-        return False
-
-    def start_timer(self, name: str) -> bool:
-        return self.input.start_timer(name)
-
-    def stop_timer(self, name: str) -> bool:
-        return self.input.stop_timer(name)
-
-    def cancel_timer(self, name: str) -> bool:
-        return self.input.cancel(name)
-
-    def clear_timers(self):
-        self.input.clear_timers()
-
-    def change_name(self, name: str):
-        self.name = name
-
-    def change_model(self, model: Model):
-        self.model = model
-
-    def change_base_dir(self, path: Path | str):
-        new_base = Path(path)
-        old_base = self.base_dir
-        new_base.mkdir(parents=True, exist_ok=True)
-
-        new_system_prompt = new_base / 'system_prompt.md'
-        if new_system_prompt.exists():
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            deprecated = new_base / f'system_prompt_deprecated_{timestamp}.md'
-            shutil.move(str(new_system_prompt), str(deprecated))
-        shutil.copy2(old_base / 'system_prompt.md', new_system_prompt)
-        new_runtime_prompts = new_base / 'runtime_prompts.md'
-        old_runtime_prompts = old_base / 'runtime_prompts.md'
-        if new_runtime_prompts.exists():
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            deprecated = new_base / f'runtime_prompts_deprecated_{timestamp}.md'
-            shutil.move(str(new_runtime_prompts), str(deprecated))
-        if old_runtime_prompts.exists():
-            shutil.copy2(old_runtime_prompts, new_runtime_prompts)
-
-        new_session = new_base / 'session'
-        if new_session.exists():
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            deprecated = new_base / f'session_deprecated_{timestamp}'
-            shutil.move(str(new_session), str(deprecated))
-        shutil.copytree(old_base / 'session', new_session)
-
-        self.base_dir = new_base
-        self.system_prompt_path = new_system_prompt
-        self.runtime_prompts_path = new_runtime_prompts
-        self.session_dir = new_session
-
-    def change_system_prompt(self, prompt: str):
-        self.system_prompt = prompt
-        self.system_prompt_path.write_text(prompt, encoding='utf-8')
-
-    def set_runtime_prompt(self, key: str, prompt: str, order: int = 100) -> None:
-        if not prompt:
-            self.remove_runtime_prompt(key)
-            return
-        self.runtime_prompts[key] = {"content": prompt, "order": order}
-        self._write_runtime_prompts_file()
-
-    def remove_runtime_prompt(self, key: str) -> None:
-        self.runtime_prompts.pop(key, None)
-        self._write_runtime_prompts_file()
-
-    def render_runtime_prompts(self) -> str:
-        rendered = [
-            str(item["content"])
-            for _key, item in sorted(
-                self.runtime_prompts.items(),
-                key=lambda pair: (int(pair[1].get("order", 100)), pair[0]),
-            )
-            if str(item.get("content", "")).strip()
-        ]
-        if not rendered:
-            return ""
-        return "\n\n" + "\n\n".join(rendered)
-
-    def _write_runtime_prompts_file(self) -> None:
-        lines = [
-            "# Runtime Prompts",
-            "",
-            "This file is generated for inspection only. Runtime prompts are rebuilt from agent/team/skill/hook configuration and are not loaded from this file.",
-        ]
-        for key, item in sorted(
-            self.runtime_prompts.items(),
-            key=lambda pair: (int(pair[1].get("order", 100)), pair[0]),
-        ):
-            content = str(item.get("content", "")).rstrip()
-            if not content:
-                continue
-            lines.extend(["", f"## {key}", "", content])
-        lines.append("")
-        self.runtime_prompts_path.write_text("\n".join(lines), encoding='utf-8')
 
     async def load_session(self, session_file_path: Path | str):
         await self.hook.trigger(HookType.NEW_SESSION)
@@ -266,7 +169,125 @@ class Agent:
             self.session.save()
         self.session = Session.create(self.session_dir)
 
+    # ========================================================================
+    # Configuration
+    # ========================================================================
+    def change_model(self, model: Model):
+        self.model = model
 
+    def change_base_dir(self, path: Path | str):
+        new_base = Path(path)
+        old_base = self.base_dir
+        new_base.mkdir(parents=True, exist_ok=True)
+
+        new_system_prompt = new_base / 'system_prompt.md'
+        if new_system_prompt.exists():
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            deprecated = new_base / f'system_prompt_deprecated_{timestamp}.md'
+            shutil.move(str(new_system_prompt), str(deprecated))
+        shutil.copy2(old_base / 'system_prompt.md', new_system_prompt)
+        new_runtime_prompts = new_base / 'runtime_prompts.md'
+        old_runtime_prompts = old_base / 'runtime_prompts.md'
+        if new_runtime_prompts.exists():
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            deprecated = new_base / f'runtime_prompts_deprecated_{timestamp}.md'
+            shutil.move(str(new_runtime_prompts), str(deprecated))
+        if old_runtime_prompts.exists():
+            shutil.copy2(old_runtime_prompts, new_runtime_prompts)
+
+        new_session = new_base / 'session'
+        if new_session.exists():
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            deprecated = new_base / f'session_deprecated_{timestamp}'
+            shutil.move(str(new_session), str(deprecated))
+        shutil.copytree(old_base / 'session', new_session)
+
+        self.base_dir = new_base
+        self.system_prompt_path = new_system_prompt
+        self.runtime_prompts_path = new_runtime_prompts
+        self.session_dir = new_session
+
+    def change_system_prompt(self, prompt: str):
+        self.system_prompt = prompt
+        self.system_prompt_path.write_text(prompt, encoding='utf-8')
+
+    # ========================================================================
+    # Runtime Prompt Management
+    # ========================================================================
+    def set_runtime_prompt(self, key: str, prompt: str, order: int = 100) -> None:
+        if not prompt:
+            self.remove_runtime_prompt(key)
+            return
+        self.runtime_prompts[key] = {"content": prompt, "order": order}
+        self._write_runtime_prompts_file()
+
+    def remove_runtime_prompt(self, key: str) -> None:
+        self.runtime_prompts.pop(key, None)
+        self._write_runtime_prompts_file()
+
+    def render_runtime_prompts(self) -> str:
+        rendered = [
+            str(item["content"])
+            for _key, item in sorted(
+                self.runtime_prompts.items(),
+                key=lambda pair: (int(pair[1].get("order", 100)), pair[0]),
+            )
+            if str(item.get("content", "")).strip()
+        ]
+        if not rendered:
+            return ""
+        return "\n\n" + "\n\n".join(rendered)
+
+    def _write_runtime_prompts_file(self) -> None:
+        lines = [
+            "# Runtime Prompts",
+            "",
+            "This file is generated for inspection only. Runtime prompts are rebuilt from agent/team/skill/hook configuration and are not loaded from this file.",
+        ]
+        for key, item in sorted(
+            self.runtime_prompts.items(),
+            key=lambda pair: (int(pair[1].get("order", 100)), pair[0]),
+        ):
+            content = str(item.get("content", "")).rstrip()
+            if not content:
+                continue
+            lines.extend(["", f"## {key}", "", content])
+        lines.append("")
+        self.runtime_prompts_path.write_text("\n".join(lines), encoding='utf-8')
+
+    # ========================================================================
+    # Timer Management
+    # ========================================================================
+    def add_timer(self, seconds: float, name: str = "", hint: str = "") -> None:
+        self.input.every(seconds, name, hint)
+
+    def list_timers(self) -> list[dict]:
+        return self.input.list_timers()
+
+    def update_timer(self, name: str, seconds: float = None, hint: str = None) -> bool:
+        for s, n, h in self.input._timer_configs:
+            if n == name:
+                new_seconds = seconds if seconds is not None else s
+                new_hint = hint if hint is not None else h
+                self.input.every(new_seconds, name, new_hint)
+                return True
+        return False
+
+    def start_timer(self, name: str) -> bool:
+        return self.input.start_timer(name)
+
+    def stop_timer(self, name: str) -> bool:
+        return self.input.stop_timer(name)
+
+    def cancel_timer(self, name: str) -> bool:
+        return self.input.cancel(name)
+
+    def clear_timers(self):
+        self.input.clear_timers()
+
+    # ========================================================================
+    # Tool Management
+    # ========================================================================
     def add_tools(self, tools: List[Tool]):
         for t in tools:
             existing = self.tools.get(t.name)
@@ -274,7 +295,6 @@ class Agent:
                 raise ValueError(f"Duplicate tool name: {t.name}")
             self.tools[t.name] = t
         self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
-
 
     def remove_tools(self, tool_names: List[str]):
         for name in tool_names:
@@ -285,6 +305,9 @@ class Agent:
                 if tool_name not in self.tools:
                     self.logger.warning(f"Tool '{tool_name}' not found in agent tools")
 
+    # ========================================================================
+    # Skill Management
+    # ========================================================================
     def _add_load_skills_tool(self):
         @tool
         def load_skill(skill_name: str):
@@ -299,7 +322,46 @@ class Agent:
                     return skill.body
         
         self.add_tools([load_skill])
-    
+
+    def _load_skill_prompt(self):
+        """从 skills.md 加载技能提示词，文件不存在时使用默认值"""
+        if not self.skills:
+            return ''
+        skill_system_prompt = ["""You have access to the following skills. When you need to use a specific skill, call the `load_skill` tool with the skill name to get its full capabilities, usage instructions, and detailed behavior.
+
+Your available skills are:
+"""]
+        skill_short_prompt = [f'- name: {s.name}, Description: {s.description}' for s in self.skills.values()]
+        return '\n'.join(skill_system_prompt + skill_short_prompt)
+
+    def add_skills(self, skills:List[Skill]):
+        new_skills = {s.name: s for s in skills}
+        if not self.skills and new_skills:
+            self._add_load_skills_tool()
+        self.skills.update(new_skills)
+        self.set_runtime_prompt("skills", self._load_skill_prompt(), order=40)
+
+    def remove_skills(self, skill_names: List[str]):
+        """移除指定名称的 skills，并刷新 runtime skill prompt。"""
+        if not skill_names:
+            return
+        for name in skill_names:
+            self.skills.pop(name, None)
+        if not self.skills:
+            self.remove_runtime_prompt("skills")
+        else:
+            self.set_runtime_prompt("skills", self._load_skill_prompt(), order=40)
+
+    # ========================================================================
+    # Execution: Model Input & Tool Execution
+    # ========================================================================
+    def construct_model_input(self) -> Model_Input:
+        self._ensure_session()
+        tools = list(self.tools.values())
+        prompt = self.system_prompt + self.render_runtime_prompts()
+        messages = self.session.get_visible_context()
+        return Model_Input(prompt=prompt, tools=tools, messages=messages)
+
     async def tool_execute(self, tool_use: ToolUseBlock) -> ToolMessage:
         tool = self.tools.get(tool_use.name)
 
@@ -353,51 +415,9 @@ class Agent:
         await self.hook.trigger(HookType.ON_TOOL_RESULT, tool_msg)
         return tool_msg
 
-    def _load_skill_prompt(self):
-        """从 skills.md 加载技能提示词，文件不存在时使用默认值"""
-        if not self.skills:
-            return ''
-        skill_system_prompt = ["""You have access to the following skills. When you need to use a specific skill, call the `load_skill` tool with the skill name to get its full capabilities, usage instructions, and detailed behavior.
-
-Your available skills are:
-"""]
-        skill_short_prompt = [f'- name: {s.name}, Description: {s.description}' for s in self.skills.values()]
-        return '\n'.join(skill_system_prompt + skill_short_prompt)
-
-    def add_skills(self, skills:List[Skill]):
-        new_skills = {s.name: s for s in skills}
-        if not self.skills and new_skills:
-            self._add_load_skills_tool()
-        self.skills.update(new_skills)
-        self.set_runtime_prompt("skills", self._load_skill_prompt(), order=40)
-
-    def remove_skills(self, skill_names: List[str]):
-        """移除指定名称的 skills，并刷新 runtime skill prompt。"""
-        if not skill_names:
-            return
-        for name in skill_names:
-            self.skills.pop(name, None)
-        if not self.skills:
-            self.remove_runtime_prompt("skills")
-        else:
-            self.set_runtime_prompt("skills", self._load_skill_prompt(), order=40)
-
-    def construct_model_input(self) -> Model_Input:
-        self._ensure_session()
-        tools = list(self.tools.values())
-        prompt = self.system_prompt + self.render_runtime_prompts()
-        messages = self.session.get_visible_context()
-        return Model_Input(prompt=prompt, tools=tools, messages=messages)
-
-    def _interrupt_requested(self) -> bool:
-        if self.hook.should_break():
-            self._interrupt_event.set()
-        return self._interrupt_event.is_set()
-
-    @property
-    def is_running(self) -> bool:
-        return self._loop_running
-
+    # ========================================================================
+    # Execution: Interrupt Control
+    # ========================================================================
     async def _cancel_tool_tasks(self, tool_tasks: List[asyncio.Task]):
         for task in tool_tasks:
             if not task.done():
@@ -426,7 +446,10 @@ Your available skills are:
             tool_results_future.cancel()
             await self._cancel_tool_tasks(tool_tasks)
             raise
-      
+
+    # ========================================================================
+    # Execution: Core Execution Flow
+    # ========================================================================
     async def stream_tool_loop(self):
         try:
             while True:
@@ -436,13 +459,13 @@ Your available skills are:
                 pending_model_message = None
                 
                 await self.hook.trigger(HookType.BEFORE_STREAM)
-                if self._interrupt_requested():
+                if self._interrupt_event.is_set():
                     self.logger.info("Agent interrupted before stream")
                     yield {'type': 'interrupted', 'content': 'Agent interrupted'}
                     break
                 model_input = self.construct_model_input()
                 async for chunk in self.model.async_stream_invoke(model_input): 
-                    if self._interrupt_requested():
+                    if self._interrupt_event.is_set():
                         self.logger.info("Agent interrupted during stream")
                         interrupted = True
                         break
@@ -527,7 +550,7 @@ Your available skills are:
             self.state = AgentState.Error
             await self.hook.trigger(HookType.ON_ERROR, e)
             raise
-                 
+
     async def run(self, human_msg:HumanMessage):
         self._interrupt_event.clear()
         self.state = AgentState.Running
@@ -564,21 +587,68 @@ Your available skills are:
                 self.logger.info("Agent run completed")
                 self.logger.clear_trace_id()
 
-    def on_output(self, callback: Callable):
-        self._output_callback = callback
+    async def _handle_event(self, event: AgentEvent):
+        self._interrupt_event.clear()
+        self.logger.set_trace_id()
+        with self.logger.span("event_handle"):
+            self.logger.info(
+                "Event handling started",
+                context={
+                    "event_type": event.type.value,
+                    "source_id": event.source_id,
+                }
+            )
+            msg = event.to_human_message()
+            self._ensure_session()
+            self.session.add_message(msg)
 
-    async def _emit(self, chunk):
-        if chunk.get("type") == "agent_state" and self.session:
-            chunk["context_tokens"] = self.session.get_visible_token_count()
-        if self._output_callback:
-            if asyncio.iscoroutinefunction(self._output_callback):
-                await self._output_callback(chunk)
+            if isinstance(msg.content, str):
+                text = msg.content
+            elif isinstance(msg.content, list):
+                text = " ".join(
+                    b.text if hasattr(b, "text") else str(b)
+                    for b in msg.content
+                )
             else:
-                self._output_callback(chunk)
+                text = str(msg.content)
+            await self._emit({
+                "type": "input_event",
+                "event_type": event.type.value,
+                "source_id": event.source_id,
+                "content": text,
+            })
 
-    async def _emit_state(self):
-        await self._emit({'type': 'agent_state', 'state': self.state})
+            await self.hook.trigger(HookType.AFTER_INPUT)
+            try:
+                async for chunk in self.stream_tool_loop():
+                    await self._emit(chunk)
+            except Exception as e:
+                self.logger.error(
+                    f"Event handling failed: {str(e)}",
+                    context={
+                        "event_type": event.type.value,
+                        "source_id": event.source_id,
+                    },
+                    exc_info=sys.exc_info()
+                )
+                await self.hook.trigger(HookType.ON_ERROR, e)
+                raise
+            finally:
+                await self.hook.trigger(HookType.AFTER_RUN)
+                if self.session is not None and self.session.dir is not None:
+                    try:
+                        self.session.save()
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Failed to save session metadata: {e}",
+                            context={"session_id": self.session.id},
+                        )
+                self.logger.info("Event handling completed")
+                self.logger.clear_trace_id()
 
+    # ========================================================================
+    # Execution: Event Loop Lifecycle
+    # ========================================================================
     async def start(self):
         if self._loop_running:
             self.logger.warning("Agent already running, start ignored")
@@ -697,68 +767,39 @@ Your available skills are:
                     task.cancel()
             await self.input.stop()
 
-    async def _handle_event(self, event: AgentEvent):
-        # Clear any stale BREAK flag left by interrupt() called while idle.
-        self.hook.context.reset_control()
-        self._interrupt_event.clear()
-        self.logger.set_trace_id(event.correlation_id)
-        with self.logger.span("event_handle"):
-            self.logger.info(
-                "Event handling started",
-                context={
-                    "event_type": event.type.value,
-                    "source_id": event.source_id,
-                    "correlation_id": event.correlation_id,
-                }
-            )
-            msg = event.to_human_message()
-            self._ensure_session()
-            self.session.add_message(msg)
+    # ========================================================================
+    # 输出回调
+    # ========================================================================
+    def on_output(self, callback: Callable):
+        self._output_callback = callback
 
-            if isinstance(msg.content, str):
-                text = msg.content
-            elif isinstance(msg.content, list):
-                text = " ".join(
-                    b.text if hasattr(b, "text") else str(b)
-                    for b in msg.content
-                )
+    async def _emit(self, chunk: dict):
+        """Emit a chunk to the output callback.
+
+        All chunks share a ``"type"`` discriminator field. Possible formats:
+
+        * ``{"type": "text", "content": str}`` — 流式文本片段
+        * ``{"type": "thinking", "content": str}`` — 思考过程片段
+        * ``{"type": "completed_tool_use", "content": ToolUseBlock}`` — 模型请求调用工具
+        * ``{"type": "completed_message", "content": ModelMessage}`` — 模型完成一轮消息
+        * ``{"type": "tool_results", "content": list[ToolMessage]}`` — 工具执行结果列表
+        * ``{"type": "interrupted", "content": str}`` — Agent 被中断
+        * ``{"type": "input_event", "event_type": str, "source_id": str, "content": str}`` — 用户输入事件
+        * ``{"type": "agent_state", "state": AgentState}`` — Agent 状态变更；
+          当 ``self.session`` 存在时会被自动附加 ``"context_tokens": int`` 字段
+        * ``{"type": "error", "content": str}`` — 异常错误消息
+        """
+        if chunk.get("type") == "agent_state" and self.session:
+            chunk["context_tokens"] = self.session.get_visible_token_count()
+        if self._output_callback:
+            if asyncio.iscoroutinefunction(self._output_callback):
+                await self._output_callback(chunk)
             else:
-                text = str(msg.content)
-            await self._emit({
-                "type": "input_event",
-                "event_type": event.type.value,
-                "source_id": event.source_id,
-                "content": text,
-            })
+                self._output_callback(chunk)
 
-            await self.hook.trigger(HookType.AFTER_INPUT)
-            try:
-                async for chunk in self.stream_tool_loop():
-                    await self._emit(chunk)
-            except Exception as e:
-                self.logger.error(
-                    f"Event handling failed: {str(e)}",
-                    context={
-                        "event_type": event.type.value,
-                        "source_id": event.source_id,
-                        "correlation_id": event.correlation_id,
-                    },
-                    exc_info=sys.exc_info()
-                )
-                await self.hook.trigger(HookType.ON_ERROR, e)
-                raise
-            finally:
-                await self.hook.trigger(HookType.AFTER_RUN)
-                if self.session is not None and self.session.dir is not None:
-                    try:
-                        self.session.save()
-                    except Exception as e:
-                        self.logger.warning(
-                            f"Failed to save session metadata: {e}",
-                            context={"session_id": self.session.id},
-                        )
-                self.logger.info("Event handling completed")
-                self.logger.clear_trace_id()
+    async def _emit_state(self):
+        await self._emit({'type': 'agent_state', 'state': self.state})
+
 
 class SubAgent:
     def __init__(self, model: Model, tools: List[Tool] = None, system_prompt: str = "",

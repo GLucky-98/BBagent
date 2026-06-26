@@ -7,7 +7,9 @@ from .todo import TodoItemInput, TodoManager, TodoStatus
 
 class TodoItemInputModel(BaseModel):
     id: str = Field(description="Short stable id for this item, unique within the todo list.")
-    content: str = Field(description="The concrete task to complete. Include all useful task detail here.")
+    content: str = Field(
+        description="The actual work item to complete. Include all useful task detail here."
+    )
     blocked_by: list[str] = Field(
         default_factory=list,
         description="Ids of items in the same list that must be done or cancelled before this item can start.",

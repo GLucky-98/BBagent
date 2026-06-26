@@ -227,7 +227,7 @@ async def test_hook_break_uses_unified_interrupt_signal(tmp_path):
 
     @agent.hook.hook(HookType.BEFORE_STREAM)
     def break_before_stream(context):
-        context.break_loop()
+        context.agent._interrupt_event.set()
 
     chunks = [chunk async for chunk in agent.run(HumanMessage("stop before stream"))]
 

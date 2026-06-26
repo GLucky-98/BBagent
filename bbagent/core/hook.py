@@ -5,11 +5,6 @@ from typing import Callable, Any, Dict, List, Optional
 from dataclasses import dataclass
 
 
-class HookControl(Enum):
-    NORMAL = "normal"
-    BREAK = "break"
-
-
 class HookType(Enum):
     BEFORE_RUN = "before_run"
     AFTER_INPUT = "after_input"
@@ -41,15 +36,6 @@ class HookContext:
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.data.get(key, default)
-
-    def break_loop(self):
-        self.data['_control'] = HookControl.BREAK
-
-    def get_control(self) -> HookControl:
-        return self.data.get('_control', HookControl.NORMAL)
-
-    def reset_control(self):
-        self.data['_control'] = HookControl.NORMAL
 
 
 @dataclass
@@ -155,12 +141,6 @@ class AgentHook:
 
         for hook in self._hooks[hook_type]:
             await hook.execute(self.context, *args, **kwargs)
-
-    def should_break(self) -> bool:
-        if self.context.get_control() == HookControl.BREAK:
-            self.context.reset_control()
-            return True
-        return False
 
     def enable(self):
         self._enabled = True

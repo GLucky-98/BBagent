@@ -176,7 +176,7 @@ const SafeMarkdown = memo(class SafeMarkdown extends Component<{ content: string
 // ── Single turn block (Apple-style: no bubble, avatar + name + content) ──
 const TurnBlock = memo(function TurnBlock({ message }: { message: Message }) {
   const isInputEvent = message.chunkType === "input_event";
-  const isRealUser = message.role === "user" && !isInputEvent;
+  const isRealUser = message.role === "user" && !message.sourceAgent;
   const isSystemNotification = message.role === "system" && !message.chunkType;
   const ts = new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -734,11 +734,23 @@ export function ChatWindow() {
         });
       } else if (chunk.type === "input_event") {
         const sourceId = (chunk.source_id as string) || "";
-        if (sourceId === "user") {
+        const eventType = (chunk.event_type as string) || "";
+        if (eventType === "user_message") {
+          if (sourceId !== "user") {
+            // sourceId is the frontend message_id — upsert for dedup (normal flow)
+            // and recovery (dispatcher replay after agent switch wipes history).
+            upsertMessage(agentId, {
+              id: sourceId,
+              role: "user",
+              content: chunk.content as string,
+              timestamp: Date.now(),
+              chunkType: "input_event",
+            });
+          }
           return;
         }
         let sourceTag: string;
-        if ((chunk.event_type as string) === "timer_trigger") {
+        if (eventType === "timer_trigger") {
           sourceTag = `Timer: ${sourceId.replace("timer:", "")}`;
         } else if (sourceId.startsWith("team:")) {
           const sender = sourceId.slice(5);
@@ -746,7 +758,7 @@ export function ChatWindow() {
         } else if (sourceId) {
           sourceTag = sourceId;
         } else {
-          sourceTag = (chunk.event_type as string) || "";
+          sourceTag = eventType || "";
         }
         addMessage(agentId, {
           id: crypto.randomUUID(),
@@ -880,7 +892,7 @@ export function ChatWindow() {
 
     const chatWs = useAppStore.getState().chatWs;
     if (chatWs?.readyState === WebSocket.OPEN) {
-      chatWs.send(JSON.stringify({ type: "user_message", content: input.trim() }));
+      chatWs.send(JSON.stringify({ type: "user_message", content: input.trim(), message_id: userMessage.id }));
     }
     setAgentInput(selectedAgent.id, "");
   };
