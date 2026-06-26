@@ -1,8 +1,10 @@
+import contextlib
 import mimetypes
 import os
 import platform
 import subprocess
 from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
@@ -14,10 +16,8 @@ router = APIRouter()
 def _build_tree(path: Path, max_depth: int | None = None) -> FileNode:
     if not path.is_dir():
         stat = None
-        try:
+        with contextlib.suppress(OSError):
             stat = path.stat()
-        except OSError:
-            pass
         return FileNode(
             name=path.name,
             path=str(path),
@@ -35,10 +35,8 @@ def _build_tree(path: Path, max_depth: int | None = None) -> FileNode:
                 key=lambda x: (not x.is_dir(), x.name.lower()),
             )
             for child in entries:
-                try:
+                with contextlib.suppress(PermissionError, OSError):
                     children.append(_build_tree(child, next_depth))
-                except (PermissionError, OSError):
-                    pass
         except (PermissionError, OSError):
             pass
     return FileNode(
@@ -134,7 +132,7 @@ async def open_file_dir(payload: dict):
             os.startfile(str(path))
         return {"success": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to open path: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to open path: {e}") from None
 
 
 @router.post("/dirs")
@@ -148,7 +146,7 @@ async def create_dir(payload: dict):
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create directory: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create directory: {e}") from None
     return {"success": True, "path": str(path)}
 
 
@@ -164,7 +162,7 @@ async def rename_dir(payload: dict):
     try:
         old_path.rename(new_path)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to rename directory: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to rename directory: {e}") from None
     return {"success": True, "path": str(new_path)}
 
 
@@ -181,5 +179,5 @@ async def delete_dir(path: str = Query(...), recursive: bool = Query(default=Fal
         else:
             target.rmdir()
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete directory: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete directory: {e}") from None
     return {"success": True}

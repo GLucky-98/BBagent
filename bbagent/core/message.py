@@ -1,22 +1,22 @@
-import json
 import copy
-from typing import List, Literal, cast
+import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-import uuid
+from typing import Literal, cast
 
 __all__ = [
-    'Session',
-    'Message', 
-    'HumanMessage', 
-    'ModelMessage', 
-    'ToolMessage',
     'ContentBlock',
-    'TextBlock',
-    'ImageBlock',
-    'ToolUseBlock',
     'ContentOrigin',
+    'HumanMessage',
+    'ImageBlock',
+    'Message',
+    'ModelMessage',
+    'Session',
+    'TextBlock',
+    'ToolMessage',
+    'ToolUseBlock',
     'estimate_message_tokens'
 ]
 
@@ -102,7 +102,7 @@ class ToolUseBlock(ContentBlock):
 
 
 class Message:
-    content: List[ContentBlock] | str
+    content: list[ContentBlock] | str
 
     @staticmethod
     def _serialize_content(content):
@@ -111,7 +111,7 @@ class Message:
         return [block.to_dict() for block in content]
 
     @staticmethod
-    def _deserialize_content(content_data, default_origin: ContentOrigin) -> List[ContentBlock]:
+    def _deserialize_content(content_data, default_origin: ContentOrigin) -> list[ContentBlock]:
         if isinstance(content_data, str):
             return [TextBlock(text=content_data, origin=default_origin)] if content_data else []
         return [
@@ -122,10 +122,10 @@ class Message:
         ]
 
     @staticmethod
-    def _normalize_content(content, default_origin: ContentOrigin) -> List[ContentBlock]:
+    def _normalize_content(content, default_origin: ContentOrigin) -> list[ContentBlock]:
         if isinstance(content, str):
             return [TextBlock(text=content, origin=default_origin)] if content else []
-        result: List[ContentBlock] = []
+        result: list[ContentBlock] = []
         for block in content or []:
             if isinstance(block, ContentBlock):
                 if getattr(block, 'origin', None) is None:
@@ -154,7 +154,7 @@ class Message:
 
 @dataclass
 class HumanMessage(Message):
-    content: List[ContentBlock] | str
+    content: list[ContentBlock] | str
     role: str = "user"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
 
@@ -180,7 +180,7 @@ class HumanMessage(Message):
 class ToolMessage(Message):
     id: str
     name: str
-    content: List[ContentBlock] | str
+    content: list[ContentBlock] | str
     role: str = "tool"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
 
@@ -212,13 +212,13 @@ class ToolMessage(Message):
 @dataclass
 class ModelMessage(Message):
     id: str
-    content: List[ContentBlock] | str 
+    content: list[ContentBlock] | str
     stop_reason: str
     usage_data: dict
     raw_json: str = ''
     thinking: str = ''
     thinking_signature: str = ''
-    tool_calls: List[ToolUseBlock] = field(default_factory=list)
+    tool_calls: list[ToolUseBlock] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
     role: str = "model"
@@ -278,14 +278,14 @@ def estimate_message_tokens(msg: Message) -> int:
 
 @dataclass
 class Turn:
-    messages: List[Message] = field(default_factory=list)
-    key_content: List[str] = field(default_factory=list)
+    messages: list[Message] = field(default_factory=list)
+    key_content: list[str] = field(default_factory=list)
     is_summarized: bool = False
     summary: str = ''
     summary_group_id: str = ''
     skip_summary: bool = False
     token_count: int = 0
-    ever_used_tools: List[str] = field(default_factory=list)
+    ever_used_tools: list[str] = field(default_factory=list)
     start_timestamp: int = 0
     end_timestamp: int = 0
     memory_extracted: bool = False
@@ -314,12 +314,12 @@ class Turn:
         return "[Unknown]"
 
     @staticmethod
-    def _normalize_content(content) -> List[ContentBlock]:
+    def _normalize_content(content) -> list[ContentBlock]:
         return Message._normalize_content(content, "system")
 
-    def _message_to_blocks(self, msg: Message) -> List[ContentBlock]:
+    def _message_to_blocks(self, msg: Message) -> list[ContentBlock]:
         role = self._role_label(msg)
-        result: List[ContentBlock] = []
+        result: list[ContentBlock] = []
 
         content_blocks = self._normalize_content(msg.content)
         text_emitted = False
@@ -348,10 +348,10 @@ class Turn:
 
         return result
 
-    def to_merged_blocks(self, header: str = None) -> List[ContentBlock]:
+    def to_merged_blocks(self, header: str | None = None) -> list[ContentBlock]:
         if header is None:
             header = self.DEFAULT_MERGE_HEADER
-        blocks: List[ContentBlock] = [
+        blocks: list[ContentBlock] = [
             TextBlock(text=header, origin="system"),
             TextBlock(text="", origin="system"),
         ]
@@ -361,7 +361,7 @@ class Turn:
 
 
 class Session:
-    def __init__(self, dir: str | Path = None, id: str = None, turns: List[Turn] = None):
+    def __init__(self, dir: str | Path | None = None, id: str | None = None, turns: list[Turn] | None = None):
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.id = id if id else self.timestamp + '_' + uuid.uuid4().hex[:16]
         self.dir = Path(dir) if dir else None
@@ -378,14 +378,14 @@ class Session:
         self.fork_turn_index: int = -1
 
     @property
-    def messages(self) -> List[Message]:
+    def messages(self) -> list[Message]:
         result = []
         for turn in self.turns[self.window_start:]:
             result.extend(turn.messages)
         return result
 
     @property
-    def ever_used_tools(self) -> List[str]:
+    def ever_used_tools(self) -> list[str]:
         seen = set()
         result = []
         for turn in self.turns:
@@ -416,20 +416,20 @@ class Session:
         session._write_metadata()
         return session
 
-    def fork(self, session_root: str | Path = None, at: int = None) -> 'Session':
-        """基于当前 Session 创建一个独立的副本 Session。
+    def fork(self, session_root: str | Path | None = None, at: int | None = None) -> 'Session':
+        """基于当前 Session 创建一个独立的副本 Session.
 
         Args:
-            session_root: fork 副本的根目录；None 时使用默认的 {self.dir}/fork
-            at: 复制到第几个 turn（含）。None 表示复制所有 turn；
-                支持负数索引（-1 表示最后一个 turn）。
+            session_root: fork 副本的根目录;None 时使用默认的 {self.dir}/fork
+            at: 复制到第几个 turn(含).None 表示复制所有 turn;
+                支持负数索引(-1 表示最后一个 turn).
 
         Returns:
-            与原 Session 完全独立的新 Session 实例。
+            与原 Session 完全独立的新 Session 实例.
 
         Raises:
             IndexError: at 越界或 session 没有任何 turn
-            ValueError: 纯内存 session（dir=None）无法 fork
+            ValueError: 纯内存 session(dir=None)无法 fork
         """
         n = len(self.turns)
         if at is not None:
@@ -495,12 +495,12 @@ class Session:
                     if msg.stop_reason == 'end_turn':
                         self._prev_context_total = current_total
 
-    def add_message(self, message: Message | List[Message]):
+    def add_message(self, message: Message | list[Message]):
         messages = message if isinstance(message, list) else [message]
         for msg in messages:
             if isinstance(msg, HumanMessage):
-                prefix_blocks: List[ContentBlock] = []
-                inherited_tools: List[str] = []
+                prefix_blocks: list[ContentBlock] = []
+                inherited_tools: list[str] = []
                 if self.turns and not self.turns[-1].is_complete:
                     old_turn = self.turns[-1]
                     prefix_blocks = old_turn.to_merged_blocks()
@@ -509,9 +509,7 @@ class Session:
 
                 new_blocks = Message._normalize_content(msg.content, "user")
                 if prefix_blocks and new_blocks:
-                    msg.content = prefix_blocks + [
-                        TextBlock(text=Turn.CURRENT_REQUEST_LABEL, origin="system"),
-                    ] + new_blocks
+                    msg.content = [*prefix_blocks, TextBlock(text=Turn.CURRENT_REQUEST_LABEL, origin="system"), *new_blocks]
                 elif prefix_blocks:
                     msg.content = prefix_blocks
                 else:
@@ -541,7 +539,7 @@ class Session:
                         last_turn.ever_used_tools.append(msg.name)
 
     @staticmethod
-    def _build_inject_text(summaries: List[str], keys: List[str]) -> str:
+    def _build_inject_text(summaries: list[str], keys: list[str]) -> str:
         parts = []
         if summaries:
             parts.append("[Historical Conversation Summary]")
@@ -552,7 +550,7 @@ class Session:
                 parts.append(f"- {k}")
         return "\n\n".join(parts)
 
-    def get_visible_context(self) -> List[Message]:
+    def get_visible_context(self) -> list[Message]:
         turns = self.turns[self.window_start:]
         collected_summaries = []
         collected_keys = []
@@ -622,7 +620,7 @@ class Session:
 
         for turn in turns:
             if turn.is_summarized:
-                if not turn.skip_summary:
+                if not turn.skip_summary:  # noqa: SIM102
                     if turn.summary and turn.summary_group_id not in seen_groups:
                         seen_groups.add(turn.summary_group_id)
                         total += estimate_message_tokens(
@@ -708,7 +706,7 @@ class Session:
 
         turns = []
         current_turn = None
-        with open(messages_file, 'r', encoding='utf-8') as f:
+        with open(messages_file, encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -728,9 +726,8 @@ class Session:
                     current_turn.add_message(msg)
                     if isinstance(msg, ModelMessage) and msg.stop_reason == 'end_turn':
                         current_turn.end_timestamp = msg.timestamp
-                    elif isinstance(msg, ToolMessage) and msg.name:
-                        if msg.name not in current_turn.ever_used_tools:
-                            current_turn.ever_used_tools.append(msg.name)
+                    elif isinstance(msg, ToolMessage) and msg.name and msg.name not in current_turn.ever_used_tools:
+                        current_turn.ever_used_tools.append(msg.name)
 
         session = cls(dir=session_path, id=session_id, turns=turns)
         metadata = cls._parse_metadata(metadata_file)

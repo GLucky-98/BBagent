@@ -11,7 +11,7 @@ Rules:
 - Preserve key decisions, conclusions, and action items
 - Keep important tool call results (file paths, code snippets, error messages)
 - Preserve any unresolved questions or ongoing tasks
-- Remove redundant or verbose exchanges or useless thinking 
+- Remove redundant or verbose exchanges or useless thinking
 - Output in the same language as the conversation"""
 
 
@@ -161,7 +161,7 @@ async def compress_session(
             for turn in group:
                 input_messages.extend(turn.messages)
 
-            compress_input = [HumanMessage(content=compress_prefix)] + input_messages
+            compress_input = [HumanMessage(content=compress_prefix), *input_messages]
 
             last_exception = None
             for attempt in range(3):

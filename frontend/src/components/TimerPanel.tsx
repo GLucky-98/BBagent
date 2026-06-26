@@ -20,9 +20,18 @@ function formatSeconds(seconds: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
+function formatTrigger(timer: TimerConfig): string {
+  if (timer.type === "at" && timer.time) {
+    return timer.time;
+  }
+  return formatSeconds(timer.seconds);
+}
+
 interface EditingRow {
   name: string;
+  type: "interval" | "at";
   seconds: string;
+  time: string;
   hint: string;
 }
 
@@ -35,25 +44,37 @@ export function TimerPanel({ agentId }: TimerPanelProps) {
   const deleteTimer = useAppStore((s) => s.deleteTimer);
 
   const [editingName, setEditingName] = useState<string | null>(null);
-  const [editingRow, setEditingRow] = useState<EditingRow>({ name: "", seconds: "", hint: "" });
+  const [editingRow, setEditingRow] = useState<EditingRow>({ name: "", type: "interval", seconds: "", time: "", hint: "" });
   const [isAdding, setIsAdding] = useState(false);
-  const [addRow, setAddRow] = useState<EditingRow>({ name: "", seconds: "", hint: "" });
+  const [addRow, setAddRow] = useState<EditingRow>({ name: "", type: "interval", seconds: "", time: "", hint: "" });
 
   const handleStartEdit = (timer: TimerConfig) => {
     setEditingName(timer.name);
-    setEditingRow({ name: timer.name, seconds: String(timer.seconds), hint: timer.hint });
+    setEditingRow({
+      name: timer.name,
+      type: timer.type || "interval",
+      seconds: String(timer.seconds || ""),
+      time: timer.time || "",
+      hint: timer.hint,
+    });
   };
 
   const handleSaveEdit = async () => {
     if (!editingName) return;
-    const seconds = parseFloat(editingRow.seconds);
-    if (isNaN(seconds) || seconds <= 0) return;
     const originalName = editingName;
+    const data: { seconds?: number; time?: string; hint?: string } = { hint: editingRow.hint };
+
+    if (editingRow.type === "at") {
+      if (!editingRow.time) return;
+      data.time = editingRow.time;
+    } else {
+      const seconds = parseFloat(editingRow.seconds);
+      if (isNaN(seconds) || seconds <= 0) return;
+      data.seconds = seconds;
+    }
+
     setEditingName(null);
-    await updateTimer(agentId, originalName, {
-      seconds,
-      hint: editingRow.hint,
-    });
+    await updateTimer(agentId, originalName, data);
   };
 
   const handleCancelEdit = () => {
@@ -63,22 +84,32 @@ export function TimerPanel({ agentId }: TimerPanelProps) {
   const isDuplicateName = isAdding && addRow.name.trim() !== "" && timers.some((t) => t.name === addRow.name.trim());
 
   const handleAdd = async () => {
-    const seconds = parseFloat(addRow.seconds);
-    if (isNaN(seconds) || seconds <= 0) return;
     if (isDuplicateName) return;
-    await addTimer(agentId, {
+
+    const data: { name: string; type: "interval" | "at"; seconds?: number; time?: string; hint: string; enabled: boolean } = {
       name: addRow.name || "",
-      seconds,
+      type: addRow.type,
       hint: addRow.hint || "",
       enabled: true,
-    });
-    setAddRow({ name: "", seconds: "", hint: "" });
+    };
+
+    if (addRow.type === "at") {
+      if (!addRow.time) return;
+      data.time = addRow.time;
+    } else {
+      const seconds = parseFloat(addRow.seconds);
+      if (isNaN(seconds) || seconds <= 0) return;
+      data.seconds = seconds;
+    }
+
+    await addTimer(agentId, data);
+    setAddRow({ name: "", type: "interval", seconds: "", time: "", hint: "" });
     setIsAdding(false);
   };
 
   const handleCancelAdd = () => {
     setIsAdding(false);
-    setAddRow({ name: "", seconds: "", hint: "" });
+    setAddRow({ name: "", type: "interval", seconds: "", time: "", hint: "" });
   };
 
   const handleToggleRunning = async (timer: TimerConfig) => {
@@ -93,6 +124,58 @@ export function TimerPanel({ agentId }: TimerPanelProps) {
     await deleteTimer(agentId, name);
   };
 
+  const renderTriggerCell = (row: EditingRow, setRow: (r: EditingRow) => void) => {
+    return (
+      <>
+        <div className="flex items-center gap-1 mb-1">
+          <button
+            type="button"
+            onClick={() => setRow({ ...row, type: "interval" })}
+            className={cn(
+              "px-1.5 py-0.5 text-[10px] rounded font-medium transition-colors",
+              row.type === "interval"
+                ? "bg-(--color-primary) text-white"
+                : "bg-(--color-secondary) text-(--color-muted-foreground) hover:bg-(--color-secondary)/80"
+            )}
+          >
+            Interval
+          </button>
+          <button
+            type="button"
+            onClick={() => setRow({ ...row, type: "at" })}
+            className={cn(
+              "px-1.5 py-0.5 text-[10px] rounded font-medium transition-colors",
+              row.type === "at"
+                ? "bg-(--color-primary) text-white"
+                : "bg-(--color-secondary) text-(--color-muted-foreground) hover:bg-(--color-secondary)/80"
+            )}
+          >
+            At Time
+          </button>
+        </div>
+        {row.type === "at" ? (
+          <input
+            value={row.time}
+            onChange={(e) => setRow({ ...row, time: e.target.value })}
+            className="w-24 px-2 py-1 rounded border border-(--color-border) bg-white text-xs"
+            type="time"
+            step="1"
+            placeholder="08:00"
+          />
+        ) : (
+          <input
+            value={row.seconds}
+            onChange={(e) => setRow({ ...row, seconds: e.target.value })}
+            className="w-20 px-2 py-1 rounded border border-(--color-border) bg-white text-xs"
+            type="number"
+            min="1"
+            placeholder="seconds"
+          />
+        )}
+      </>
+    );
+  };
+
   return (
     <div className="border-t border-(--color-rule-soft) bg-(--color-background)">
       <div className="max-h-64 overflow-y-auto">
@@ -100,7 +183,7 @@ export function TimerPanel({ agentId }: TimerPanelProps) {
           <thead>
             <tr className="text-left text-(--color-ink-2) border-b border-(--color-rule-soft)">
               <th className="px-3 py-2 text-[11px] font-medium">Name</th>
-              <th className="px-3 py-2 text-[11px] font-medium">Interval</th>
+              <th className="px-3 py-2 text-[11px] font-medium">Trigger</th>
               <th className="px-3 py-2 text-[11px] font-medium">Hint</th>
               <th className="px-3 py-2 text-[11px] font-medium">Status</th>
               <th className="px-3 py-2 text-[11px] font-medium text-right">Actions</th>
@@ -119,14 +202,7 @@ export function TimerPanel({ agentId }: TimerPanelProps) {
                     />
                   </td>
                   <td className="px-3 py-1.5">
-                    <input
-                      value={editingRow.seconds}
-                      onChange={(e) => setEditingRow((r) => ({ ...r, seconds: e.target.value }))}
-                      className="w-20 px-2 py-1 rounded border border-(--color-border) bg-white text-xs"
-                      type="number"
-                      min="1"
-                      placeholder="seconds"
-                    />
+                    {renderTriggerCell(editingRow, setEditingRow)}
                   </td>
                   <td className="px-3 py-1.5">
                     <input
@@ -151,7 +227,14 @@ export function TimerPanel({ agentId }: TimerPanelProps) {
               ) : (
                 <tr key={timer.name} className="border-b border-(--color-rule-soft) hover:bg-(--color-secondary)/30 transition-colors">
                   <td className="px-3 py-2 font-medium text-(--color-foreground)">{timer.name || "(unnamed)"}</td>
-                  <td className="px-3 py-2 text-(--color-muted-foreground) font-mono">{formatSeconds(timer.seconds)}</td>
+                  <td className="px-3 py-2 text-(--color-muted-foreground) font-mono">
+                    <span className="inline-flex items-center gap-1">
+                      <span className="text-[10px] px-1 py-0.5 rounded bg-(--color-secondary) text-(--color-ink-3)">
+                        {timer.type === "at" ? "AT" : "INT"}
+                      </span>
+                      {formatTrigger(timer)}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-(--color-muted-foreground) max-w-[200px] truncate">{timer.hint || "—"}</td>
                   <td className="px-3 py-2">
                     <span className={cn(
@@ -225,14 +308,7 @@ export function TimerPanel({ agentId }: TimerPanelProps) {
                   </div>
                 </td>
                 <td className="px-3 py-1.5">
-                  <input
-                    value={addRow.seconds}
-                    onChange={(e) => setAddRow((r) => ({ ...r, seconds: e.target.value }))}
-                    className="w-20 px-2 py-1 rounded border border-(--color-border) bg-white text-xs"
-                    type="number"
-                    min="1"
-                    placeholder="seconds"
-                  />
+                  {renderTriggerCell(addRow, setAddRow)}
                 </td>
                 <td className="px-3 py-1.5">
                   <input

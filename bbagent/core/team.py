@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .agent import Agent, AgentState
-from .input import EventType
+from .input import InputType
 from .message import ContentBlock, Message, TextBlock
 from .tool import Tool
 
@@ -196,7 +196,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         target.input.push(
             content,
             source_id=f"team:{source}",
-            event_type=EventType.AGENT_MESSAGE,
+            event_type=InputType.AGENT_INPUT,
         )
         await self._record_team_message(TeamMessage(
             from_agent=source, to_agent=agent_name,
@@ -212,7 +212,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
         target.input.push(
             wrapped,
             source_id=f"team:{from_agent}",
-            event_type=EventType.AGENT_MESSAGE,
+            event_type=InputType.AGENT_INPUT,
         )
         await self._record_team_message(TeamMessage(
             from_agent=from_agent, to_agent=to_agent,
@@ -230,7 +230,7 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
                 agent.input.push(
                     wrapped,
                     source_id=f"team:{from_agent}",
-                    event_type=EventType.AGENT_MESSAGE,
+                    event_type=InputType.AGENT_INPUT,
                 )
                 count += 1
         await self._record_team_message(TeamMessage(

@@ -121,8 +121,12 @@ select = [
 ]
 ignore = [
     "E501",
+    "E402",
     "B008",
     "RUF012",
+    "ASYNC240",
+    "ASYNC230",
+    "ASYNC221",
 ]
 
 [tool.ruff.lint.per-file-ignores]

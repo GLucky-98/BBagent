@@ -10,24 +10,23 @@ affecting agents, MCP removal affecting tools).
 """
 
 import asyncio
+import contextlib
 import json
-import logging
 from pathlib import Path
 from typing import Optional
 
-from backend.schemas import UIState
-from backend.logging import get_backend_logger
 from backend.dispatcher import AgentOutputDispatcher
-from backend.errors import NotFoundError, ErrorCode
-
+from backend.errors import ErrorCode, NotFoundError
+from backend.factories.agent_factory import AgentFactory
+from backend.factories.mcp_factory import MCPFactory
 from backend.factories.model_factory import ModelFactory
 from backend.factories.prompt_factory import PromptFactory
-from backend.factories.skill_factory import SkillFactory
-from backend.factories.tool_factory import ToolFactory
-from backend.factories.mcp_factory import MCPFactory
-from backend.factories.agent_factory import AgentFactory
-from backend.factories.team_factory import TeamFactory
 from backend.factories.session_factory import SessionManager
+from backend.factories.skill_factory import SkillFactory
+from backend.factories.team_factory import TeamFactory
+from backend.factories.tool_factory import ToolFactory
+from backend.logging import get_backend_logger
+from backend.schemas import UIState
 
 logger = get_backend_logger("state")
 
@@ -181,10 +180,8 @@ class State:
         ]
         # Stop affected agents first
         for agent_id in affected:
-            try:
+            with contextlib.suppress(Exception):
                 await self.agent_factory.stop(agent_id)
-            except Exception:
-                pass
         # Now delete the model config and invalidate cache
         ok = self.model_factory.delete(model_id)
         if not ok:
@@ -316,7 +313,7 @@ class State:
     # Session delegation (global)
     # ------------------------------------------------------------------
 
-    def list_all_sessions(self, agent_id: str = None) -> list[dict]:
+    def list_all_sessions(self, agent_id: str | None = None) -> list[dict]:
         if not self.session_manager:
             return []
         return self.session_manager.list_sessions(agent_id)
@@ -327,7 +324,7 @@ class State:
         return await self.session_manager.get_session_detail(session_id)
 
     async def fork_session_at_turn(self, session_id: str, turn_index: int,
-                                   target_agent_id: str = None) -> dict:
+                                   target_agent_id: str | None = None) -> dict:
         if not self.session_manager:
             raise NotFoundError(ErrorCode.SESSION_NOT_FOUND, "Session manager not initialized")
         return await self.session_manager.fork_at_turn(session_id, turn_index, target_agent_id)
@@ -364,7 +361,7 @@ class State:
     def list_tools(self) -> list[dict]:
         """Return all tool configs as dicts for the API."""
         tools = []
-        for tid, tpl in self.tool_factory._configs.items():
+        for _tid, tpl in self.tool_factory._configs.items():
             entry = {
                 "id": tpl.id,
                 "name": tpl.name,

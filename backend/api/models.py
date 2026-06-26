@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException
 
-from backend.state import state_manager
 from backend.schemas import ModelConfig, ModelTestRequest
+from backend.state import state_manager
+from bbagent.core.message import HumanMessage, TextBlock
 from bbagent.core.model import Model, Model_Input
-from bbagent.core.message import TextBlock, HumanMessage
 
 router = APIRouter()
 
@@ -51,24 +51,21 @@ async def test_model(model_id: str, req: ModelTestRequest):
     try:
         model = Model.from_config_dict(model_config.core_dict)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to initialize model: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to initialize model: {e}") from None
 
     human_msg = HumanMessage(content=req.prompt)
     model_input = Model_Input(messages=[human_msg])
     try:
         response = model.invoke(model_input)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from None
 
     content = _extract_text_content(response)
     return {"content": content}
 
 
 def _extract_text_content(response) -> str:
-    if hasattr(response, "content"):
-        content = response.content
-    else:
-        content = response
+    content = response.content if hasattr(response, "content") else response
     if isinstance(content, str):
         return content
     if isinstance(content, list):

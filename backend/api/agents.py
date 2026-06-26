@@ -2,9 +2,9 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.state import state_manager
-from backend.schemas import AgentConfig
 from backend.logging import get_backend_logger
+from backend.schemas import AgentConfig
+from backend.state import state_manager
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
@@ -23,7 +23,7 @@ def _resolve_agent(agent_id: str) -> str:
 
 @router.get("")
 async def list_agents():
-    agents_dir = DATA_DIR / "agents"
+    DATA_DIR / "agents"
     result = []
     stale_ids: list[str] = []
     for agent_id in state_manager.agent_factory.agents:
@@ -170,17 +170,30 @@ async def add_timer(agent_id: str, body: dict):
     _resolve_agent(agent_id)
 
     name = body.get("name", "")
-    seconds = body.get("seconds")
+    timer_type = body.get("type", "interval")
     hint = body.get("hint", "")
     enabled = body.get("enabled", True)
 
-    if seconds is None or seconds <= 0:
-        raise HTTPException(status_code=400, detail="seconds must be a positive number")
-
-    try:
-        state_manager.agent_factory.add_timer(agent_id, name=name, seconds=seconds, hint=hint, enabled=enabled)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    if timer_type == "at":
+        time_str = body.get("time", "")
+        if not time_str:
+            raise HTTPException(status_code=400, detail="time is required for 'at' type timer")
+        try:
+            state_manager.agent_factory.add_timer(
+                agent_id, name=name, timer_type="at", time_str=time_str, hint=hint, enabled=enabled
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+    else:
+        seconds = body.get("seconds")
+        if seconds is None or seconds <= 0:
+            raise HTTPException(status_code=400, detail="seconds must be a positive number")
+        try:
+            state_manager.agent_factory.add_timer(
+                agent_id, name=name, timer_type="interval", seconds=seconds, hint=hint, enabled=enabled
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
     return state_manager.agent_factory.list_timers(agent_id)
 
 
@@ -191,6 +204,7 @@ async def update_timer(agent_id: str, timer_name: str, body: dict):
     success = state_manager.agent_factory.update_timer(
         agent_id, timer_name,
         seconds=body.get("seconds"),
+        time_str=body.get("time"),
         hint=body.get("hint"),
         enabled=body.get("enabled"),
     )

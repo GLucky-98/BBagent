@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -176,14 +177,10 @@ async def chat_ws(websocket: WebSocket):
         global_q.put_nowait(_STOP)
         forwarder_task.cancel()
         global_forwarder_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await forwarder_task
-        except asyncio.CancelledError:
-            pass
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await global_forwarder_task
-        except asyncio.CancelledError:
-            pass
 
         # Unsubscribe from per-agent dispatcher
         if current_agent_id:

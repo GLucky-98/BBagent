@@ -329,7 +329,7 @@ async def clean_memory(
     return True
 
 
-def _hard_clean_memories(memory_manager: MemoryManager, logger: logging.Logger = None) -> int:
+def _hard_clean_memories(memory_manager: MemoryManager, logger: logging.Logger | None = None) -> int:
     all_data = memory_manager.collection.get(include=["documents", "metadatas"])
     ids = all_data.get("ids", [])
     if not ids:
@@ -719,7 +719,7 @@ def create_memory_hook(
         )
 
         prefix = inject_user_prompt.format(search_context=context) + "\n\n"
-        last_msg.content = [TextBlock(text=prefix, origin="system")] + last_msg.content
+        last_msg.content = [TextBlock(text=prefix, origin="system"), *last_msg.content]
         runtime.mark_memory_keys_seen(session.id, selected_memory_keys)
 
     return (

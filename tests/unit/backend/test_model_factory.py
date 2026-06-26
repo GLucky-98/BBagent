@@ -2,9 +2,9 @@
 
 import pytest
 
+from backend.errors import NotFoundError
 from backend.factories.model_factory import ModelFactory
 from backend.schemas import ModelConfig
-from backend.errors import NotFoundError
 
 
 def _ensure_dir(data_dir):

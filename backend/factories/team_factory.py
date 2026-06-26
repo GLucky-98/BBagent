@@ -5,19 +5,19 @@ nested AgentConfig objects. Agent creation is delegated to AgentFactory.
 """
 
 import asyncio
+import contextlib
 import json
 import shutil
 from pathlib import Path
-from typing import Optional
 
-from bbagent.core.agent import Agent
-from bbagent.core.team import AgentTeam, TeamConfig as CoreTeamConfig
-
-from backend.schemas import TeamConfig, AgentConfig
+from backend.dispatcher import AgentOutputDispatcher
 from backend.factories import _next_id
 from backend.factories.team_conversation_factory import TeamConversationManager
 from backend.logging import get_backend_logger
-from backend.dispatcher import AgentOutputDispatcher
+from backend.schemas import AgentConfig, TeamConfig
+from bbagent.core.agent import Agent
+from bbagent.core.team import AgentTeam
+from bbagent.core.team import TeamConfig as CoreTeamConfig
 
 logger = get_backend_logger("state.team_factory")
 
@@ -100,7 +100,7 @@ class TeamFactory:
                 )
 
     async def _load_one(self, team_dir: Path, config_path: Path):
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, encoding='utf-8') as f:
             raw = json.loads(f.read()) or {}
         team_id: str = raw.get("id", "") or _next_id()
 
@@ -112,7 +112,7 @@ class TeamFactory:
             if agent:
                 agents[agent.name] = agent
 
-        # Reconstruct contacts — 直接透传，格式为 {agentName: {otherName: role}}
+        # Reconstruct contacts — 直接透传,格式为 {agentName: {otherName: role}}
         contacts: dict[str, dict[str, str]] = {}
         for agent_name, contact_dict in raw.get("contacts", {}).items():
             contacts[agent_name] = {
@@ -141,10 +141,10 @@ class TeamFactory:
     # Accessors
     # ------------------------------------------------------------------
 
-    def get(self, team_id: str) -> Optional[AgentTeam]:
+    def get(self, team_id: str) -> AgentTeam | None:
         return self.teams.get(team_id)
 
-    def get_config(self, team_id: str) -> Optional[TeamConfig]:
+    def get_config(self, team_id: str) -> TeamConfig | None:
         team = self.teams.get(team_id)
         if not team:
             return None
@@ -167,14 +167,14 @@ class TeamFactory:
     # ------------------------------------------------------------------
 
     async def create(self, config: TeamConfig, member_configs: list[AgentConfig] | None = None) -> tuple[AgentTeam, str]:
-        """创建团队。
+        """创建团队.
 
-        流程：
+        流程:
         1. 生成 team_id
-        2. 通过 AgentFactory 逐个创建成员 Agent（agent 自动落盘到 data/agents/）
+        2. 通过 AgentFactory 逐个创建成员 Agent(agent 自动落盘到 data/agents/)
         3. 构建 core AgentTeam 实例
         4. 落盘 team_config.json
-        失败时回滚已创建的 agent。
+        失败时回滚已创建的 agent.
         """
         team_id = _next_id()
 
@@ -199,20 +199,18 @@ class TeamFactory:
                     )
                 agent = await self._agent_factory.create(member_cfg)
                 # AgentFactory.create() 内部设置了 config.id = agent_id
-                # member_cfg 是引用传递，所以 .id 已被赋值
+                # member_cfg 是引用传递,所以 .id 已被赋值
                 created_agent_ids.append(member_cfg.id)
                 agents[agent.name] = agent
         except Exception:
-            # 回滚：删除已创建的 agent
+            # 回滚:删除已创建的 agent
             for aid in created_agent_ids:
-                try:
+                with contextlib.suppress(Exception):
                     await self._agent_factory.delete(aid)
-                except Exception:
-                    pass
             raise
 
         # --- 步骤2: 构建 core AgentTeam ---
-        # contacts 格式: {agentName: {otherName: role}}，不含 self-key
+        # contacts 格式: {agentName: {otherName: role}},不含 self-key
         contacts = config.contacts or {}
 
         core_config = CoreTeamConfig(
@@ -372,10 +370,8 @@ class TeamFactory:
                 new_member_ids.append(member_cfg.id)
         except Exception:
             for aid in created_ids:
-                try:
+                with contextlib.suppress(Exception):
                     await self._agent_factory.delete(aid)
-                except Exception:
-                    pass
             raise
 
         meta["memberIds"] = new_member_ids
@@ -408,7 +404,7 @@ class TeamFactory:
         team.update_state()
         return team.state
 
-    async def update(self, team_id: str, updates: dict) -> Optional[AgentTeam]:
+    async def update(self, team_id: str, updates: dict) -> AgentTeam | None:
         team = self.teams.get(team_id)
         if not team:
             return None
@@ -466,7 +462,7 @@ class TeamFactory:
         self._team_meta.pop(team_id, None)
         self._started.discard(team_id)
         self._dispatchers.pop(team_id, None)
-        # 删除 teams/{id}/ 目录（team.base_dir 的父目录）
+        # 删除 teams/{id}/ 目录(team.base_dir 的父目录)
         if team.base_dir:
             team_root = team.base_dir.parent
             if team_root.exists():

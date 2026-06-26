@@ -592,7 +592,7 @@ export function ChatWindow() {
       const agentId = subscribedAgentRef.current;
       if (!agentId) return;
 
-      if (chunk.type === "text" && chunk.content) {
+      if (chunk.type === "stream_chunk" && chunk.chunk_type === "text" && chunk.content) {
         const content = chunk.content as string;
         streamBufferRef.current += content;
         const state = useAppStore.getState();
@@ -617,7 +617,7 @@ export function ChatWindow() {
             flushSync(() => patchMessage(agentId, currentAssistantMsgIdRef.current!, { content: streamBufferRef.current }));
           });
         }
-      } else if (chunk.type === "thinking" && chunk.content) {
+      } else if (chunk.type === "stream_chunk" && chunk.chunk_type === "thinking" && chunk.content) {
         const content = chunk.content as string;
         thinkingBufferRef.current += content;
         const state = useAppStore.getState();
@@ -643,7 +643,7 @@ export function ChatWindow() {
             flushSync(() => patchMessage(agentId, currentThinkingMsgIdRef.current!, { content: thinkingBufferRef.current }));
           });
         }
-      } else if (chunk.type === "completed_tool_use") {
+      } else if (chunk.type === "stream_chunk" && chunk.chunk_type === "completed_tool_use") {
         const ct = chunk.content as Record<string, unknown> | undefined;
         const toolCallId = (ct?.id as string) || "";
         upsertMessage(agentId, {
@@ -657,7 +657,7 @@ export function ChatWindow() {
           toolCallId,
           runtime: true,
         });
-      } else if (chunk.type === "tool_results") {
+      } else if (chunk.type === "stream_chunk" && chunk.chunk_type === "tool_results") {
         const results = chunk.content;
         if (Array.isArray(results)) {
           for (const r of results) {
@@ -694,7 +694,7 @@ export function ChatWindow() {
             });
           }
         }
-      } else if (chunk.type === "todo_list") {
+      } else if (chunk.type === "stream_chunk" && chunk.chunk_type === "todo_list") {
         const snapshot = chunk.content as Record<string, unknown> | undefined;
         if (!snapshot) return;
         const items = Array.isArray(snapshot.items) ? (snapshot.items as Record<string, unknown>[]) : [];
@@ -732,10 +732,10 @@ export function ChatWindow() {
           chunkType: "todo_list",
           runtime: true,
         });
-      } else if (chunk.type === "input_event") {
+      } else if (chunk.type === "event" && ["user_input", "timer_input", "agent_input"].includes(chunk.event_type as string)) {
         const sourceId = (chunk.source_id as string) || "";
         const eventType = (chunk.event_type as string) || "";
-        if (eventType === "user_message") {
+        if (eventType === "user_input") {
           if (sourceId !== "user") {
             // sourceId is the frontend message_id — upsert for dedup (normal flow)
             // and recovery (dispatcher replay after agent switch wipes history).
@@ -750,7 +750,7 @@ export function ChatWindow() {
           return;
         }
         let sourceTag: string;
-        if (eventType === "timer_trigger") {
+        if (eventType === "timer_input") {
           sourceTag = `Timer: ${sourceId.replace("timer:", "")}`;
         } else if (sourceId.startsWith("team:")) {
           const sender = sourceId.slice(5);
@@ -768,7 +768,7 @@ export function ChatWindow() {
           chunkType: "input_event",
           sourceAgent: sourceTag || undefined,
         });
-      } else if (chunk.type === "completed_message") {
+      } else if (chunk.type === "stream_chunk" && chunk.chunk_type === "completed_message") {
         // 用 completed_message 中的最终完整内容替换流式拼接的消息
         const completedMsg = chunk.content as Record<string, unknown> | undefined;
         if (completedMsg && currentAssistantMsgIdRef.current) {
@@ -800,7 +800,7 @@ export function ChatWindow() {
         textFlushPendingRef.current = false;
         thinkingFlushPendingRef.current = false;
         setStreamingMsgId(null);
-      } else if (chunk.type === "interrupted") {
+      } else if (chunk.type === "event" && chunk.event_type === "interrupted") {
         streamBufferRef.current = "";
         currentAssistantMsgIdRef.current = null;
         thinkingBufferRef.current = "";
@@ -813,7 +813,7 @@ export function ChatWindow() {
         if (typeof chunk.context_tokens === "number") {
           useAppStore.getState().setAgentContextTokens(agentId, chunk.context_tokens);
         }
-      } else if (chunk.type === "error") {
+      } else if (chunk.type === "event" && chunk.event_type === "error") {
         addMessage(agentId, {
           id: crypto.randomUUID(),
           role: "system",

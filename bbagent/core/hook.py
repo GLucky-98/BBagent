@@ -1,8 +1,9 @@
 import asyncio
+from collections.abc import Callable
 from copy import copy
-from enum import Enum
-from typing import Callable, Any, Dict, List, Optional
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
 
 class HookType(Enum):
@@ -29,7 +30,7 @@ class HookContext:
 
     def __init__(self):
         self.agent = None
-        self.data: Dict[str, Any] = {}
+        self.data: dict[str, Any] = {}
 
     def set(self, key: str, value: Any):
         self.data[key] = value
@@ -75,10 +76,10 @@ class AgentHook:
     DEFAULT_PRIORITY = 150
 
     def __init__(self):
-        self._hooks: Dict[HookType, List[Hook]] = {
+        self._hooks: dict[HookType, list[Hook]] = {
             hook_type: [] for hook_type in HookType
         }
-        self._context: Optional[HookContext] = None
+        self._context: HookContext | None = None
         self._enabled = True
 
     @property
@@ -90,8 +91,8 @@ class AgentHook:
     def set_context(self, agent):
         self.context.agent = agent
 
-    def hook(self, hook_type: HookType, priority: int = None, critical: bool = False):
-        """装饰器：注册 Hook"""
+    def hook(self, hook_type: HookType, priority: int | None = None, critical: bool = False):
+        """装饰器:注册 Hook"""
         if priority is None:
             priority = self.DEFAULT_PRIORITY
 
@@ -108,7 +109,7 @@ class AgentHook:
         return decorator
 
     def register(self, hook_type: HookType, func: Callable,
-                 priority: int = None, critical: bool = False):
+                 priority: int | None = None, critical: bool = False):
         """函数方式注册 Hook"""
         if priority is None:
             priority = self.DEFAULT_PRIORITY
@@ -121,8 +122,8 @@ class AgentHook:
         )
         self._register(h)
 
-    def unregister(self, hook_type: HookType, name: str = None):
-        """注销 Hook，不指定 name 则注销该类型下的所有 Hook"""
+    def unregister(self, hook_type: HookType, name: str | None = None):
+        """注销 Hook,不指定 name 则注销该类型下的所有 Hook"""
         if name is None:
             self._hooks[hook_type] = []
         else:
@@ -148,7 +149,7 @@ class AgentHook:
     def disable(self):
         self._enabled = False
 
-    def list_hooks(self) -> Dict[HookType, List[str]]:
+    def list_hooks(self) -> dict[HookType, list[str]]:
         return {
             hook_type: [h.name for h in hooks]
             for hook_type, hooks in self._hooks.items()

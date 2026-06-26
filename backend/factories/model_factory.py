@@ -2,14 +2,12 @@
 
 import json
 from pathlib import Path
-from typing import Optional
 
-from bbagent.core.model import Model
-
-from backend.schemas import ModelConfig
-from backend.errors import NotFoundError, ErrorCode
+from backend.errors import ErrorCode, NotFoundError
 from backend.factories import _next_id, _safe_filename
 from backend.logging import get_backend_logger
+from backend.schemas import ModelConfig
+from bbagent.core.model import Model
 
 
 class ModelFactory:
@@ -55,7 +53,7 @@ class ModelFactory:
 
     # --- CRUD ---
 
-    def get(self, model_id: str) -> Optional[ModelConfig]:
+    def get(self, model_id: str) -> ModelConfig | None:
         return self._configs.get(model_id)
 
     def list_all(self) -> list[ModelConfig]:
@@ -68,7 +66,7 @@ class ModelFactory:
         self._save_file(config)
         return config
 
-    def update(self, model_id: str, updates: dict) -> Optional[ModelConfig]:
+    def update(self, model_id: str, updates: dict) -> ModelConfig | None:
         config = self._configs.get(model_id)
         if not config:
             return None
@@ -91,7 +89,7 @@ class ModelFactory:
 
     # --- Model instance cache ---
 
-    def acquire(self, model_id: str, allow_missing: bool = False) -> Optional[Model]:
+    def acquire(self, model_id: str, allow_missing: bool = False) -> Model | None:
         """Resolve a ModelConfig.id to a shared Model instance (refcount++)."""
         if not model_id or not model_id.strip():
             if allow_missing:
@@ -113,7 +111,7 @@ class ModelFactory:
         self._refcount[mid] = 1
         return model
 
-    def acquire_submodel(self, submodel_id: str) -> Optional[Model]:
+    def acquire_submodel(self, submodel_id: str) -> Model | None:
         return self.acquire(submodel_id, allow_missing=True)
 
     async def release(self, model_id: str) -> None:

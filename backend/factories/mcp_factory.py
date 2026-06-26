@@ -7,17 +7,20 @@ AgentFactory). Notifies ToolFactory when MCP servers are added/removed/updated.
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
+from backend.factories import _mcp_tool_id, _next_id, _safe_filename
+from backend.logging import get_backend_logger
+from backend.schemas import MCPServerConfig, ToolConfig
 from bbagent.core.mcp import (
     MCPClient,
+)
+from bbagent.core.mcp import (
     MCPServerConfig as CoreMCPServerConfig,
+)
+from bbagent.core.mcp import (
     parse_config_dict as _parse_mcp_dict,
 )
-
-from backend.schemas import MCPServerConfig, ToolConfig
-from backend.factories import _next_id, _mcp_tool_id, _safe_filename
-from backend.logging import get_backend_logger
 
 if TYPE_CHECKING:
     from backend.factories.tool_factory import ToolFactory
@@ -81,7 +84,7 @@ class MCPFactory:
                 *[self._discover_tools(c) for c in empty_configs],
                 return_exceptions=True,
             )
-            for config, result in zip(empty_configs, results):
+            for config, result in zip(empty_configs, results, strict=False):
                 if isinstance(result, Exception):
                     self._logger.warning(
                         f"Failed to discover tools for MCP '{config.name}' during load: {result}"
@@ -89,7 +92,7 @@ class MCPFactory:
 
     # --- CRUD ---
 
-    def get(self, mcp_id: str) -> Optional[MCPServerConfig]:
+    def get(self, mcp_id: str) -> MCPServerConfig | None:
         return self._configs.get(mcp_id)
 
     def list_all(self) -> list[MCPServerConfig]:
@@ -107,7 +110,7 @@ class MCPFactory:
             self._logger.warning(f"Failed to discover tools for MCP '{config.name}': {e}")
         return config
 
-    async def update(self, mcp_id: str, updates: dict) -> Optional[MCPServerConfig]:
+    async def update(self, mcp_id: str, updates: dict) -> MCPServerConfig | None:
         config = self._configs.get(mcp_id)
         if not config:
             return None

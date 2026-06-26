@@ -4,9 +4,9 @@ SubAgent tool - Delegate tasks to a sub-agent with its own model and tools.
 import inspect
 from uuid import uuid4 as uuid
 
-from ..core.tool import Tool
 from ..core.agent import SubAgent
 from ..core.model import Model
+from ..core.tool import Tool
 from .policy import Policy
 
 

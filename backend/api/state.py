@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
-from backend.state import state_manager
 from backend.schemas import UIState
+from backend.state import state_manager
 
 router = APIRouter()
 

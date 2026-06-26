@@ -3,11 +3,9 @@ Read tool - Read file contents with optional truncation and offset/limit support
 """
 import os
 from pathlib import Path
-from typing import Optional
 
 from ..core.tool import Tool
 from .policy import Policy
-
 
 DEFAULT_MAX_BYTES = 30_000
 
@@ -31,8 +29,8 @@ def create_read_tool(
 
     def read_func(
         path: str,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
+        offset: int | None = None,
+        limit: int | None = None,
     ) -> str:
         if not path:
             return "Error: path is required"
@@ -41,10 +39,7 @@ def create_read_tool(
             p = Path(path)
             resolved_path = str(p if p.is_absolute() else (Path(policy.cwd) / p).resolve())
         else:
-            if os.path.isabs(path):
-                resolved_path = path
-            else:
-                resolved_path = os.path.join(cwd, path)
+            resolved_path = path if os.path.isabs(path) else os.path.join(cwd, path)
 
         if not os.access(resolved_path, os.R_OK):
             return f"Error: Cannot read file: {resolved_path}"
@@ -65,15 +60,9 @@ def create_read_tool(
             lines = content.splitlines()
             total_lines = len(lines)
 
-            if offset is not None:
-                start = max(0, offset - 1)
-            else:
-                start = 0
+            start = max(0, offset - 1) if offset is not None else 0
 
-            if limit is not None:
-                end = min(start + limit, total_lines)
-            else:
-                end = total_lines
+            end = min(start + limit, total_lines) if limit is not None else total_lines
 
             selected_lines = lines[start:end]
 
@@ -104,7 +93,7 @@ def create_read_tool(
             return "\n".join(output_parts)
 
         except Exception as e:
-            return f"Error reading file: {str(e)}"
+            return f"Error reading file: {e!s}"
 
     input_schema = {
         "type": "object",

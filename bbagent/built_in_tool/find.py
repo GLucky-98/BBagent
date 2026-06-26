@@ -2,8 +2,8 @@
 Find tool - Find files by name pattern (glob matching).
 """
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Optional
 
 from ..core.tool import Tool
 from .policy import Policy
@@ -27,10 +27,7 @@ def create_find_tool(
     else:
         policy = None
 
-    if policy is not None:
-        cwd = policy.cwd
-    else:
-        cwd = "."
+    cwd = policy.cwd if policy is not None else "."
 
     operations = FindOperations()
 
@@ -46,7 +43,7 @@ def create_find_tool(
 
     def find_func(
         pattern: str,
-        path: Optional[str] = None,
+        path: str | None = None,
         file_only: bool = True,
         dir_only: bool = False,
         max_results: int = 100,
@@ -101,7 +98,7 @@ def create_find_tool(
             return "\n".join(relative_matches)
 
         except Exception as e:
-            return f"Error finding files: {str(e)}"
+            return f"Error finding files: {e!s}"
 
     input_schema = {
         "type": "object",

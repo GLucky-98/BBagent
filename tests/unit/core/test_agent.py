@@ -1,16 +1,13 @@
 """Baseline tests for bbagent.core.agent — main run loop and lifecycle."""
 
-import asyncio
 
 import pytest
 
 from bbagent.core.agent import Agent, AgentConfig
-from bbagent.core.input import AgentEvent, EventType
 from bbagent.core.message import (
     HumanMessage,
     ModelMessage,
     TextBlock,
-    ToolMessage,
     ToolUseBlock,
 )
 from bbagent.core.model import Model, Model_Input
@@ -119,7 +116,8 @@ async def test_agent_run_produces_completed_message(tmp_path):
         chunks.append(chunk)
 
     assert len(chunks) == 1
-    assert chunks[0]["type"] == "completed_message"
+    assert chunks[0]["type"] == "stream_chunk"
+    assert chunks[0]["chunk_type"] == "completed_message"
     assert chunks[0]["content"].stop_reason == "end_turn"
 
 
@@ -146,12 +144,12 @@ async def test_agent_run_with_tool_then_end(tmp_path):
     async for chunk in agent.run(HumanMessage(content="Greet World")):
         chunks.append(chunk)
 
-    types = [c["type"] for c in chunks]
+    types = [(c["type"], c.get("chunk_type")) for c in chunks]
     assert types == [
-        "completed_tool_use",
-        "completed_message",
-        "tool_results",
-        "completed_message",
+        ("stream_chunk", "completed_tool_use"),
+        ("stream_chunk", "completed_message"),
+        ("stream_chunk", "tool_results"),
+        ("stream_chunk", "completed_message"),
     ]
 
 

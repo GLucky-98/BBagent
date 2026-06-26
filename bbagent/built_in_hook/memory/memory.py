@@ -1,18 +1,16 @@
-import re
 import json
-import hashlib
 import logging
-from dataclasses import dataclass, asdict
-from typing import Optional, List
+import re
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
-
-import jieba
 import chromadb
+import jieba
 from rank_bm25 import BM25Okapi
 
 from .embedding import Embedding, OllamaEmbedding
+
 
 @dataclass
 class Memory:
@@ -21,7 +19,7 @@ class Memory:
     session_id: str
     date_created: str
     access_count: int = 0
-    last_accessed: Optional[str] = None
+    last_accessed: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -34,7 +32,7 @@ class Memory:
             session_id=data.get("session_id", ""),
             date_created=data.get("date_created", ""),
             access_count=data.get("access_count", 0),
-            last_accessed=data.get("last_accessed", None),
+            last_accessed=data.get("last_accessed"),
         )
 
     def to_metadata(self) -> dict:
@@ -46,7 +44,7 @@ class Memory:
         }
 
     @staticmethod
-    def create(content: str, session_id: str, memory_id: str = None) -> 'Memory':
+    def create(content: str, session_id: str, memory_id: str | None = None) -> 'Memory':
         return Memory(
             id=memory_id,
             content=content,
@@ -55,7 +53,7 @@ class Memory:
             access_count=0,
             last_accessed=None,
         )
-  
+
 
 class MemoryManager:
 
@@ -63,7 +61,7 @@ class MemoryManager:
                  name: str = "memories",
                  embedding: Embedding = None,
                  memory_dir: str | Path = "./memory",
-                 logger: Optional[logging.Logger] = None):
+                 logger: logging.Logger | None = None):
 
         if embedding is None:
             embedding = OllamaEmbedding()
@@ -144,7 +142,7 @@ class MemoryManager:
         if not path.exists():
             return {"mutation_count": 0, "last_cleanup": None, "last_mutation": None}
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             self.logger.warning(f"Failed to read cleanup state file, resetting: {path}")
@@ -196,7 +194,7 @@ class MemoryManager:
         state["last_cleanup"] = datetime.now().isoformat()
         self._save_cleanup_state(state)
 
-    async def _add_to_chroma(self, memory: Memory, embedding: list[float] = None):
+    async def _add_to_chroma(self, memory: Memory, embedding: list[float] | None = None):
         if embedding is None:
             embedding = await self.embedding.get_embedding(memory.content)
         self.collection.add(
@@ -206,7 +204,7 @@ class MemoryManager:
             metadatas=[memory.to_metadata()],
         )
 
-    async def _add_batch_to_chroma(self, memories: List[Memory], embeddings: List[List[float]]):
+    async def _add_batch_to_chroma(self, memories: list[Memory], embeddings: list[list[float]]):
         self.collection.add(
             ids=[m.id for m in memories],
             embeddings=embeddings,
@@ -220,7 +218,7 @@ class MemoryManager:
         except Exception as e:
             self.logger.warning(f"Failed to delete memory from ChromaDB: id={memory_id}, error={e}")
 
-    async def add_memories(self, memories: List[Memory]) -> dict:
+    async def add_memories(self, memories: list[Memory]) -> dict:
         all_data = self.collection.get(include=["documents"])
         existing_contents = set(all_data.get("documents", []))
 
@@ -248,7 +246,7 @@ class MemoryManager:
             self.logger.error(f"Failed to get embeddings for {len(contents)} memories: {e}")
             return {"added_count": 0, "skipped_duplicates": skipped, "failed_count": len(pending)}
 
-        valid_pairs = [(m, e) for m, e in zip(pending, embeddings) if e is not None]
+        valid_pairs = [(m, e) for m, e in zip(pending, embeddings, strict=False) if e is not None]
         if len(valid_pairs) < len(pending):
             failed_count = len(pending) - len(valid_pairs)
             self.logger.warning(
@@ -335,7 +333,7 @@ class MemoryManager:
         scores = self.bm25.get_scores(tokenized_query)
 
         doc_scores = [(doc_id, score) for doc_id, score in
-                      zip(self.doc_mapping.values(), scores) if score > 0]
+                      zip(self.doc_mapping.values(), scores, strict=False) if score > 0]
 
         doc_scores.sort(key=lambda x: x[1], reverse=True)
 
@@ -408,7 +406,7 @@ class MemoryManager:
 
     def get_by_ids(self, memory_ids: list[str]) -> list[dict]:
         data = self.collection.get(ids=memory_ids, include=["documents"])
-        id_to_doc = dict(zip(data.get("ids", []), data.get("documents", [])))
+        id_to_doc = dict(zip(data.get("ids", []), data.get("documents", []), strict=False))
         result = []
         for mid in memory_ids:
             if mid in id_to_doc:

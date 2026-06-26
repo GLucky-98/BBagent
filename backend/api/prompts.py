@@ -6,9 +6,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.logging import get_backend_logger
-from backend.state import state_manager
 from backend.schemas import PromptConfig
-
+from backend.state import state_manager
 
 logger = get_backend_logger("api.prompts")
 

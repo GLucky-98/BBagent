@@ -69,9 +69,9 @@ export const api = {
 
   // Timers — per agent, timer identified by name
   listTimers: (id: string) => request(`/agents/${id}/timers`),
-  addTimer: (id: string, data: { name: string; seconds: number; hint: string; enabled: boolean }) =>
+  addTimer: (id: string, data: { name: string; type: "interval" | "at"; seconds?: number; time?: string; hint: string; enabled: boolean }) =>
     request(`/agents/${id}/timers`, { method: "POST", body: JSON.stringify(data) }),
-  updateTimer: (id: string, name: string, data: { seconds?: number; hint?: string; enabled?: boolean }) =>
+  updateTimer: (id: string, name: string, data: { seconds?: number; time?: string; hint?: string; enabled?: boolean }) =>
     request(`/agents/${id}/timers/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(data) }),
   startTimer: (id: string, name: string) =>
     request(`/agents/${id}/timers/${encodeURIComponent(name)}/start`, { method: "POST" }),

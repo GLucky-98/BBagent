@@ -2,11 +2,10 @@
 
 import json
 from pathlib import Path
-from typing import Optional
 
-from backend.schemas import PromptConfig
 from backend.factories import _next_id, _safe_filename
 from backend.logging import get_backend_logger
+from backend.schemas import PromptConfig
 
 
 class PromptFactory:
@@ -48,7 +47,7 @@ class PromptFactory:
 
     # --- CRUD ---
 
-    def get(self, prompt_id: str) -> Optional[PromptConfig]:
+    def get(self, prompt_id: str) -> PromptConfig | None:
         return self._configs.get(prompt_id)
 
     def list_all(self) -> list[PromptConfig]:
@@ -61,7 +60,7 @@ class PromptFactory:
         self._save_file(config)
         return config
 
-    def update(self, prompt_id: str, updates: dict) -> Optional[PromptConfig]:
+    def update(self, prompt_id: str, updates: dict) -> PromptConfig | None:
         config = self._configs.get(prompt_id)
         if not config:
             return None

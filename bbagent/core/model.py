@@ -1,31 +1,31 @@
-from .message import (
-    ModelMessage,
-    Message,
-    HumanMessage,
-    ToolMessage,
-    ContentBlock,
-    TextBlock,
-    ImageBlock,
-    ToolUseBlock,
-)
+import asyncio
 import json
 import os
 import re
 from abc import ABC, abstractmethod
-from typing import List, AsyncIterator, Union
-import httpx
-import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
+import httpx
 
-
+from .message import (
+    ContentBlock,
+    HumanMessage,
+    ImageBlock,
+    Message,
+    ModelMessage,
+    TextBlock,
+    ToolMessage,
+    ToolUseBlock,
+)
 from .tool import Tool
 
+
 @dataclass
-class Model_Input:
+class Model_Input:  # noqa: N801
     prompt: str = ''
-    tools: List[Tool] = field(default_factory=list)
-    messages: List[Message] = field(default_factory=list)
+    tools: list[Tool] = field(default_factory=list)
+    messages: list[Message] = field(default_factory=list)
 
 
 PROVIDER_REGISTRY: dict[str, type] = {}
@@ -126,9 +126,7 @@ class Model(ABC):
     def _is_retryable(status_code: int) -> bool:
         if status_code == 429:
             return True
-        if status_code >= 500:
-            return True
-        return False
+        return status_code >= 500
 
     @staticmethod
     def _classify_error(e: httpx.HTTPStatusError) -> str:
@@ -157,13 +155,13 @@ class AnthropicModel(Model):
                  top_p: float = 1,
                  thinking: bool = True,
                  **kwargs):
-        
+
         self.provider = "anthropic"
         self.base_url_raw = base_url
         self.base_url = base_url + '/v1/messages'
 
         super().__init__(model, api_key, base_url, max_context_tokens=max_context_tokens, max_concurrent=max_concurrent)
-        
+
         self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
         self.top_p = top_p
@@ -186,7 +184,7 @@ class AnthropicModel(Model):
             self.payload["thinking"] = {"type": "adaptive"}
         else:
             self.payload["thinking"] = {"type": "disabled"}
-        
+
         self.payload.update(self.extra_args)
         self._base_payload = dict(self.payload)
 
@@ -212,7 +210,7 @@ class AnthropicModel(Model):
                         time.sleep(retry_delay * (2 ** attempt))
                         continue
                     raise RuntimeError(f"Network error after {max_retries} attempts: {e}") from e
-    
+
     async def async_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0) -> ModelMessage | str:
         payload = self.payload_construct(model_input)
         client = self.async_client
@@ -237,7 +235,7 @@ class AnthropicModel(Model):
         finally:
             self._active_requests -= 1
             self._semaphore.release()
-    
+
     async def async_stream_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0):
         payload = {**self.payload_construct(model_input), 'stream': True}
         client = self.async_client
@@ -256,7 +254,7 @@ class AnthropicModel(Model):
                             if line.startswith('data: '):
                                 data = line[6:]
                                 if data == '[DONE]':
-                                    continue                           
+                                    continue
                                 try:
                                     event = json.loads(data)
                                     event_type = event.get('type','')
@@ -292,9 +290,8 @@ class AnthropicModel(Model):
                                                 if block.get('type') == 'thinking':
                                                     block['thinking'] = block.get('thinking', '') + delta.get('thinking', '')
                                                     yield {'type':'thinking','content':delta.get('thinking', '')}
-                                            elif delta_type == 'signature_delta':
-                                                if block.get('type') == 'thinking':
-                                                    block['signature'] = delta.get('signature', '')
+                                            elif delta_type == 'signature_delta' and block.get('type') == 'thinking':
+                                                block['signature'] = delta.get('signature', '')
                                     if event_type == 'content_block_stop':
                                         index = event.get('index',None)
                                         block = accumulated_block[index] if index < len(accumulated_block) else None
@@ -314,7 +311,7 @@ class AnthropicModel(Model):
                                         yield {'type':'completed_message','content':self.model_response_parse(accumulated_message)}
                                         return
                                 except json.JSONDecodeError:
-                                    continue             
+                                    continue
                 except httpx.HTTPStatusError as e:
                     if self._is_retryable(e.response.status_code) and attempt < max_retries - 1:
                         await asyncio.sleep(retry_delay * (2 ** attempt))
@@ -337,7 +334,7 @@ class AnthropicModel(Model):
 
         if model_input.tools:
             payload['tools'] = [t.schema for t in model_input.tools]
-        
+
         payload_messages = []
         if model_input.messages:
             for message in model_input.messages:
@@ -353,15 +350,15 @@ class AnthropicModel(Model):
                         payload_messages.append({'role':'user', 'content':[{'type':'tool_result','tool_use_id':message.id,'content':self.content_block_parse(message.content)}]})
                     else:
                         payload_messages.append({'role':'user', 'content':[{'type':'tool_result','tool_use_id':message.id,'content':str(message.content)}]})
-    
+
         payload['messages'] = payload_messages
-        
+
         return payload
-    
+
     def model_message_to_payload(self, message: ModelMessage) -> dict:
-        """从 ModelMessage 结构化字段重建 Anthropic API 格式（不依赖 raw_json）"""
+        """从 ModelMessage 结构化字段重建 Anthropic API 格式(不依赖 raw_json)"""
         content = []
-        # thinking 块（带 signature 以保持扩展思考连续性）
+        # thinking 块(带 signature 以保持扩展思考连续性)
         if message.thinking:
             thinking_block = {"type": "thinking", "thinking": message.thinking}
             if message.thinking_signature:
@@ -383,7 +380,7 @@ class AnthropicModel(Model):
             })
         return {"role": "assistant", "content": content}
 
-    def content_block_parse(self, content_blocks: List[ContentBlock]) -> List[dict]:
+    def content_block_parse(self, content_blocks: list[ContentBlock]) -> list[dict]:
         """解析内容块, 其实只负责HumanMessage和ToolMessage里的内容块解析"""
         result = []
         for block in content_blocks:
@@ -394,10 +391,10 @@ class AnthropicModel(Model):
 
         return result
 
-    def model_response_parse(self, response:dict) -> ModelMessage:       
+    def model_response_parse(self, response:dict) -> ModelMessage:
         id = response.get('id','')
-        stop_reason = response.get('stop_reason','')       
-        usage_data = response.get('usage',{})   
+        stop_reason = response.get('stop_reason','')
+        usage_data = response.get('usage',{})
         raw_content = response.get('content',[])
         raw_json = json.dumps({'role':'assistant','content':raw_content}, ensure_ascii=False)
 
@@ -424,7 +421,7 @@ class AnthropicModel(Model):
                     tool_calls.append(ToolUseBlock(id=block['id'], name=block['name'], input=block['input']))
         else:
             content = raw_content
-        
+
         input_tokens = (usage_data.get('input_tokens', 0)
                         + usage_data.get('cache_read_input_tokens', 0)
                         + usage_data.get('cache_creation_input_tokens', 0))
@@ -498,14 +495,14 @@ class OpenAIModel(Model):
         payload = dict(self._base_payload)
         messages = []
 
-        # 1. 处理 system prompt（OpenAI 使用 system 角色）
+        # 1. 处理 system prompt(OpenAI 使用 system 角色)
         if model_input.prompt:
             messages.append({"role": "system", "content": model_input.prompt})
 
         # 2. 转换历史消息
         for msg in model_input.messages:
             if isinstance(msg, HumanMessage):
-                # 用户消息：可以是纯文本或 content block 列表
+                # 用户消息:可以是纯文本或 content block 列表
                 content = self.content_block_parse(msg.content)
                 messages.append({"role": "user", "content": content})
 
@@ -537,14 +534,14 @@ class OpenAIModel(Model):
                     }
                 })
             payload["tools"] = tools
-            # 默认自动选择工具，可扩展为接收 tool_choice 参数
+            # 默认自动选择工具,可扩展为接收 tool_choice 参数
             if "tool_choice" not in payload:
                 payload["tool_choice"] = "auto"
 
         return payload
 
     def model_message_to_payload(self, message: ModelMessage) -> dict:
-        """从 ModelMessage 结构化字段重建 OpenAI API 格式（不依赖 raw_json）"""
+        """从 ModelMessage 结构化字段重建 OpenAI API 格式(不依赖 raw_json)"""
         content = self.content_block_parse(message.content)
         result = {"role": "assistant", "content": content if content else None}
 
@@ -566,7 +563,7 @@ class OpenAIModel(Model):
             ]
         return result
 
-    def content_block_parse(self, content: Union[str, List[ContentBlock]]) -> Union[str, List[dict]]:
+    def content_block_parse(self, content: str | list[ContentBlock]) -> str | list[dict]:
         """
         将内部 ContentBlock 列表或纯文本转换为 OpenAI API 接受的格式
         返回字符串或 list of content parts
@@ -581,7 +578,7 @@ class OpenAIModel(Model):
             if isinstance(block, TextBlock):
                 parts.append({"type": "text", "text": block.text})
             elif isinstance(block, ImageBlock):
-                # OpenAI 使用 image_url 类型，需要 data:image/...;base64,xxx
+                # OpenAI 使用 image_url 类型,需要 data:image/...;base64,xxx
                 mime = f"image/{block.image_type}" if block.image_type != "svg" else "image/svg+xml"
                 data_url = f"data:{mime};base64,{block.data}"
                 parts.append({
@@ -591,7 +588,7 @@ class OpenAIModel(Model):
         return parts
 
     def model_response_parse(self, response: dict) -> ModelMessage:
-        """解析 OpenAI 响应，返回 ModelMessage 对象"""
+        """解析 OpenAI 响应,返回 ModelMessage 对象"""
         msg_id = response.get("id", "")
         choice = response["choices"][0]
         message = choice["message"]
@@ -606,14 +603,14 @@ class OpenAIModel(Model):
         elif isinstance(raw_content, str):
             content = raw_content
         else:
-            # 如果是 list (多模态响应，少见)，递归处理
+            # 如果是 list (多模态响应,少见),递归处理
             content = self._parse_content_parts(raw_content)
 
         thinking = message.get("reasoning_content", "")
 
         # 解析 tool_calls
         tool_calls = []
-        if "tool_calls" in message and message["tool_calls"]:
+        if message.get("tool_calls"):
             for tc in message["tool_calls"]:
                 if tc["type"] == "function":
                     func = tc["function"]
@@ -626,7 +623,7 @@ class OpenAIModel(Model):
                         name=func["name"],
                         input=arguments
                     ))
-        
+
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
 
@@ -650,14 +647,14 @@ class OpenAIModel(Model):
 
 
 
-    def _parse_content_parts(self, parts: list) -> List[ContentBlock]:
+    def _parse_content_parts(self, parts: list) -> list[ContentBlock]:
         """将 OpenAI 响应中的 content parts 转换为内部 ContentBlock 列表"""
         blocks: list[ContentBlock] = []
         for part in parts:
             if part.get("type") == "text":
                 blocks.append(TextBlock(text=part["text"], origin="model"))
             elif part.get("type") == "image_url":
-                # 通常响应不会有 image_url，但保留兼容
+                # 通常响应不会有 image_url,但保留兼容
                 url = part["image_url"]["url"]
                 if url.startswith("data:"):
                     # 解析 base64
@@ -719,7 +716,7 @@ class OpenAIModel(Model):
             self._semaphore.release()
 
     async def async_stream_invoke(self, model_input: Model_Input, max_retries: int = 3, retry_delay: float = 1.0):
-        """异步流式调用，yield 事件（need_print, completed_tool_use, completed_message）"""
+        """异步流式调用,yield 事件(need_print, completed_tool_use, completed_message)"""
         payload = {**self.payload_construct(model_input), "stream": True, "stream_options": {"include_usage": True}}
         client = self.async_client
         await self._semaphore.acquire()
@@ -757,7 +754,7 @@ class OpenAIModel(Model):
                             except json.JSONDecodeError:
                                 continue
 
-                            if "usage" in chunk and chunk["usage"]:
+                            if chunk.get("usage"):
                                 accumulated_response['usage'] = chunk["usage"]
                                 if _stream_finished:
                                     yield {"type": "completed_message", "content": self.model_response_parse(accumulated_response)}

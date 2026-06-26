@@ -4,17 +4,15 @@ Builtin tools are registered at init time with deterministic uuid5 IDs.
 MCP tools are registered/removed by MCPFactory notifications.
 """
 
-import json
 import asyncio
+import json
 from pathlib import Path
-from typing import Optional
 
-from bbagent.built_in_tool import TOOL_CREATOR
-from bbagent.core.tool import Tool
-
-from backend.schemas import ToolConfig
 from backend.factories import _builtin_tool_id, _mcp_tool_id, _safe_filename
 from backend.logging import get_backend_logger
+from backend.schemas import ToolConfig
+from bbagent.built_in_tool import TOOL_CREATOR
+from bbagent.core.tool import Tool
 
 
 class ToolFactory:
@@ -79,7 +77,7 @@ class ToolFactory:
 
     # --- accessors ---
 
-    def get(self, tool_id: str) -> Optional[ToolConfig]:
+    def get(self, tool_id: str) -> ToolConfig | None:
         return self._configs.get(tool_id)
 
     def list_all(self) -> list[ToolConfig]:

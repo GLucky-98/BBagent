@@ -202,7 +202,8 @@ async def test_todo_hooks_inject_context_and_emit_dirty_snapshot():
 
     await emit_on_tool_result(ctx, ToolMessage("tool-1", "todo_update", "ok"))
 
-    assert agent.emitted[-1]["type"] == "todo_list"
+    assert agent.emitted[-1]["type"] == "stream_chunk"
+    assert agent.emitted[-1]["chunk_type"] == "todo_list"
     assert agent.emitted[-1]["content"]["title"] == "Hook list"
     assert runtime.dirty is False
 

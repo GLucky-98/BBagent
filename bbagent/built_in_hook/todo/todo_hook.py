@@ -71,7 +71,8 @@ def create_todo_hook(
         snapshot = manager.snapshot()
         if snapshot is not None:
             await ctx.agent._emit({
-                "type": "todo_list",
+                "type": "stream_chunk",
+                "chunk_type": "todo_list",
                 "content": snapshot,
             })
         runtime.mark_emitted()
@@ -88,7 +89,8 @@ def create_todo_hook(
         snapshot = manager.snapshot()
         if snapshot is not None:
             await ctx.agent._emit({
-                "type": "todo_list",
+                "type": "stream_chunk",
+                "chunk_type": "todo_list",
                 "content": snapshot,
             })
         runtime.mark_emitted()

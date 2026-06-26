@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .tool import Tool
 
@@ -29,8 +29,8 @@ def make_safe_mcp_runtime_name(server_name: str, tool_name: str) -> str:
 class MCPServerConfig:
     name: str = ""
     command: str = ""
-    args: List[str] = field(default_factory=list)
-    env: Dict[str, str] = field(default_factory=dict)
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, json_str: str) -> "MCPServerConfig":
@@ -44,7 +44,7 @@ class MCPServerConfig:
 
     @classmethod
     def from_json_file(cls, file_path: str) -> "MCPServerConfig":
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding='utf-8') as f:
             return cls.from_json(f.read())
 
     def to_json(self, indent: int = 2) -> str:
@@ -57,7 +57,7 @@ class MCPServerConfig:
 # ------------------------------------------------------------
 # MCP JSON-RPC 消息构造辅助函数
 # ------------------------------------------------------------
-def make_request(id: int, method: str, params: Optional[Dict] = None) -> str:
+def make_request(id: int, method: str, params: dict | None = None) -> str:
     req = {
         "jsonrpc": "2.0",
         "id": id,
@@ -67,7 +67,7 @@ def make_request(id: int, method: str, params: Optional[Dict] = None) -> str:
         req["params"] = params
     return json.dumps(req)
 
-def make_notification(method: str, params: Optional[Dict] = None) -> str:
+def make_notification(method: str, params: dict | None = None) -> str:
     notif = {
         "jsonrpc": "2.0",
         "method": method,
@@ -75,25 +75,25 @@ def make_notification(method: str, params: Optional[Dict] = None) -> str:
     if params is not None:
         notif["params"] = params
     return json.dumps(notif)
-    
+
 # ------------------------------------------------------------
 # MCP 客户端类
 # ------------------------------------------------------------
 class MCPClient:
-    def __init__(self, MCPserver_config: MCPServerConfig, logger: logging.Logger = None):
-        self.name = MCPserver_config.name
-        self.config = MCPserver_config
-        self.command = [MCPserver_config.command] + MCPserver_config.args
-        self.env = {**os.environ, **MCPserver_config.env}
-        self.process: Optional[asyncio.subprocess.Process] = None
+    def __init__(self, mcp_server_config: MCPServerConfig, logger: logging.Logger | None = None):
+        self.name = mcp_server_config.name
+        self.config = mcp_server_config
+        self.command = [mcp_server_config.command, *mcp_server_config.args]
+        self.env = {**os.environ, **mcp_server_config.env}
+        self.process: asyncio.subprocess.Process | None = None
         self.request_id = 0
-        self.pending_requests: Dict[int, asyncio.Future] = {}
+        self.pending_requests: dict[int, asyncio.Future] = {}
         self.state = 'inactive'
-        self._initial_tools: List[Dict] = []
+        self._initial_tools: list[dict] = []
         self._logger = logger or logging.getLogger(f"mcp.{self.name}")
-        self._background_tasks: List[asyncio.Task] = []
+        self._background_tasks: list[asyncio.Task] = []
 
-    def _log(self, msg: str, level: str = "info", context: dict = None):
+    def _log(self, msg: str, level: str = "info", context: dict | None = None):
         log_func = getattr(self._logger, level, self._logger.info)
         log_func(msg, extra={"context": context or {}})
 
@@ -110,26 +110,26 @@ class MCPClient:
         self._background_tasks.append(asyncio.create_task(self._read_stderr()))
 
     async def _read_stdout(self):
-        """持续读取服务器 stdout，解析 JSON-RPC 消息"""
+        """持续读取服务器 stdout,解析 JSON-RPC 消息"""
         if not self.process or not self.process.stdout:
             return
-        
+
         buffer = b""
         while True:
             try:
                 chunk = await self.process.stdout.read(4096)
                 if not chunk:
                     break
-                
+
                 buffer += chunk
-                
+
                 while b'\n' in buffer:
                     line, buffer = buffer.split(b'\n', 1)
                     line = line.decode('utf-8').strip()
-                    
+
                     if not line:
                         continue
-                    
+
                     try:
                         msg = json.loads(line)
                     except json.JSONDecodeError:
@@ -146,7 +146,7 @@ class MCPClient:
                         await self._handle_notification(msg)
                     else:
                         self._log(f"Unhandled message: {msg}", level="debug")
-                        
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -154,13 +154,13 @@ class MCPClient:
                 break
 
     async def _read_stderr(self):
-        """将服务器 stderr 输出打印到控制台（便于调试）"""
+        """将服务器 stderr 输出打印到控制台(便于调试)"""
         if not self.process or not self.process.stderr:
             return
         async for line in self.process.stderr:
             self._log(f"[MCPServer {self.name}] {line.decode('utf-8').rstrip()}", level="debug")
 
-    async def _handle_notification(self, msg: Dict):
+    async def _handle_notification(self, msg: dict):
         method = msg.get("method")
         params = msg.get("params", {})
         if method == "notifications/progress":
@@ -170,7 +170,7 @@ class MCPClient:
         else:
             self._log(f"Received notification: {method} {params}", level="debug")
 
-    async def send_request(self, method: str, params: Optional[Dict] = None) -> Any:
+    async def send_request(self, method: str, params: dict | None = None) -> Any:
         """发送 JSON-RPC 请求并等待响应"""
         if not self.process or not self.process.stdin:
             raise RuntimeError("Process not started or stdin closed")
@@ -184,19 +184,19 @@ class MCPClient:
         self.process.stdin.write((req_str + "\n").encode())
         await self.process.stdin.drain()
 
-        # 等待响应（带超时）
+        # 等待响应(带超时)
         try:
             result = await asyncio.wait_for(future, timeout=30.0)
             return result
         except asyncio.TimeoutError:
             self.pending_requests.pop(req_id, None)
-            raise TimeoutError(f"Request {method} timed out")
+            raise TimeoutError(f"Request {method} timed out") from None
 
-    async def send_notification(self, method: str, params: Optional[Dict] = None):
-        """发送通知（不等待响应）"""
+    async def send_notification(self, method: str, params: dict | None = None):
+        """发送通知(不等待响应)"""
         if not self.process or not self.process.stdin:
             raise RuntimeError("Process not started or stdin closed")
-        
+
         notif_str = make_notification(method, params)
         self.process.stdin.write((notif_str + "\n").encode())
         await self.process.stdin.drain()
@@ -206,22 +206,22 @@ class MCPClient:
         # 1. 发送 initialize 请求
         server_info = await self.send_request("initialize", {
             "protocolVersion": "2024-11-05",
-            "capabilities": {},  # 客户端能力（本例为空）
+            "capabilities": {},  # 客户端能力(本例为空)
             "clientInfo": {
                 "name": self.name,
                 "version": "0.1.0"
             }
         })
-        
-        # ⭐ 2. 服务器可能主动推送工具列表，注册 Future 等待
+
+        # ⭐ 2. 服务器可能主动推送工具列表,注册 Future 等待
         # MCP 协议允许服务器在初始化后主动推送
         tools_future = asyncio.get_event_loop().create_future()
         self.pending_requests[2] = tools_future  # 注册 id=2
-        
-        # 3. 发送 initialized 通知（握手完成）
+
+        # 3. 发送 initialized 通知(握手完成)
         await self.send_notification("notifications/initialized")
-        
-        # ⭐ 4. 等待服务器主动推送的工具列表（最多等3秒）
+
+        # ⭐ 4. 等待服务器主动推送的工具列表(最多等3秒)
         try:
             tools_result = await asyncio.wait_for(tools_future, timeout=3.0)
             if tools_result:
@@ -230,21 +230,21 @@ class MCPClient:
         except asyncio.TimeoutError:
             self._log("No tools pushed by server during init", level="info")
             self._initial_tools = []
-        
+
         self.state = 'active'
         return server_info
 
-    async def list_tools(self) -> List[Dict]:
+    async def list_tools(self) -> list[dict]:
         """获取服务器提供的工具列表"""
-        # ⭐ 如果初始化时服务器已经推送了工具，直接返回
+        # ⭐ 如果初始化时服务器已经推送了工具,直接返回
         if self._initial_tools:
             return self._initial_tools
-        
+
         # 否则发送请求获取
         result = await self.send_request("tools/list")
         return result.get("tools", [])
 
-    async def call_tool(self, name: str, arguments: Dict) -> Any:
+    async def call_tool(self, name: str, arguments: dict) -> Any:
         """调用指定工具"""
         result = await self.send_request("tools/call", {
             "name": name,
@@ -276,9 +276,9 @@ class MCPClient:
                 await self.process.wait()
             self.state = 'inactive'
             self.process = None
-            
+
 class MCPTool(Tool):
-    def __init__(self, mcp_client: MCPClient, config: Dict[str, Any]):
+    def __init__(self, mcp_client: MCPClient, config: dict[str, Any]):
         self.mcp_server_name = mcp_client.name
         self.raw_name = config["name"]
         func = self.create_tool_from_config(mcp_client, config)
@@ -286,11 +286,11 @@ class MCPTool(Tool):
             func,
             source="mcp",
         )
-        
+
     @staticmethod
-    def create_tool_from_config(mcp_client: MCPClient, config: Dict[str, Any]):
+    def create_tool_from_config(mcp_client: MCPClient, config: dict[str, Any]):
         """
-        根据工具配置字典生成一个可调用函数。
+        根据工具配置字典生成一个可调用函数.
         配置格式示例:
         {
             "name": "text_to_image",
@@ -304,13 +304,13 @@ class MCPTool(Tool):
                     "prompt_optimizer": {"type": "boolean", "default": True},
                     "output_directory": {"type": "string"}
                 },
-                "required": ["output_directory"]  # 可选，但我们可以从 default 判断
+                "required": ["output_directory"]  # 可选,但我们可以从 default 判断
             }
         }
         返回的函数具有:
             - __name__ == config["name"]
             - __doc__ == config["description"]
-            - 参数签名与 inputSchema 一致，并包含正确的默认值
+            - 参数签名与 inputSchema 一致,并包含正确的默认值
         """
         func_name = make_safe_mcp_runtime_name(mcp_client.name, config["name"])
         func_doc = config["description"]
@@ -319,7 +319,7 @@ class MCPTool(Tool):
 
         # 存储默认值映射
         defaults = {}
-        # 存储参数类型注解映射（可选，用于增强可读性）
+        # 存储参数类型注解映射(可选,用于增强可读性)
         annotations = {}
 
         type_mapping = {
@@ -340,15 +340,15 @@ class MCPTool(Tool):
                 defaults[param_name] = default_val
                 # 有默认值的参数在签名中表示为 param=default
             else:
-                # 无默认值，必填参数
+                # 无默认值,必填参数
                 defaults[param_name] = inspect.Parameter.empty
 
         # 构建 inspect.Parameter 对象
         parameters = []
         for param_name, param_type in annotations.items():
             default = defaults.get(param_name, inspect.Parameter.empty)
-            # 如果参数有默认值，kind 为 POSITIONAL_OR_KEYWORD，否则也是
-            # 注意：我们仅支持位置或关键字参数，简单处理
+            # 如果参数有默认值,kind 为 POSITIONAL_OR_KEYWORD,否则也是
+            # 注意:我们仅支持位置或关键字参数,简单处理
             kind = inspect.Parameter.POSITIONAL_OR_KEYWORD
             param = inspect.Parameter(
                 name=param_name,
@@ -362,7 +362,7 @@ class MCPTool(Tool):
         sig = inspect.Signature(parameters=parameters)
 
         async def tool_func(*args, **kwargs):
-            # 绑定参数，应用默认值
+            # 绑定参数,应用默认值
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
             arguments = bound.arguments
@@ -377,11 +377,11 @@ class MCPTool(Tool):
         tool_func.__annotations__ = annotations
 
         return tool_func
-    
+
 _config_logger = logging.getLogger("mcp.config")
 
 
-def parse_config_dict(data: dict, default_name: str = "") -> List[MCPServerConfig]:
+def parse_config_dict(data: dict, default_name: str = "") -> list[MCPServerConfig]:
     """Parse a JSON dict into MCPServerConfig list.
 
     Supported formats:
@@ -393,7 +393,7 @@ def parse_config_dict(data: dict, default_name: str = "") -> List[MCPServerConfi
         data: Parsed JSON dict.
         default_name: Fallback name when an entry lacks one (used by importers).
     """
-    configs: List[MCPServerConfig] = []
+    configs: list[MCPServerConfig] = []
 
     if "mcpServers" in data:
         servers = data["mcpServers"]
@@ -428,10 +428,10 @@ def parse_config_dict(data: dict, default_name: str = "") -> List[MCPServerConfi
     return configs
 
 
-def parse_config_file(file_path: str) -> List[MCPServerConfig]:
+def parse_config_file(file_path: str) -> list[MCPServerConfig]:
     """Parse a single JSON config file. Delegates to parse_config_dict."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding='utf-8') as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         _config_logger.warning(f"Failed to parse {file_path}: {e}")
@@ -439,13 +439,13 @@ def parse_config_file(file_path: str) -> List[MCPServerConfig]:
     return parse_config_dict(data)
 
 
-def load_configs(config_dir: str) -> Dict[str, MCPServerConfig]:
-    """扫描目录下所有 JSON 文件，加载符合格式的 MCP 配置
+def load_configs(config_dir: str) -> dict[str, MCPServerConfig]:
+    """扫描目录下所有 JSON 文件,加载符合格式的 MCP 配置
 
     Returns:
         Dict[str, MCPServerConfig]: 以 name 为 key 的配置字典
     """
-    result: Dict[str, MCPServerConfig] = {}
+    result: dict[str, MCPServerConfig] = {}
     if not os.path.isdir(config_dir):
         _config_logger.warning(f"Config directory not found: {config_dir}")
         return result

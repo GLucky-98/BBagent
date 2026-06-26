@@ -5,9 +5,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.logging import get_backend_logger
-from backend.state import state_manager
 from backend.schemas import MCPServerConfig
-
+from backend.state import state_manager
 
 logger = get_backend_logger("api.mcps")
 
@@ -74,9 +73,9 @@ async def discover_mcp(mcp_ref: str):
         tools = await state_manager.discover_mcp_tools(mcp_id)
         return {"success": True, "tools": [t.model_dump(mode="json") for t in tools]}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from None
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from None
 
 
 @router.post("/import")

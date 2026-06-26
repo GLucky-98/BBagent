@@ -3,14 +3,14 @@ import contextlib
 import json
 import shutil
 import sys
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Optional
 from uuid import uuid4 as uuid
 
 from .hook import AgentHook, HookType
-from .input import AgentEvent, InputChannel
+from .input import InputChannel, InputEvent
 from .logger import AgentLogger, _NullLogger
 from .message import (
     HumanMessage,
@@ -28,12 +28,12 @@ from .tool import Tool, tool
 @dataclass
 class AgentConfig:
     model: Model
-    base_dir: Path | str = Path.cwd()
+    base_dir: Path | str = field(default_factory=Path.cwd)
     system_prompt: str = ""
     name: str = ""
     session: Session = None
-    tools: List[Tool] = None
-    skills: List[Skill] = None
+    tools: list[Tool] = None
+    skills: list[Skill] = None
 
     def __post_init__(self):
         if not self.name:
@@ -96,7 +96,7 @@ class Agent:
         self.hook.set_context(self)
 
         self.input = InputChannel()
-        self._output_callback: Optional[Callable] = None
+        self._output_callback: Callable | None = None
         self._loop_running = False
         self._interrupt_event = asyncio.Event()
         self._stop_event = asyncio.Event()
@@ -259,18 +259,47 @@ class Agent:
     # Timer Management
     # ========================================================================
     def add_timer(self, seconds: float, name: str = "", hint: str = "") -> None:
+        """添加间隔触发的定时任务"""
         self.input.every(seconds, name, hint)
+
+    def add_at_timer(self, time_str: str, name: str = "", hint: str = "") -> None:
+        """添加时间点触发的定时任务
+
+        Args:
+            time_str: 时间字符串,格式为 "HH:MM" 或 "HH:MM:SS"
+            name: 任务名称
+            hint: 任务提示
+        """
+        self.input.at(time_str, name, hint)
 
     def list_timers(self) -> list[dict]:
         return self.input.list_timers()
 
-    def update_timer(self, name: str, seconds: float = None, hint: str = None) -> bool:
-        for s, n, h in self.input._timer_configs:
+    def update_timer(self, name: str, seconds: float | None = None, time_str: str | None = None, hint: str | None = None) -> bool:
+        """更新定时任务配置
+
+        Args:
+            name: 任务名称
+            seconds: 新的间隔秒数(间隔触发任务)
+            time_str: 新的时间点(时间点触发任务)
+            hint: 新的任务提示
+        """
+        # 查找间隔配置
+        for s, n, h in self.input._interval_configs:
             if n == name:
                 new_seconds = seconds if seconds is not None else s
                 new_hint = hint if hint is not None else h
                 self.input.every(new_seconds, name, new_hint)
                 return True
+
+        # 查找时间点配置
+        for t, n, h in self.input._at_configs:
+            if n == name:
+                new_time = time_str if time_str is not None else t
+                new_hint = hint if hint is not None else h
+                self.input.at(new_time, name, new_hint)
+                return True
+
         return False
 
     def start_timer(self, name: str) -> bool:
@@ -288,7 +317,7 @@ class Agent:
     # ========================================================================
     # Tool Management
     # ========================================================================
-    def add_tools(self, tools: List[Tool]):
+    def add_tools(self, tools: list[Tool]):
         for t in tools:
             existing = self.tools.get(t.name)
             if existing is not None and existing is not t:
@@ -296,7 +325,7 @@ class Agent:
             self.tools[t.name] = t
         self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
 
-    def remove_tools(self, tool_names: List[str]):
+    def remove_tools(self, tool_names: list[str]):
         for name in tool_names:
             self.tools.pop(name, None)
         if self.session is not None:
@@ -320,11 +349,11 @@ class Agent:
                     return f"{skill.metadata.to_dict()}-{skill.body}"
                 else:
                     return skill.body
-        
+
         self.add_tools([load_skill])
 
     def _load_skill_prompt(self):
-        """从 skills.md 加载技能提示词，文件不存在时使用默认值"""
+        """从 skills.md 加载技能提示词,文件不存在时使用默认值"""
         if not self.skills:
             return ''
         skill_system_prompt = ["""You have access to the following skills. When you need to use a specific skill, call the `load_skill` tool with the skill name to get its full capabilities, usage instructions, and detailed behavior.
@@ -334,15 +363,15 @@ Your available skills are:
         skill_short_prompt = [f'- name: {s.name}, Description: {s.description}' for s in self.skills.values()]
         return '\n'.join(skill_system_prompt + skill_short_prompt)
 
-    def add_skills(self, skills:List[Skill]):
+    def add_skills(self, skills:list[Skill]):
         new_skills = {s.name: s for s in skills}
         if not self.skills and new_skills:
             self._add_load_skills_tool()
         self.skills.update(new_skills)
         self.set_runtime_prompt("skills", self._load_skill_prompt(), order=40)
 
-    def remove_skills(self, skill_names: List[str]):
-        """移除指定名称的 skills，并刷新 runtime skill prompt。"""
+    def remove_skills(self, skill_names: list[str]):
+        """移除指定名称的 skills,并刷新 runtime skill prompt."""
         if not skill_names:
             return
         for name in skill_names:
@@ -400,7 +429,7 @@ Your available skills are:
                     )
                     raise
                 except Exception as e:
-                    content = f"Tool invocation error: {str(e)}"
+                    content = f"Tool invocation error: {e!s}"
                     self.logger.error(
                         f"Tool '{tool_use.name}' execution failed",
                         context={
@@ -418,18 +447,18 @@ Your available skills are:
     # ========================================================================
     # Execution: Interrupt Control
     # ========================================================================
-    async def _cancel_tool_tasks(self, tool_tasks: List[asyncio.Task]):
+    async def _cancel_tool_tasks(self, tool_tasks: list[asyncio.Task]):
         for task in tool_tasks:
             if not task.done():
                 task.cancel()
         if tool_tasks:
             await asyncio.gather(*tool_tasks, return_exceptions=True)
 
-    async def _wait_for_tool_results(self, tool_tasks: List[asyncio.Task]):
+    async def _wait_for_tool_results(self, tool_tasks: list[asyncio.Task]):
         tool_results_future = asyncio.gather(*tool_tasks)
         interrupt_waiter = asyncio.create_task(self._interrupt_event.wait())
         try:
-            done, _ = await asyncio.wait(
+            _done, _ = await asyncio.wait(
                 {tool_results_future, interrupt_waiter},
                 return_when=asyncio.FIRST_COMPLETED,
             )
@@ -457,30 +486,30 @@ Your available skills are:
                 stop_reason = None
                 interrupted = False
                 pending_model_message = None
-                
+
                 await self.hook.trigger(HookType.BEFORE_STREAM)
                 if self._interrupt_event.is_set():
                     self.logger.info("Agent interrupted before stream")
-                    yield {'type': 'interrupted', 'content': 'Agent interrupted'}
+                    yield {'type': 'event', 'event_type': 'interrupted', 'content': 'Agent interrupted'}
                     break
                 model_input = self.construct_model_input()
-                async for chunk in self.model.async_stream_invoke(model_input): 
+                async for chunk in self.model.async_stream_invoke(model_input):
                     if self._interrupt_event.is_set():
                         self.logger.info("Agent interrupted during stream")
                         interrupted = True
                         break
-                    
+
                     chunk_type = chunk.get('type')
                     content = chunk.get('content', '')
 
                     if chunk_type == 'text':
                         await self.hook.trigger(HookType.ON_TEXT_CHUNK, content)
-                        yield chunk
+                        yield {'type': 'stream_chunk', 'chunk_type': 'text', 'content': content}
 
-                    
+
                     if chunk_type == 'thinking':
                         await self.hook.trigger(HookType.ON_THINKING_CHUNK, content)
-                        yield chunk
+                        yield {'type': 'stream_chunk', 'chunk_type': 'thinking', 'content': content}
 
                     if chunk_type == 'completed_tool_use':
                         tool_use = content
@@ -490,7 +519,7 @@ Your available skills are:
                         self._active_tool_tasks.add(task)
                         task.add_done_callback(self._active_tool_tasks.discard)
                         tool_tasks.append(task)
-                        yield chunk
+                        yield {'type': 'stream_chunk', 'chunk_type': 'completed_tool_use', 'content': tool_use}
 
                     if chunk_type == 'completed_message':
                         stop_reason = content.stop_reason
@@ -504,15 +533,15 @@ Your available skills are:
                             pending_model_message = content
                         else:
                             self.session.add_message(content)
-                        yield chunk
+                        yield {'type': 'stream_chunk', 'chunk_type': 'completed_message', 'content': content}
                         break
-                
+
                 if interrupted:
                     self.logger.info("Agent tool loop interrupted after stream")
                     await self._cancel_tool_tasks(tool_tasks)
-                    yield {'type': 'interrupted', 'content': 'Agent interrupted'}
+                    yield {'type': 'event', 'event_type': 'interrupted', 'content': 'Agent interrupted'}
                     break
-                
+
                 if stop_reason == 'tool_use':
                     self.logger.info(
                         "Agent tool loop continuing for tool execution",
@@ -521,9 +550,9 @@ Your available skills are:
                     tool_results = await self._wait_for_tool_results(tool_tasks)
                     if tool_results is None:
                         self.logger.info("Agent tool loop interrupted during tool execution")
-                        yield {'type': 'interrupted', 'content': 'Agent interrupted'}
+                        yield {'type': 'event', 'event_type': 'interrupted', 'content': 'Agent interrupted'}
                         break
-                    yield {'type': 'tool_results', 'content': tool_results}
+                    yield {'type': 'stream_chunk', 'chunk_type': 'tool_results', 'content': tool_results}
                     self._ensure_session()
                     if pending_model_message is not None:
                         self.session.add_message([pending_model_message, *tool_results])
@@ -587,7 +616,7 @@ Your available skills are:
                 self.logger.info("Agent run completed")
                 self.logger.clear_trace_id()
 
-    async def _handle_event(self, event: AgentEvent):
+    async def _handle_event(self, event: InputEvent):
         self._interrupt_event.clear()
         self.logger.set_trace_id()
         with self.logger.span("event_handle"):
@@ -612,7 +641,7 @@ Your available skills are:
             else:
                 text = str(msg.content)
             await self._emit({
-                "type": "input_event",
+                "type": "event",
                 "event_type": event.type.value,
                 "source_id": event.source_id,
                 "content": text,
@@ -624,7 +653,7 @@ Your available skills are:
                     await self._emit(chunk)
             except Exception as e:
                 self.logger.error(
-                    f"Event handling failed: {str(e)}",
+                    f"Event handling failed: {e!s}",
                     context={
                         "event_type": event.type.value,
                         "source_id": event.source_id,
@@ -721,7 +750,7 @@ Your available skills are:
                         )
                         try:
                             self.state = AgentState.Error
-                            await self._emit({'type': 'error', 'content': str(e)})
+                            await self._emit({'type': 'event', 'event_type': 'error', 'content': str(e)})
                             await self._emit_state()
                         except Exception:
                             self.logger.error(
@@ -776,20 +805,27 @@ Your available skills are:
     async def _emit(self, chunk: dict):
         """Emit a chunk to the output callback.
 
-        All chunks share a ``"type"`` discriminator field. Possible formats:
+        Top-level ``"type"`` field is either ``"stream_chunk"`` or ``"event"``.
 
-        * ``{"type": "text", "content": str}`` — 流式文本片段
-        * ``{"type": "thinking", "content": str}`` — 思考过程片段
-        * ``{"type": "completed_tool_use", "content": ToolUseBlock}`` — 模型请求调用工具
-        * ``{"type": "completed_message", "content": ModelMessage}`` — 模型完成一轮消息
-        * ``{"type": "tool_results", "content": list[ToolMessage]}`` — 工具执行结果列表
-        * ``{"type": "interrupted", "content": str}`` — Agent 被中断
-        * ``{"type": "input_event", "event_type": str, "source_id": str, "content": str}`` — 用户输入事件
-        * ``{"type": "agent_state", "state": AgentState}`` — Agent 状态变更；
+        **stream_chunk** (via ``"chunk_type"`` discriminator):
+
+        * ``{"type": "stream_chunk", "chunk_type": "text", "content": str}``
+        * ``{"type": "stream_chunk", "chunk_type": "thinking", "content": str}``
+        * ``{"type": "stream_chunk", "chunk_type": "completed_tool_use", "content": ToolUseBlock}``
+        * ``{"type": "stream_chunk", "chunk_type": "completed_message", "content": ModelMessage}``
+        * ``{"type": "stream_chunk", "chunk_type": "tool_results", "content": list[ToolMessage]}``
+
+        **event** (via ``"event_type"`` discriminator):
+
+        * ``{"type": "event", "event_type": "user_input", "source_id": str, "content": str}``
+        * ``{"type": "event", "event_type": "timer_input", "source_id": str, "content": str}``
+        * ``{"type": "event", "event_type": "agent_input", "source_id": str, "content": str}``
+        * ``{"type": "event", "event_type": "interrupted", "content": str}``
+        * ``{"type": "event", "event_type": "agent_state", "state": AgentState}`` —
           当 ``self.session`` 存在时会被自动附加 ``"context_tokens": int`` 字段
-        * ``{"type": "error", "content": str}`` — 异常错误消息
+        * ``{"type": "event", "event_type": "error", "content": str}``
         """
-        if chunk.get("type") == "agent_state" and self.session:
+        if chunk.get("event_type") == "agent_state" and self.session:
             chunk["context_tokens"] = self.session.get_visible_token_count()
         if self._output_callback:
             if asyncio.iscoroutinefunction(self._output_callback):
@@ -798,12 +834,12 @@ Your available skills are:
                 self._output_callback(chunk)
 
     async def _emit_state(self):
-        await self._emit({'type': 'agent_state', 'state': self.state})
+        await self._emit({'type': 'event', 'event_type': 'agent_state', 'state': self.state})
 
 
 class SubAgent:
-    def __init__(self, model: Model, tools: List[Tool] = None, system_prompt: str = "",
-                skills: List[Skill] = None, name: str = None,
+    def __init__(self, model: Model, tools: list[Tool] | None = None, system_prompt: str = "",
+                skills: list[Skill] | None = None, name: str | None = None,
                 logger: AgentLogger = None):
         self.name = name or f'sub_{id(self)}'
         self.model = model
@@ -831,14 +867,14 @@ class SubAgent:
     def stop(self):
         self._force_stop = True
 
-    def add_tools(self, tools: List[Tool]):
+    def add_tools(self, tools: list[Tool]):
         for t in tools:
             existing = self.tools.get(t.name)
             if existing is not None and existing is not t:
                 raise ValueError(f"Duplicate tool name: {t.name}")
             self.tools[t.name] = t
         self.tools = dict(sorted(self.tools.items(), key=lambda item: item[0]))
-    
+
     def _add_load_skills_tool(self):
         @tool
         def load_skill(skill_name: str):
@@ -851,7 +887,7 @@ class SubAgent:
                     return f"{skill.metadata.to_dict()}-{skill.body}"
                 else:
                     return skill.body
-        
+
         self.add_tools([load_skill])
 
     def _load_skill_prompt(self):
@@ -864,13 +900,13 @@ Your available skills are:
         skill_short_prompt = [f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in self.skills.values()]
         return '\n'.join(skill_system_prompt + skill_short_prompt)
 
-    def add_skills(self, skills: List[Skill]):
+    def add_skills(self, skills: list[Skill]):
         self.skills.update({s.name: s for s in skills})
         new_prompt = '\n'.join([f'- name: {s.name}, Path: {s.path}/SKILL.md, Description: {s.description}' for s in skills])
         self.skill_prompt += new_prompt
 
-    def remove_skills(self, skill_names: List[str]):
-        """移除指定名称的 skills，并刷新 skill_prompt。"""
+    def remove_skills(self, skill_names: list[str]):
+        """移除指定名称的 skills,并刷新 skill_prompt."""
         if not skill_names:
             return
         for name in skill_names:
@@ -911,7 +947,7 @@ Your available skills are:
                         context={"tool_name": tool_use.name}
                     )
                 except Exception as e:
-                    content = f"Tool invocation error: {str(e)}"
+                    content = f"Tool invocation error: {e!s}"
                     self.logger.error(
                         f"Tool '{tool_use.name}' execution failed",
                         context={
@@ -924,14 +960,14 @@ Your available skills are:
 
         return ToolMessage(tool_use.id, tool_use.name, content)
 
-    def _normalize_input(self, messages: List[Message] | Message | str) -> List[Message]:
+    def _normalize_input(self, messages: list[Message] | Message | str) -> list[Message]:
         if isinstance(messages, str):
             return [HumanMessage(messages)]
         if isinstance(messages, Message):
             return [messages]
         return list(messages)
 
-    async def run(self, messages: List[Message] | Message | str) -> str:
+    async def run(self, messages: list[Message] | Message | str) -> str:
         messages = self._normalize_input(messages)
         tools = list(self.tools.values())
 
@@ -960,7 +996,7 @@ Your available skills are:
                         result = await self.model.async_invoke(model_input)
                     except Exception as e:
                         self.logger.error(
-                            f"SubAgent model run failed: {str(e)}",
+                            f"SubAgent model run failed: {e!s}",
                             context={"agent_name": self.name, "error_type": type(e).__name__},
                             exc_info=sys.exc_info()
                         )

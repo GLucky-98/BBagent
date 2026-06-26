@@ -1,11 +1,10 @@
 """Baseline tests for TeamConversationManager — conversation lifecycle."""
 
-import json
 
 import pytest
 
-from backend.factories.team_conversation_factory import TeamConversationManager
 from backend.errors import ConflictError
+from backend.factories.team_conversation_factory import TeamConversationManager
 from bbagent.core.agent import Agent, AgentConfig
 from bbagent.core.model import Model, Model_Input
 from bbagent.core.team import AgentTeam, TeamConfig, TeamMessage
@@ -157,14 +156,14 @@ async def test_create_and_list_conversations(tmp_path):
     manager = TeamConversationManager(agent_factory)
     team = make_team(tmp_path, agent_factory)
 
-    result1 = await manager.create_conversation(team, "First Chat")
+    await manager.create_conversation(team, "First Chat")
     conversations = manager.list_conversations(team)
 
     assert len(conversations) == 1
     assert conversations[0]["name"] == "First Chat"
     assert conversations[0]["active"] is True
 
-    result2 = await manager.create_conversation(team, "Second Chat")
+    await manager.create_conversation(team, "Second Chat")
     conversations = manager.list_conversations(team)
 
     assert len(conversations) == 2
@@ -179,7 +178,7 @@ def test_assert_member_session_switch_allowed_when_team_ready(tmp_path):
 
     # 不应抛出异常
     manager.assert_member_session_switch_allowed(team, "agent-a")
-    # update_state 被内部调用，两个 agent 都是 idle 状态
+    # update_state 被内部调用,两个 agent 都是 idle 状态
     assert team.state == "ready"
 
 
@@ -190,7 +189,7 @@ def test_assert_member_session_switch_allowed_raises_when_agent_running_in_conve
 
     # 令 team 进入 running 状态
     team.agents["Alice"].state = "running"
-    # 创建一个活跃 conversation，Alice 在其中
+    # 创建一个活跃 conversation,Alice 在其中
     active = manager.ensure_loaded("team-1", team)
     active["memberSessions"] = {"Alice": "session-alice"}
 

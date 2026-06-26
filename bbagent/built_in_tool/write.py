@@ -3,7 +3,6 @@ Write tool - Write content to a file, creating directories as needed.
 """
 import os
 from pathlib import Path
-from typing import Optional
 
 from ..core.tool import Tool
 from .policy import Policy
@@ -37,10 +36,7 @@ def create_write_tool(
     else:
         policy = None
 
-    if policy is not None:
-        cwd = policy.cwd
-    else:
-        cwd = "."
+    cwd = policy.cwd if policy is not None else "."
 
     operations = WriteOperations()
 
@@ -55,17 +51,14 @@ def create_write_tool(
             p = Path(path)
             resolved_path = str(p if p.is_absolute() else (Path(policy.cwd) / p).resolve())
         else:
-            if os.path.isabs(path):
-                resolved_path = path
-            else:
-                resolved_path = os.path.join(cwd, path)
+            resolved_path = path if os.path.isabs(path) else os.path.join(cwd, path)
 
         dir_path = os.path.dirname(resolved_path)
         if dir_path:
             try:
                 operations.makedirs(dir_path)
             except OSError as e:
-                return f"Error: Failed to create directory: {str(e)}"
+                return f"Error: Failed to create directory: {e!s}"
 
         try:
             if os.path.exists(resolved_path) and not operations.access(resolved_path):
@@ -79,7 +72,7 @@ def create_write_tool(
             return f"Wrote {line_count} lines ({file_size} bytes) to {path}"
 
         except Exception as e:
-            return f"Error writing file: {str(e)}"
+            return f"Error writing file: {e!s}"
 
     input_schema = {
         "type": "object",

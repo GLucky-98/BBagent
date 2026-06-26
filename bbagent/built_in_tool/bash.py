@@ -3,12 +3,9 @@ Bash tool - Execute shell commands.
 """
 import asyncio
 import os
-import subprocess
-from typing import Optional
 
 from ..core.tool import Tool
 from .policy import Policy
-
 
 DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_OUTPUT_SIZE = 50_000
@@ -17,8 +14,8 @@ DEFAULT_MAX_OUTPUT_SIZE = 50_000
 async def _exec_bash_command(
     command: str,
     cwd: str,
-    timeout: Optional[int] = None,
-    env: Optional[dict[str, str]] = None,
+    timeout: int | None = None,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     process_env = dict(os.environ)
     if env:
@@ -68,7 +65,7 @@ async def create_bash_tool(
         max_output_size = DEFAULT_MAX_OUTPUT_SIZE
         default_timeout = DEFAULT_TIMEOUT
 
-    async def bash_func(command: str, timeout: Optional[int] = None) -> str:
+    async def bash_func(command: str, timeout: int | None = None) -> str:
         if not command or not command.strip():
             return "Error: command is required"
         if not os.path.exists(cwd):
@@ -108,7 +105,7 @@ async def create_bash_tool(
             return output
 
         except Exception as e:
-            return f"Error executing command: {str(e)}"
+            return f"Error executing command: {e!s}"
 
     input_schema = {
         "type": "object",

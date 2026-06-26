@@ -3,7 +3,6 @@ Edit tool - Edit file contents by replacing specific text.
 """
 import os
 from pathlib import Path
-from typing import Optional
 
 from ..core.tool import Tool
 from .policy import Policy
@@ -11,7 +10,7 @@ from .policy import Policy
 
 class EditOperations:
     def read_file(self, absolute_path: str) -> str:
-        with open(absolute_path, "r", encoding="utf-8") as f:
+        with open(absolute_path, encoding="utf-8") as f:
             return f.read()
 
     def write_file(self, absolute_path: str, content: str) -> None:
@@ -32,10 +31,7 @@ def create_edit_tool(
     else:
         policy = None
 
-    if policy is not None:
-        cwd = policy.cwd
-    else:
-        cwd = "."
+    cwd = policy.cwd if policy is not None else "."
 
     operations = EditOperations()
 
@@ -54,10 +50,7 @@ def create_edit_tool(
             p = Path(path)
             resolved_path = str(p if p.is_absolute() else (Path(policy.cwd) / p).resolve())
         else:
-            if os.path.isabs(path):
-                resolved_path = path
-            else:
-                resolved_path = os.path.join(cwd, path)
+            resolved_path = path if os.path.isabs(path) else os.path.join(cwd, path)
 
         if not os.path.exists(resolved_path):
             return f"Error: File not found: {path}"
@@ -92,7 +85,7 @@ def create_edit_tool(
             return f"Applied edit to {path} ({lines_changed} lines changed)"
 
         except Exception as e:
-            return f"Error editing file: {str(e)}"
+            return f"Error editing file: {e!s}"
 
     input_schema = {
         "type": "object",

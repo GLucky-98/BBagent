@@ -54,7 +54,7 @@ export function useGlobalAgentState() {
           const chunk = JSON.parse(event.data);
 
           // agent_state 始终由 hook 处理，不走 ChatWindow 回调
-          if (chunk.type === "agent_state") {
+          if (chunk.type === "event" && chunk.event_type === "agent_state") {
             setAgentState(
               chunk.agent_id || "",
               chunk.state as "ready" | "waiting" | "running" | "error",

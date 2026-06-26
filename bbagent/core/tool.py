@@ -1,8 +1,9 @@
-import inspect
-from typing import Any, Literal, get_type_hints
-from pydantic import BaseModel, TypeAdapter
-from typing import Callable
 import copy
+import inspect
+from collections.abc import Callable
+from typing import Any, Literal, get_type_hints
+
+from pydantic import BaseModel, TypeAdapter
 
 ToolSource = Literal["built_in", "hook", "mcp", "team"]
 
@@ -11,7 +12,7 @@ ToolSource = Literal["built_in", "hook", "mcp", "team"]
 # ------------------------------------------------------------
 def inline_refs(schema: dict) -> dict:
     """
-    将 JSON Schema 中的 $defs 内联到所有 $ref 位置，并删除 $defs 键。
+    将 JSON Schema 中的 $defs 内联到所有 $ref 位置,并删除 $defs 键.
     """
     schema = copy.deepcopy(schema)          # 避免修改原数据
     defs = schema.pop("$defs", {})           # 取出 $defs 并删除
@@ -24,12 +25,12 @@ def inline_refs(schema: dict) -> dict:
                 if ref_path.startswith("#/$defs/"):
                     ref_name = ref_path.split("/")[-1]
                     if ref_name in defs:
-                        # 递归展开定义（定义内部可能还有 $ref）
+                        # 递归展开定义(定义内部可能还有 $ref)
                         resolved = _resolve_ref(defs[ref_name])
                         # 替换当前对象为展开后的定义
                         obj.clear()
                         obj.update(resolved)
-                # 其他外部引用保留原样（可根据需求处理）
+                # 其他外部引用保留原样(可根据需求处理)
             else:
                 for key, value in obj.items():
                     obj[key] = _resolve_ref(value)
@@ -44,7 +45,7 @@ def inline_refs(schema: dict) -> dict:
 # ------------------------------------------------------------
 # Tool类
 # ------------------------------------------------------------
-class Tool():
+class Tool:
     """
         tool:
             name
@@ -54,7 +55,7 @@ class Tool():
             invoke (同步调用)
             async_invoke (异步调用)
     """
-    def __init__(self, func:Callable, name:str = None, description:str = None, input_schema:dict = None,
+    def __init__(self, func:Callable, name:str | None = None, description:str | None = None, input_schema:dict | None = None,
                  source: ToolSource | None = None):
         self.name = name if name else func.__name__
         self.description = description if description else func.__doc__
@@ -78,13 +79,13 @@ class Tool():
 
     def invoke(self,input_dict:dict):
         sig = inspect.signature(self.func)
-        type_hints = get_type_hints(self.func)  
+        type_hints = get_type_hints(self.func)
         kwargs = {}
 
         for param_name, param in sig.parameters.items():
             if param_name not in input_dict:
                 if param.default != inspect.Parameter.empty:
-                    continue   
+                    continue
                 raise ValueError(f"Missing required parameter: '{param_name}'")
 
             value = input_dict[param_name]
@@ -102,16 +103,16 @@ class Tool():
                 f"Please use 'async_invoke' method instead of 'invoke'."
             )
         return self.func(**kwargs)
-    
+
     async def async_invoke(self, input_dict: dict):
         sig = inspect.signature(self.func)
-        type_hints = get_type_hints(self.func)  
+        type_hints = get_type_hints(self.func)
         kwargs = {}
 
         for param_name, param in sig.parameters.items():
             if param_name not in input_dict:
                 if param.default != inspect.Parameter.empty:
-                    continue   
+                    continue
                 raise ValueError(f"Missing required parameter: '{param_name}'")
 
             value = input_dict[param_name]
@@ -139,7 +140,7 @@ class Tool():
                 continue
             param_type = type_hints.get(param_name, Any)
             param_type_hints[param_name] = param_type
-        
+
         properties = {}
         required = []
         for param_name, param_type in param_type_hints.items():
@@ -155,13 +156,13 @@ class Tool():
             "required": required
         }
         return input_schema
-      
-        
+
+
 # ------------------------------------------------------------
 # Tool装饰器
 # ------------------------------------------------------------
 def tool(func:Callable):
-    
+
     return Tool(func)
 
 

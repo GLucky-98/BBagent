@@ -16,11 +16,11 @@ Design decisions:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Optional
 
 from backend.dispatcher import AgentOutputDispatcher
 from backend.errors import AppError, ConflictError, ErrorCode, NotFoundError
@@ -171,7 +171,7 @@ class AgentFactory:
     async def _load_one(self, agent_dir: Path, config_path: Path | None = None):
         if config_path is None:
             config_path = agent_dir / "agent_config.json"
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, encoding='utf-8') as f:
             config_dict = json.loads(f.read()) or {}
 
         agent_id: str = config_dict["id"]
@@ -197,7 +197,7 @@ class AgentFactory:
         try:
             model = self._model_factory.acquire(model_id)
         except NotFoundError:
-            raise ValueError(f"Agent '{name}' references unknown modelId '{model_id}'")
+            raise ValueError(f"Agent '{name}' references unknown modelId '{model_id}'") from None
 
         # Build core Agent (may raise — still no caches written)
         core_config = CoreAgentConfig(
@@ -255,7 +255,7 @@ class AgentFactory:
     # Agent config (API-facing)
     # ------------------------------------------------------------------
 
-    def get_agent_config(self, agent_id: str) -> Optional[AgentConfig]:
+    def get_agent_config(self, agent_id: str) -> AgentConfig | None:
         cfg = self._agent_configs.get(agent_id)
         if not cfg:
             return None
@@ -273,11 +273,11 @@ class AgentFactory:
         with log_operation(logger, "create_agent", agent_name=config.name):
             try:
                 model = self._model_factory.acquire(config.modelId)
-            except NotFoundError:
+            except NotFoundError as e:
                 raise NotFoundError(
                     ErrorCode.MODEL_NOT_FOUND,
-                    f"创建 Agent '{config.name}' 失败：模型 '{config.modelId}' 不存在",
-                )
+                    f"创建 Agent '{config.name}' 失败:模型 '{config.modelId}' 不存在",
+                ) from e
 
             agent: Agent | None = None
             agent_dir_to_cleanup: Path | None = None
@@ -345,10 +345,8 @@ class AgentFactory:
                 if agent_dir_to_cleanup and agent_dir_to_cleanup.exists():
                     shutil.rmtree(agent_dir_to_cleanup, ignore_errors=True)
                     if id_subdir.exists() and not any(id_subdir.iterdir()):
-                        try:
+                        with contextlib.suppress(Exception):
                             id_subdir.rmdir()
-                        except Exception:
-                            pass
                 await self._model_factory.release(config.modelId)
                 raise
 
@@ -401,10 +399,8 @@ class AgentFactory:
                         and parent.parent == self._data_dir / "agents"
                         and parent != self._data_dir / "agents"
                         and not any(parent.iterdir())):
-                    try:
+                    with contextlib.suppress(Exception):
                         parent.rmdir()
-                    except Exception:
-                        pass
             return True
 
     def _diff_updates(self, agent_id: str, updates: dict) -> dict:
@@ -425,11 +421,7 @@ class AgentFactory:
                 stored = getattr(cfg, k, None) or []
                 if sorted(v) != sorted(stored):
                     filtered[k] = v
-            elif k == "toolPolicy":
-                stored = getattr(cfg, k, None) or {}
-                if v != stored:
-                    filtered[k] = v
-            elif k == "hookConfig":
+            elif k == "toolPolicy" or k == "hookConfig":
                 stored = getattr(cfg, k, None) or {}
                 if v != stored:
                     filtered[k] = v
@@ -437,7 +429,7 @@ class AgentFactory:
                 filtered[k] = v
         return filtered
 
-    async def update(self, agent_id: str, updates: dict) -> Optional[Agent]:
+    async def update(self, agent_id: str, updates: dict) -> Agent | None:
         agent = self.agents.get(agent_id)
         if not agent:
             return None
@@ -457,7 +449,7 @@ class AgentFactory:
         policy_changed = "toolPolicy" in updates or "workingDir" in updates
         if policy_changed:
             current_policy = dict(getattr(agent, "policy", {}) or {})
-            if "toolPolicy" in updates and updates["toolPolicy"]:
+            if updates.get("toolPolicy"):
                 current_policy.update(updates["toolPolicy"])
             if "workingDir" in updates:
                 current_policy["cwd"] = (updates["workingDir"] or "").strip() or current_policy.get("cwd") or str(agent.base_dir)
@@ -656,11 +648,11 @@ class AgentFactory:
             await disp.on_chunk(chunk)
 
         async def _push_global(chunk, gdisp, aid):
-            if gdisp and chunk.get("type") == "agent_state":
+            if gdisp and chunk.get("type") == "event" and chunk.get("event_type") == "agent_state":
                 await gdisp.on_chunk({**chunk, "agent_id": aid})
 
         async def _update_team_state(chunk, tf, aid):
-            if tf and chunk.get("type") == "agent_state":
+            if tf and chunk.get("type") == "event" and chunk.get("event_type") == "agent_state":
                 for tid, team in tf.teams.items():
                     meta = tf._team_meta.get(tid, {})
                     if aid in (meta.get("memberIds") or []):
@@ -669,13 +661,14 @@ class AgentFactory:
                         new_state = team.state
                         if new_state != old_state and global_disp:
                             await global_disp.on_chunk({
-                                "type": "agent_state",
+                                "type": "event",
+                                "event_type": "agent_state",
                                 "agent_id": tid,
                                 "state": new_state,
                             })
 
         async def _wrapped_output(chunk):
-            # 三者独立执行：任一失败不影响其他
+            # 三者独立执行:任一失败不影响其他
             results = await asyncio.gather(
                 _push_per_agent(chunk, dispatcher),
                 _push_global(chunk, global_disp, agent_id),
@@ -708,11 +701,14 @@ class AgentFactory:
             if cfg:
                 for timer in cfg.timers:
                     if timer.enabled:
-                        agent.add_timer(timer.seconds, timer.name, timer.hint)
+                        if timer.type == "at" and timer.time:
+                            agent.add_at_timer(timer.time, timer.name, timer.hint)
+                        else:
+                            agent.add_timer(timer.seconds, timer.name, timer.hint)
 
             self._update_json_started(agent_id, started=True)
 
-            # 轮询等待 agent 事件循环真正启动（状态不再是 Ready），
+            # 轮询等待 agent 事件循环真正启动(状态不再是 Ready),
             # 避免 API 返回 Ready 后 WebSocket 又推 Waiting 导致状态闪烁
             for _ in range(30):  # 最多等 3 秒
                 if agent.state != AgentState.Ready:
@@ -751,10 +747,8 @@ class AgentFactory:
                 except asyncio.TimeoutError:
                     logger.warning("Agent '%s' task did not stop within 5s, cancelling", agent.name)
                     task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await task
-                    except asyncio.CancelledError:
-                        pass
 
             dispatcher = self._dispatchers.get(agent_id)
             if dispatcher:
@@ -774,7 +768,7 @@ class AgentFactory:
             return_exceptions=True,
         )
         summary: dict[str, str] = {}
-        for agent_id, result in zip(to_start, results):
+        for agent_id, result in zip(to_start, results, strict=False):
             if isinstance(result, Exception):
                 summary[agent_id] = f"failed: {result}"
             else:
@@ -872,7 +866,7 @@ class AgentFactory:
                 continue
             for msg in turn.messages:
                 msg_dict = msg.to_dict()
-                ts = msg_dict.get("timestamp", 0) * 1000  # 秒 → 毫秒，统一前端时间格式
+                ts = msg_dict.get("timestamp", 0) * 1000  # 秒 → 毫秒,统一前端时间格式
                 message_id = msg_dict.get("id", "")
 
                 # ── ToolMessage: 直接输出 tool_result ──
@@ -909,7 +903,7 @@ class AgentFactory:
                     })
 
                 content = msg_dict.get("content", "")
-                # ModelMessage 的 role 是 "model"，前端期望 "assistant"
+                # ModelMessage 的 role 是 "model",前端期望 "assistant"
                 display_role = "assistant" if msg_dict.get("role") == "model" else msg_dict.get("role", "")
                 if isinstance(content, str):
                     if content.strip():
@@ -921,7 +915,7 @@ class AgentFactory:
                             "timestamp": ts,
                         })
                 elif isinstance(content, list):
-                    # HumanMessage (role=="user"): 合并所有 text block，避免拆成多条用户消息
+                    # HumanMessage (role=="user"): 合并所有 text block,避免拆成多条用户消息
                     if msg_dict.get("role") == "user":
                         merged = "\n".join(
                             b.get("text", "") for b in content if b.get("type") == "text"
@@ -946,7 +940,7 @@ class AgentFactory:
                                         "timestamp": ts,
                                     })
 
-                # tool_calls: 仅从 tool_calls 字段输出（content 中的 tooluse 已在上面处理，避免重复）
+                # tool_calls: 仅从 tool_calls 字段输出(content 中的 tooluse 已在上面处理,避免重复)
                 for tc in msg_dict.get("tool_calls", []):
                     tc_input = tc.get("input", {})
                     result.append({
@@ -962,7 +956,7 @@ class AgentFactory:
                     })
         return result
 
-    def get_dispatcher(self, agent_id: str) -> Optional[AgentOutputDispatcher]:
+    def get_dispatcher(self, agent_id: str) -> AgentOutputDispatcher | None:
         return self._dispatchers.get(agent_id)
 
     # ------------------------------------------------------------------
@@ -983,7 +977,9 @@ class AgentFactory:
         return [
             {
                 "name": t.name,
+                "type": t.type,
                 "seconds": t.seconds,
+                "time": t.time,
                 "hint": t.hint,
                 "enabled": t.enabled,
                 "running": t.name in running_names,
@@ -991,7 +987,8 @@ class AgentFactory:
             for t in cfg.timers
         ]
 
-    def add_timer(self, agent_id: str, name: str, seconds: float, hint: str = "", enabled: bool = True):
+    def add_timer(self, agent_id: str, name: str, timer_type: str = "interval",
+                  seconds: float = 0.0, time_str: str = "", hint: str = "", enabled: bool = True):
         agent = self.agents.get(agent_id)
         cfg = self._agent_configs.get(agent_id)
         if not agent or not cfg:
@@ -1008,15 +1005,19 @@ class AgentFactory:
         if any(t.name == name for t in cfg.timers):
             raise ValueError(f"Timer '{name}' already exists")
 
-        new_timer = TimerConfig(name=name, seconds=seconds, hint=hint, enabled=enabled)
+        new_timer = TimerConfig(name=name, type=timer_type, seconds=seconds, time=time_str, hint=hint, enabled=enabled)
         cfg.timers.append(new_timer)
 
         if agent.is_running and enabled:
-            agent.add_timer(seconds, name, hint)
+            if timer_type == "at" and time_str:
+                agent.add_at_timer(time_str, name, hint)
+            else:
+                agent.add_timer(seconds, name, hint)
 
         self._write_agent_json_full(agent_id, started=agent_id in self._started)
 
-    def update_timer(self, agent_id: str, timer_name: str, seconds: float = None, hint: str = None, enabled: bool = None):
+    def update_timer(self, agent_id: str, timer_name: str, seconds: float | None = None,
+                     time_str: str | None = None, hint: str | None = None, enabled: bool | None = None):
         agent = self.agents.get(agent_id)
         cfg = self._agent_configs.get(agent_id)
         if not agent or not cfg:
@@ -1032,13 +1033,18 @@ class AgentFactory:
 
         if seconds is not None:
             timer.seconds = seconds
+        if time_str is not None:
+            timer.time = time_str
         if hint is not None:
             timer.hint = hint
         if enabled is not None:
             timer.enabled = enabled
 
         if agent.is_running:
-            agent.update_timer(timer_name, seconds=timer.seconds, hint=timer.hint)
+            if timer.type == "at" and timer.time:
+                agent.update_timer(timer_name, time_str=timer.time, hint=timer.hint)
+            else:
+                agent.update_timer(timer_name, seconds=timer.seconds, hint=timer.hint)
             if timer.enabled:
                 agent.start_timer(timer_name)
             else:
@@ -1296,7 +1302,7 @@ class AgentFactory:
         if not config_path.exists():
             return
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(config_path, encoding='utf-8') as f:
                 raw = json.loads(f.read()) or {}
             raw["lastSessionId"] = new_id
             with open(config_path, 'w', encoding='utf-8') as f:
@@ -1305,13 +1311,13 @@ class AgentFactory:
             logger.warning(f"Failed to update lastSessionId for '{agent.name}': {e}")
 
     def _refresh_session_index(self, agent_id: str):
-        """通知 SessionManager 刷新该 agent 的 session 索引。"""
+        """通知 SessionManager 刷新该 agent 的 session 索引."""
         from backend.state import state_manager
         if state_manager.session_manager:
             state_manager.session_manager.refresh_agent_index(agent_id)
 
     def _remove_session_index(self, agent_id: str):
-        """移除该 agent 的所有 session 索引（agent 被删除时调用）。"""
+        """移除该 agent 的所有 session 索引(agent 被删除时调用)."""
         from backend.state import state_manager
         if state_manager.session_manager:
             sm = state_manager.session_manager
@@ -1329,7 +1335,7 @@ class AgentFactory:
         if not config_path.exists():
             return
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(config_path, encoding='utf-8') as f:
                 raw = json.loads(f.read()) or {}
             raw["started"] = bool(started)
             with open(config_path, 'w', encoding='utf-8') as f:

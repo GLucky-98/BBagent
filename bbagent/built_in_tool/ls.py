@@ -3,7 +3,6 @@ LS tool - List directory contents.
 """
 import os
 from pathlib import Path
-from typing import Optional
 
 from ..core.tool import Tool
 from .policy import Policy
@@ -38,10 +37,7 @@ def create_ls_tool(
     else:
         policy = None
 
-    if policy is not None:
-        cwd = policy.cwd
-    else:
-        cwd = "."
+    cwd = policy.cwd if policy is not None else "."
 
     operations = LsOperations()
 
@@ -56,7 +52,7 @@ def create_ls_tool(
             return f"{size / (1024 * 1024 * 1024):.1f} GB"
 
     def ls_func(
-        path: Optional[str] = None,
+        path: str | None = None,
         show_hidden: bool = True,
     ) -> str:
         if policy is not None:
@@ -111,7 +107,7 @@ def create_ls_tool(
             return "\n".join(output_lines)
 
         except Exception as e:
-            return f"Error listing directory: {str(e)}"
+            return f"Error listing directory: {e!s}"
 
     input_schema = {
         "type": "object",

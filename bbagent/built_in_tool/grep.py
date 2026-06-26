@@ -5,7 +5,6 @@ import fnmatch
 import os
 import re
 from pathlib import Path
-from typing import Optional
 
 from ..core.tool import Tool
 from .policy import Policy
@@ -13,7 +12,7 @@ from .policy import Policy
 
 class GrepOperations:
     def read_file(self, absolute_path: str) -> str:
-        with open(absolute_path, "r", encoding="utf-8", errors="replace") as f:
+        with open(absolute_path, encoding="utf-8", errors="replace") as f:
             return f.read()
 
 
@@ -27,10 +26,7 @@ def create_grep_tool(
     else:
         policy = None
 
-    if policy is not None:
-        cwd = policy.cwd
-    else:
-        cwd = "."
+    cwd = policy.cwd if policy is not None else "."
 
     operations = GrepOperations()
 
@@ -40,7 +36,7 @@ def create_grep_tool(
         context: int = 0,
         case_sensitive: bool = True,
         is_regex: bool = True,
-        file_pattern: Optional[str] = None,
+        file_pattern: str | None = None,
         max_results: int = 100,
     ) -> str:
         if not pattern:
@@ -52,10 +48,7 @@ def create_grep_tool(
             p = Path(path)
             resolved_path = str(p if p.is_absolute() else (Path(policy.cwd) / p).resolve())
         else:
-            if os.path.isabs(path):
-                resolved_path = path
-            else:
-                resolved_path = os.path.join(cwd, path)
+            resolved_path = path if os.path.isabs(path) else os.path.join(cwd, path)
 
         if not os.path.exists(resolved_path):
             return f"Error: Path not found: {path}"
@@ -65,7 +58,7 @@ def create_grep_tool(
             if os.path.isfile(resolved_path):
                 files_to_search = [resolved_path]
             else:
-                for root, dirs, files in os.walk(resolved_path):
+                for root, _dirs, files in os.walk(resolved_path):
                     for file in files:
                         file_path = os.path.join(root, file)
                         if file_pattern:
@@ -80,7 +73,7 @@ def create_grep_tool(
                 try:
                     compiled_pattern = re.compile(pattern, flags)
                 except re.error as e:
-                    return f"Error: Invalid regex pattern: {str(e)}"
+                    return f"Error: Invalid regex pattern: {e!s}"
             else:
                 if case_sensitive:
                     compiled_pattern = re.compile(re.escape(pattern))
@@ -137,7 +130,7 @@ def create_grep_tool(
             return "\n".join(matches)
 
         except Exception as e:
-            return f"Error searching files: {str(e)}"
+            return f"Error searching files: {e!s}"
 
     input_schema = {
         "type": "object",

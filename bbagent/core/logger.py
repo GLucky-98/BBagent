@@ -1,11 +1,10 @@
-import logging
 import json
+import logging
 import re
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List
 from uuid import uuid4 as uuid
 
 
@@ -58,7 +57,7 @@ class AgentLogger:
     def __init__(
         self,
         name: str,
-        log_dir: Optional[Path] = None,
+        log_dir: Path | None = None,
         level: int = logging.DEBUG,
         console_level: int = logging.INFO,
         file_level: int = logging.DEBUG,
@@ -74,7 +73,7 @@ class AgentLogger:
         self._logger.handlers.clear()
 
         self._trace_id = ""
-        self._span_stack: List[str] = []
+        self._span_stack: list[str] = []
 
         self._context_filter = ContextFilter(self)
         self._logger.addFilter(self._context_filter)
@@ -84,7 +83,7 @@ class AgentLogger:
         self._console_handler.setFormatter(StructuredFormatter())
         self._logger.addHandler(self._console_handler)
 
-        self._file_handler: Optional[logging.FileHandler] = None
+        self._file_handler: logging.FileHandler | None = None
         if log_dir is not None:
             log_dir = Path(log_dir)
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -128,7 +127,7 @@ class AgentLogger:
             self._span_stack.pop()
 
     @staticmethod
-    def _infer_tag(span_name: str) -> Optional[str]:
+    def _infer_tag(span_name: str) -> str | None:
         if span_name.startswith("tool_"):
             return "TOOL"
         if span_name.startswith("hook_"):
@@ -139,17 +138,17 @@ class AgentLogger:
             return "SUBAGENT"
         return None
 
-    def _format_msg(self, msg: str, tag: Optional[str], args: tuple) -> str:
+    def _format_msg(self, msg: str, tag: str | None, args: tuple) -> str:
         if args:
             msg = msg % args
         if tag:
             msg = f"[{tag}] {msg}"
         return msg
 
-    def _log(self, level: int, msg: str, context: dict = None, exc_info=None):
+    def _log(self, level: int, msg: str, context: dict | None = None, exc_info=None):
         self._logger.log(level, msg, extra={"context": context or {}}, exc_info=exc_info)
 
-    def debug(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def debug(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         if tag is None:
             for span_id in reversed(self._span_stack):
                 inferred = self._infer_tag(span_id)
@@ -159,7 +158,7 @@ class AgentLogger:
         msg = self._format_msg(msg, tag, args)
         self._log(logging.DEBUG, msg, context, exc_info=exc_info)
 
-    def info(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def info(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         if tag is None:
             for span_id in reversed(self._span_stack):
                 inferred = self._infer_tag(span_id)
@@ -169,7 +168,7 @@ class AgentLogger:
         msg = self._format_msg(msg, tag, args)
         self._log(logging.INFO, msg, context, exc_info=exc_info)
 
-    def warning(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def warning(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         if tag is None:
             for span_id in reversed(self._span_stack):
                 inferred = self._infer_tag(span_id)
@@ -179,7 +178,7 @@ class AgentLogger:
         msg = self._format_msg(msg, tag, args)
         self._log(logging.WARNING, msg, context, exc_info=exc_info)
 
-    def error(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def error(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         if tag is None:
             for span_id in reversed(self._span_stack):
                 inferred = self._infer_tag(span_id)
@@ -189,7 +188,7 @@ class AgentLogger:
         msg = self._format_msg(msg, tag, args)
         self._log(logging.ERROR, msg, context, exc_info=exc_info)
 
-    def fatal(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def fatal(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         if tag is None:
             for span_id in reversed(self._span_stack):
                 inferred = self._infer_tag(span_id)
@@ -227,19 +226,19 @@ class _NullLogger:
     can be made unconditionally without None-checking.
     """
 
-    def debug(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def debug(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         pass
 
-    def info(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def info(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         pass
 
-    def warning(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def warning(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         pass
 
-    def error(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def error(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         pass
 
-    def fatal(self, msg: str, *args, context: dict = None, tag: str = None, exc_info=None):
+    def fatal(self, msg: str, *args, context: dict | None = None, tag: str | None = None, exc_info=None):
         pass
 
     def set_trace_id(self, trace_id: str = ""):

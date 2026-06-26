@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import re
 from uuid import uuid4
 
@@ -89,10 +90,8 @@ async def team_chat_ws(websocket: WebSocket, team_ref: str):
         for task in (forwarder_task, receiver_task):
             if not task.done():
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
 
 def _parse_mentions(text: str) -> list[str]:

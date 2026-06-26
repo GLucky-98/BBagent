@@ -1,12 +1,13 @@
-from pathlib import Path
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
-from backend.logging import setup_backend_logging, get_backend_logger
 from backend.errors import AppError, app_error_handler, unhandled_exception_handler
+from backend.logging import get_backend_logger, setup_backend_logging
 
 setup_backend_logging()
 
@@ -25,7 +26,7 @@ async def lifespan(app: FastAPI):
     # 关闭时统一落盘所有 active session 的 metadata
     logger.info("BBagent API shutting down — saving sessions")
     agent_factory = state_manager.agent_factory
-    for agent_id, agent in list(agent_factory.agents.items()):
+    for _agent_id, agent in list(agent_factory.agents.items()):
         if agent.session is None or agent.session.dir is None:
             continue
         try:

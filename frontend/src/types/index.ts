@@ -236,7 +236,9 @@ export interface FileNode {
 
 export interface TimerConfig {
   name: string;
+  type: "interval" | "at";
   seconds: number;
+  time: string;
   hint: string;
   enabled: boolean;
   running?: boolean;

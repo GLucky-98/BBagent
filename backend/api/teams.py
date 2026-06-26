@@ -1,11 +1,12 @@
 import asyncio
 from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 
-from backend.state import state_manager
-from backend.schemas import TeamConfig, CreateTeamRequest
 from backend.errors import AppError, ConflictError, ErrorCode
 from backend.logging import get_backend_logger
+from backend.schemas import CreateTeamRequest, TeamConfig
+from backend.state import state_manager
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
@@ -40,7 +41,7 @@ async def list_teams():
     result = []
     stale_ids: list[str] = []
     for team_id, team in state_manager.team_factory.teams.items():
-        # 检查 team_config.json 是否存在（可能在新结构 teams/{id}/{name}/ 或旧结构 teams/{id}/）
+        # 检查 team_config.json 是否存在(可能在新结构 teams/{id}/{name}/ 或旧结构 teams/{id}/)
         found = False
         if team.base_dir:
             found = (team.base_dir / "team_config.json").exists()
@@ -152,7 +153,7 @@ async def create_team_conversation(team_id: str, body: dict | None = None):
             (body or {}).get("name"),
         )
     except AppError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.message) from None
 
 
 @router.post("/{team_id}/conversations/{conversation_id}/load")
@@ -162,7 +163,7 @@ async def load_team_conversation(team_id: str, conversation_id: str):
     try:
         return await state_manager.team_factory.conversations.load_conversation(team, conversation_id)
     except AppError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.message) from None
 
 
 @router.delete("/{team_id}/conversations/{conversation_id}")
@@ -172,7 +173,7 @@ async def delete_team_conversation(team_id: str, conversation_id: str):
     try:
         return await state_manager.team_factory.conversations.delete_conversation(team, conversation_id)
     except AppError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.message) from None
 
 
 @router.post("/{team_id}/start")
@@ -185,7 +186,7 @@ async def start_team(team_id: str):
     try:
         await state_manager.team_factory.conversations.align_active_sessions(team)
     except AppError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.message) from None
 
     agent_id_by_name = {a.name: aid for aid, a in state_manager.agent_factory.agents.items()}
     for agent_name in team.agents:
@@ -193,7 +194,7 @@ async def start_team(team_id: str):
         await state_manager.start_agent(aid)
     await team.start()
 
-    # 等待所有 agent 事件循环启动完毕（状态不再为 Ready）
+    # 等待所有 agent 事件循环启动完毕(状态不再为 Ready)
     for _ in range(30):  # 最多等 3 秒
         team.update_state()
         if team.state != "ready":

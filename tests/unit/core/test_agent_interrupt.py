@@ -4,7 +4,7 @@ import pytest
 
 from bbagent.core.agent import Agent, AgentConfig, AgentState
 from bbagent.core.hook import HookType
-from bbagent.core.input import AgentEvent, EventType, InputChannel
+from bbagent.core.input import InputChannel, InputEvent, InputType
 from bbagent.core.message import HumanMessage, ModelMessage, ToolMessage, ToolUseBlock
 from bbagent.core.model import Model, Model_Input
 from bbagent.core.tool import Tool
@@ -168,8 +168,8 @@ async def test_interrupt_during_tool_execution_drops_pending_tool_use_message(tm
     await asyncio.wait_for(run_task, timeout=1)
 
     assert tool_cancelled.is_set()
-    assert any(chunk["type"] == "interrupted" for chunk in chunks)
-    assert not any(chunk["type"] == "tool_results" for chunk in chunks)
+    assert any(chunk["type"] == "event" and chunk["event_type"] == "interrupted" for chunk in chunks)
+    assert not any(chunk["type"] == "stream_chunk" and chunk["chunk_type"] == "tool_results" for chunk in chunks)
 
     assert agent.session is not None
     assert agent.session.turn_count == 1
@@ -203,7 +203,7 @@ async def test_completed_tool_execution_persists_closed_tool_round(tmp_path):
 
     chunks = [chunk async for chunk in agent.run(HumanMessage("please run the tool"))]
 
-    assert any(chunk["type"] == "tool_results" for chunk in chunks)
+    assert any(chunk["type"] == "stream_chunk" and chunk["chunk_type"] == "tool_results" for chunk in chunks)
     assert agent.session is not None
     assert agent.session.turn_count == 1
     assert agent.session.turns[0].is_complete
@@ -231,7 +231,7 @@ async def test_hook_break_uses_unified_interrupt_signal(tmp_path):
 
     chunks = [chunk async for chunk in agent.run(HumanMessage("stop before stream"))]
 
-    assert chunks == [{"type": "interrupted", "content": "Agent interrupted"}]
+    assert chunks == [{"type": "event", "event_type": "interrupted", "content": "Agent interrupted"}]
     assert agent.session is not None
     assert agent.session.turn_count == 1
     assert [type(msg).__name__ for msg in agent.session.turns[0].messages] == [
@@ -269,7 +269,7 @@ async def test_stop_interrupts_current_event_and_drops_queued_events(tmp_path):
     agent.input.push(
         "queued team message",
         source_id="team:Alice",
-        event_type=EventType.AGENT_MESSAGE,
+        event_type=InputType.AGENT_INPUT,
     )
 
     await agent.stop()
@@ -297,20 +297,20 @@ async def test_handle_event_emits_user_input_event(tmp_path):
     agent.on_output(lambda chunk: chunks.append(dict(chunk)))
 
     await agent._handle_event(
-        AgentEvent(
-            type=EventType.USER_MESSAGE,
+        InputEvent(
+            type=InputType.USER_INPUT,
             source_id="user",
-            payload=HumanMessage("hello"),
+            payload=HumanMessage(content="Hello"),
         )
     )
 
-    input_events = [chunk for chunk in chunks if chunk.get("type") == "input_event"]
+    input_events = [chunk for chunk in chunks if chunk.get("type") == "event" and chunk.get("event_type") in ("user_input", "timer_input", "agent_input")]
     assert input_events == [
         {
-            "type": "input_event",
-            "event_type": EventType.USER_MESSAGE.value,
+            "type": "event",
+            "event_type": InputType.USER_INPUT.value,
             "source_id": "user",
-            "content": "hello",
+            "content": "Hello",
         }
     ]
 
@@ -354,6 +354,6 @@ async def test_start_preserves_error_state_and_does_not_emit_ready_after_event_f
     await asyncio.wait_for(start_task, timeout=1)
 
     assert agent.state == AgentState.Error
-    states = [chunk["state"] for chunk in chunks if chunk.get("type") == "agent_state"]
+    states = [chunk["state"] for chunk in chunks if chunk.get("type") == "event" and chunk.get("event_type") == "agent_state"]
     assert states[-1] == AgentState.Error
     assert AgentState.Ready not in states[states.index(AgentState.Error) + 1:]

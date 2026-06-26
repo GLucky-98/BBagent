@@ -17,7 +17,7 @@ def _make_serializable(obj):
 
 
 def _is_completed_end_turn(chunk: dict) -> bool:
-    if chunk.get("type") != "completed_message":
+    if not (chunk.get("type") == "stream_chunk" and chunk.get("chunk_type") == "completed_message"):
         return False
     content = chunk.get("content") or {}
     return isinstance(content, dict) and content.get("stop_reason") == "end_turn"
@@ -26,9 +26,13 @@ def _is_completed_end_turn(chunk: dict) -> bool:
 def _should_clear_buffer(chunk: dict) -> bool:
     if _is_completed_end_turn(chunk):
         return True
-    if chunk.get("type") == "interrupted":
+    if chunk.get("type") == "event" and chunk.get("event_type") == "interrupted":
         return True
-    return chunk.get("type") == "agent_state" and chunk.get("state") == "error"
+    return (
+        chunk.get("type") == "event"
+        and chunk.get("event_type") == "agent_state"
+        and chunk.get("state") == "error"
+    )
 
 
 class AgentOutputDispatcher:

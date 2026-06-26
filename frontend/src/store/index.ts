@@ -173,8 +173,8 @@ export interface AppState {
 
   agentTimers: Record<string, TimerConfig[]>;
   loadTimers: (id: string) => Promise<void>;
-  addTimer: (id: string, data: { name: string; seconds: number; hint: string; enabled: boolean }) => Promise<void>;
-  updateTimer: (id: string, name: string, data: { seconds?: number; hint?: string; enabled?: boolean }) => Promise<void>;
+  addTimer: (id: string, data: { name: string; type: "interval" | "at"; seconds?: number; time?: string; hint: string; enabled: boolean }) => Promise<void>;
+  updateTimer: (id: string, name: string, data: { seconds?: number; time?: string; hint?: string; enabled?: boolean }) => Promise<void>;
   startTimer: (id: string, name: string) => Promise<void>;
   stopTimer: (id: string, name: string) => Promise<void>;
   deleteTimer: (id: string, name: string) => Promise<void>;

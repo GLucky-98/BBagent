@@ -3,15 +3,13 @@
 import pytest
 
 from bbagent.built_in_hook.ctx_compress_hook import (
-    create_ctx_compress_hook,
     compress_session,
+    create_ctx_compress_hook,
 )
 from bbagent.core.message import (
     HumanMessage,
     ModelMessage,
     Session,
-    TextBlock,
-    ToolUseBlock,
 )
 
 

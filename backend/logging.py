@@ -2,7 +2,6 @@ import logging
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Optional
 
 
 class BackendFormatter(logging.Formatter):
@@ -49,7 +48,7 @@ class BackendFormatter(logging.Formatter):
         return line
 
 
-_BACKEND_HANDLER: Optional[logging.Handler] = None
+_BACKEND_HANDLER: logging.Handler | None = None
 
 
 def get_backend_logger(name: str) -> logging.Logger:

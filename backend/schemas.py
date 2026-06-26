@@ -1,3 +1,4 @@
+# ruff: noqa: N815 - camelCase fields match frontend API contract
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -94,7 +95,9 @@ class AgentSummary(BaseModel):
 
 class TimerConfig(BaseModel):
     name: str
-    seconds: float
+    type: str = "interval"  # "interval" or "at"
+    seconds: float = 0.0  # for interval type
+    time: str = ""  # for at type, format "HH:MM" or "HH:MM:SS"
     hint: str = ""
     enabled: bool = True
 
