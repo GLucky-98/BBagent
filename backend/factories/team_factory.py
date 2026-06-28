@@ -432,7 +432,7 @@ class TeamFactory:
         elif "contacts" in updates:
             member_names = set(team.agents.keys())
             meta["contacts"] = self._normalize_contacts(meta.get("contacts", {}), member_names)
-            team = self._rebuild_runtime_team(team_id)
+            team.set_contacts(meta["contacts"])
 
         # Persist updated meta
         if team.base_dir:

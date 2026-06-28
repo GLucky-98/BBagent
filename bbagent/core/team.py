@@ -99,10 +99,46 @@ Collaborate proactively - reach out to teammates when their expertise is needed.
             lines.append(f"- {name}: {role}")
         return "\n".join(lines) + "\n"
 
-    def add_agent(self, agent: Agent) -> 'AgentTeam':
+    def add_agent(self, agent: Agent, contacts: dict[str, str] | None = None) -> 'AgentTeam':
         self.agents[agent.name] = agent
+        self._contacts[agent.name] = set((contacts or {}).keys())
+        agent.set_runtime_prompt("team", self._build_team_prompt(self.team_description), order=20)
+        agent.set_runtime_prompt("teammates", self._build_teammate_prompt(contacts or {}), order=30)
         self._inject_team_tools(agent)
         return self
+
+    def _remove_team_tools(self, agent: Agent) -> None:
+        team_tool_names = [
+            name
+            for name, tool in list(agent.tools.items())
+            if getattr(tool, "source", None) == "team"
+        ]
+        if team_tool_names:
+            agent.remove_tools(team_tool_names)
+
+    def set_contacts(self, contacts: dict[str, dict[str, str]]) -> None:
+        """Update the team contact graph from a full contacts dict.
+
+        Diffs against current `_contacts` and only updates the teammate
+        runtime prompt.  If an agent transitions to/from zero visible
+        contacts, team communication tools are injected or removed.
+        """
+        for agent_name, agent in self.agents.items():
+            new_contacts = contacts.get(agent_name, {})
+            new_contacts_set = set(new_contacts.keys())
+            old_contacts_set = self._contacts.get(agent_name, set())
+
+            agent.set_runtime_prompt(
+                "teammates", self._build_teammate_prompt(new_contacts), order=30,
+            )
+            self._contacts[agent_name] = new_contacts_set
+
+            had_contacts = bool(old_contacts_set)
+            has_contacts = bool(new_contacts_set)
+            if had_contacts and not has_contacts:
+                self._remove_team_tools(agent)
+            elif not had_contacts and has_contacts:
+                self._inject_team_tools(agent)
 
     def _get_visible_contacts(self, agent_name: str) -> set[str]:
         if agent_name in self._contacts:
