@@ -1,5 +1,6 @@
 import traceback
 from enum import Enum
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -32,7 +33,7 @@ class ErrorCode(str, Enum):
 
 class AppError(Exception):
     def __init__(self, code: ErrorCode, message: str = "",
-                 status_code: int = 500, detail: str = ""):
+                 status_code: int = 500, detail: Any = ""):
         self.code = code
         self.message = message or code.value
         self.status_code = status_code
@@ -53,17 +54,17 @@ class AppError(Exception):
 
 
 class NotFoundError(AppError):
-    def __init__(self, code: ErrorCode, message: str = "", detail: str = ""):
+    def __init__(self, code: ErrorCode, message: str = "", detail: Any = ""):
         super().__init__(code, message, status_code=404, detail=detail)
 
 
 class ConflictError(AppError):
-    def __init__(self, code: ErrorCode, message: str = "", detail: str = ""):
+    def __init__(self, code: ErrorCode, message: str = "", detail: Any = ""):
         super().__init__(code, message, status_code=409, detail=detail)
 
 
 class InternalError(AppError):
-    def __init__(self, message: str = "", detail: str = "",
+    def __init__(self, message: str = "", detail: Any = "",
                  code: ErrorCode = ErrorCode.INTERNAL_ERROR):
         super().__init__(code, message, status_code=500, detail=detail)
 

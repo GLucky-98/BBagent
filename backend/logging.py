@@ -119,7 +119,7 @@ def get_uvicorn_log_config() -> dict:
 @contextmanager
 def log_operation(logger: logging.Logger, operation: str, agent_name: str = ""):
     start = time.monotonic()
-    extra = {"operation": operation}
+    extra: dict[str, object] = {"operation": operation}
     if agent_name:
         extra["agent_name"] = agent_name
     logger.info("[OP] %s started", operation, extra=extra)

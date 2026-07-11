@@ -66,6 +66,8 @@ async def create_agent(config: AgentConfig):
         (i for i, a in state_manager.agent_factory.agents.items() if a is agent),
         None,
     )
+    if agent_id is None:
+        raise HTTPException(status_code=500, detail="Created agent not found")
     data = state_manager.get_agent_config(agent_id).model_dump(mode="json")
     state_info = state_manager.get_agent_state(agent_id)
     data["state"] = state_info["state"]

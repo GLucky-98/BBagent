@@ -37,7 +37,7 @@ def _should_clear_buffer(chunk: dict) -> bool:
 
 class AgentOutputDispatcher:
     def __init__(self, replay_buffer: bool = True):
-        self._subscribers: dict[str, asyncio.Queue] = {}
+        self._subscribers: dict[str, asyncio.Queue[dict]] = {}
         self._round_buffer: list[dict] = []
         self._replay_buffer = replay_buffer
 
@@ -64,8 +64,8 @@ class AgentOutputDispatcher:
             except Exception as e:
                 logger.warning(f"Failed to forward chunk to subscriber: {e}")
 
-    def subscribe(self, subscriber_id: str, replay: bool = False) -> asyncio.Queue:
-        q = asyncio.Queue()
+    def subscribe(self, subscriber_id: str, replay: bool = False) -> asyncio.Queue[dict]:
+        q: asyncio.Queue[dict] = asyncio.Queue()
         if replay and self._round_buffer:
             for chunk in self._round_buffer:
                 q.put_nowait(chunk)

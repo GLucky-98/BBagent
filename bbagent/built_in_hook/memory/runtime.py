@@ -1,8 +1,9 @@
 import asyncio
 import logging
 from collections.abc import Coroutine
+from typing import Any
 
-from ...core.message import Session
+from ...core.message import Session, Turn
 from .fingerprint import extract_seen_memory_keys
 
 
@@ -13,8 +14,8 @@ class MemoryRuntime:
     store access serialization, and extraction/cleanup de-duplication.
     """
 
-    def __init__(self, logger: logging.Logger | None = None):
-        self.logger = logger or logging.getLogger(__name__)
+    def __init__(self, logger: Any | None = None):
+        self.logger: Any = logger or logging.getLogger(__name__)
         self.store_lock = asyncio.Lock()
         self.jobs: set[asyncio.Task] = set()
         self.inflight_turns: set[tuple[str, int]] = set()
@@ -39,8 +40,8 @@ class MemoryRuntime:
                 f"Memory background job failed: {name}: {e}"
             )
 
-    def claim_turns(self, session_id: str, indexed_turns: list[tuple[int, object]]) -> list[tuple[int, object]]:
-        claimed = []
+    def claim_turns(self, session_id: str, indexed_turns: list[tuple[int, Turn]]) -> list[tuple[int, Turn]]:
+        claimed: list[tuple[int, Turn]] = []
         for idx, turn in indexed_turns:
             key = (session_id, idx)
             if key in self.inflight_turns or key in self.completed_turns:

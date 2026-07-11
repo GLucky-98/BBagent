@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import time
+
 import uvicorn
 
 from backend.logging import get_uvicorn_log_config

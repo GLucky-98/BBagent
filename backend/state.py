@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, cast
 
 from backend.dispatcher import AgentOutputDispatcher
 from backend.errors import ErrorCode, NotFoundError
@@ -170,7 +170,7 @@ class State:
         return new_config, affected
 
     def delete_model(self, model_id: str) -> bool:
-        return self.model_factory.delete(model_id)
+        return cast(bool, self.model_factory.delete(model_id))
 
     async def delete_model_and_invalidate(self, model_id: str):
         # Collect affected agents before deletion
@@ -226,7 +226,7 @@ class State:
         return await self.mcp_factory.update(mcp_id, updates)
 
     def delete_mcp(self, mcp_id: str) -> bool:
-        return self.mcp_factory.delete(mcp_id)
+        return cast(bool, self.mcp_factory.delete(mcp_id))
 
     async def discover_mcp_tools(self, mcp_id: str):
         return await self.mcp_factory.discover_tools_by_id(mcp_id)
@@ -245,7 +245,7 @@ class State:
         return self.prompt_factory.update(prompt_id, updates)
 
     def delete_prompt(self, prompt_id: str) -> bool:
-        return self.prompt_factory.delete(prompt_id)
+        return cast(bool, self.prompt_factory.delete(prompt_id))
 
     # ------------------------------------------------------------------
     # Skill delegation
@@ -255,10 +255,10 @@ class State:
         return self.skill_factory.list_all()
 
     def import_skills_from_dir(self, dir_path: Path) -> tuple[list, list[str]]:
-        return self.skill_factory.import_dir(dir_path)
+        return cast(tuple[list[Any], list[str]], self.skill_factory.import_dir(dir_path))
 
     def delete_skill(self, skill_id: str) -> bool:
-        return self.skill_factory.delete(skill_id)
+        return cast(bool, self.skill_factory.delete(skill_id))
 
     def refresh_skill(self, skill_id: str):
         return self.skill_factory.refresh(skill_id)
@@ -286,10 +286,10 @@ class State:
         return await self.agent_factory.stop(agent_id)
 
     def get_agent_state(self, agent_id: str) -> dict:
-        return self.agent_factory.get_state(agent_id)
+        return cast(dict[Any, Any], self.agent_factory.get_state(agent_id))
 
     def get_agent_sessions(self, agent_id: str) -> list[dict]:
-        return self.agent_factory.get_sessions(agent_id)
+        return cast(list[dict[Any, Any]], self.agent_factory.get_sessions(agent_id))
 
     def _assert_agent_session_mutation_allowed(self, agent_id: str):
         for team in self.team_factory.teams.values():
@@ -304,7 +304,7 @@ class State:
         return await self.agent_factory.new_session(agent_id)
 
     def get_agent_messages(self, agent_id: str) -> list[dict]:
-        return self.agent_factory.get_messages(agent_id)
+        return cast(list[dict[Any, Any]], self.agent_factory.get_messages(agent_id))
 
     def get_agent_dispatcher(self, agent_id: str):
         return self.agent_factory.get_dispatcher(agent_id)
@@ -352,7 +352,7 @@ class State:
         return await self.team_factory.update(team_id, updates)
 
     async def delete_team(self, team_id: str) -> bool:
-        return await self.team_factory.delete(team_id)
+        return cast(bool, await self.team_factory.delete(team_id))
 
     # ------------------------------------------------------------------
     # Tool listing (for API)

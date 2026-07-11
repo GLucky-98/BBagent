@@ -30,14 +30,14 @@ ADD_MEMORY_TOOL_DESCRIPTION = (
 
 def create_add_memory_tool(
     memory_manager: MemoryManager,
-    session_id_getter,
+    session_id_getter: Callable[[], str],
     prompt: str = ADD_MEMORY_TOOL_DESCRIPTION,
-    runtime: "MemoryRuntime" = None,
+    runtime: "MemoryRuntime | None" = None,
     mark_current_turn_extracted: Callable[[], None] | None = None,
 ) -> Tool:
 
     async def add_memory(memories: list[str]) -> str:
-        valid_memories = []
+        valid_memories: list[Memory] = []
         for content in memories:
             memory = Memory.create(
                 content=content,
@@ -79,14 +79,14 @@ DELETE_MEMORY_TOOL_DESCRIPTION = (
     '- Delete multiple conflicting memories at once: memory_ids=["a1b2c3d4...", "e5f6g7h8..."]'
 )
 
-def create_delete_memory_tool(memory_manager: MemoryManager, runtime: "MemoryRuntime" = None) -> Tool:
+def create_delete_memory_tool(memory_manager: MemoryManager, runtime: "MemoryRuntime | None" = None) -> Tool:
 
     async def delete_memory(memory_ids: list[str]) -> str:
         if not memory_ids:
             return "No memory IDs provided."
 
-        deleted = []
-        not_found = []
+        deleted: list[str] = []
+        not_found: list[str] = []
 
         async def _delete():
             for mid in memory_ids:
@@ -173,9 +173,9 @@ async def inject_memory_context(
     selected_memory_keys: list[bytes] | None = None,
     oversample_factor: int = 3,
     oversample_cap: int = 200,
-    logger: AgentLogger = None,
-    runtime: "MemoryRuntime" = None,
-) -> str:
+    logger: AgentLogger | None = None,
+    runtime: "MemoryRuntime | None" = None,
+) -> str | None:
     seen_memory_keys = seen_memory_keys or set()
     candidate_fetch = max_candidates
     if seen_memory_keys:

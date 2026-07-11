@@ -4,6 +4,7 @@ from bbagent.built_in_tool.grep import create_grep_tool
 from bbagent.built_in_tool.ls import create_ls_tool
 from bbagent.built_in_tool.policy import Policy
 from bbagent.built_in_tool.read import create_read_tool
+from bbagent.built_in_tool.read_file import create_read_file_tool
 from bbagent.built_in_tool.write import create_write_tool
 
 
@@ -28,6 +29,42 @@ def test_read_reports_binary_file(tmp_path):
     result = create_read_tool(Policy(cwd=str(tmp_path))).invoke({"path": "blob.bin"})
 
     assert result.startswith("Error: File appears to be binary")
+
+
+def test_read_file_reads_managed_uploaded_file_by_id(tmp_path):
+    file_id = "file-123"
+    target_dir = tmp_path / "agent-1" / file_id
+    target_dir.mkdir(parents=True)
+    (target_dir / "notes.txt").write_text("one\ntwo\nthree", encoding="utf-8")
+
+    read_file = create_read_file_tool(
+        Policy(
+            uploaded_file_root=str(tmp_path),
+            uploaded_file_owner_id="agent-1",
+        )
+    )
+
+    result = read_file.invoke({"file_id": file_id, "offset": 2, "limit": 1})
+
+    assert result.startswith("two")
+    assert "File ID: file-123" in result
+    assert "Name: notes.txt" in result
+
+
+def test_read_file_rejects_raw_paths(tmp_path):
+    external = tmp_path / "secret.txt"
+    external.write_text("secret", encoding="utf-8")
+
+    read_file = create_read_file_tool(
+        Policy(
+            uploaded_file_root=str(tmp_path / "uploads"),
+            uploaded_file_owner_id="agent-1",
+        )
+    )
+
+    result = read_file.invoke({"file_id": str(external)})
+
+    assert result.startswith("Error: File not found or not accessible")
 
 
 def test_edit_requires_unique_match_unless_partial_match_enabled(tmp_path):

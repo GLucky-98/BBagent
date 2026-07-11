@@ -30,6 +30,7 @@ class LsOperations:
 def create_ls_tool(
     policy_or_config: Policy | dict | None = None,
 ) -> Tool:
+    policy: Policy | None
     if isinstance(policy_or_config, Policy):
         policy = policy_or_config
     elif isinstance(policy_or_config, dict):

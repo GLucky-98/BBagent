@@ -5,8 +5,9 @@ import logging
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from .tool import Tool
 
@@ -58,7 +59,7 @@ class MCPServerConfig:
 # MCP JSON-RPC message construction helper functions
 # ------------------------------------------------------------
 def make_request(id: int, method: str, params: dict | None = None) -> str:
-    req = {
+    req: dict[str, Any] = {
         "jsonrpc": "2.0",
         "id": id,
         "method": method,
@@ -68,7 +69,7 @@ def make_request(id: int, method: str, params: dict | None = None) -> str:
     return json.dumps(req)
 
 def make_notification(method: str, params: dict | None = None) -> str:
-    notif = {
+    notif: dict[str, Any] = {
         "jsonrpc": "2.0",
         "method": method,
     }
@@ -242,7 +243,9 @@ class MCPClient:
 
         # otherwise send request to fetch
         result = await self.send_request("tools/list")
-        return result.get("tools", [])
+        if not isinstance(result, dict):
+            return []
+        return cast(list[dict], result.get("tools", []))
 
     async def call_tool(self, name: str, arguments: dict) -> Any:
         """Call the specified tool"""
@@ -252,7 +255,7 @@ class MCPClient:
         })
         return result
 
-    async def create_tools(self) -> list:
+    async def create_tools(self) -> list["MCPTool"]:
         """Get tool list and wrap as MCPTool objects"""
         tools_data = await self.list_tools()
         return [MCPTool(self, t) for t in tools_data]
@@ -288,7 +291,7 @@ class MCPTool(Tool):
         )
 
     @staticmethod
-    def create_tool_from_config(mcp_client: MCPClient, config: dict[str, Any]):
+    def create_tool_from_config(mcp_client: MCPClient, config: dict[str, Any]) -> Callable[..., Any]:
         """
         Generate a callable function from a tool config dict.
         Config format example:
@@ -373,7 +376,7 @@ class MCPTool(Tool):
         # set function metadata
         tool_func.__name__ = func_name
         tool_func.__doc__ = func_doc
-        tool_func.__signature__ = sig
+        cast(Any, tool_func).__signature__ = sig
         tool_func.__annotations__ = annotations
 
         return tool_func

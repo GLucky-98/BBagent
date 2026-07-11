@@ -118,7 +118,7 @@ class SkillFactory:
         skipped: list[str] = []
 
         for name, skill in scanned.items():
-            skill_path = str(skill.path.resolve())
+            skill_path = str((skill.path or dir_path).resolve())
             sid = _skill_id(skill_path)
 
             if sid in self._configs:

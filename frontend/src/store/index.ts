@@ -233,6 +233,7 @@ export interface AppState {
 const BUILTIN_TOOL_IDS: Record<string, string> = {
   bash: "5a40e5e1-6931-4126-b142-581379f4f2eb",
   read: "4c48a29c-a52a-4ec7-b7d7-d265316091c7",
+  read_file: "b80bee57-0f71-5565-8838-66c8d5b7c108",
   write: "20c41591-9b4e-4ff0-9182-f11db46fef41",
   edit: "2d35e797-d8f7-41cf-aa12-e439ec74230b",
   grep: "4dc7319f-7ff7-484b-aa19-c39fa5efa772",
@@ -254,6 +255,12 @@ const defaultTools: Tool[] = [
     name: "read",
     source: "built_in",
     description: "Read contents of a file from the filesystem",
+  },
+  {
+    id: BUILTIN_TOOL_IDS.read_file,
+    name: "read_file",
+    source: "built_in",
+    description: "Read an uploaded file by file_id from managed storage",
   },
   {
     id: BUILTIN_TOOL_IDS.write,

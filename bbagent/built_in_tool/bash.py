@@ -31,13 +31,13 @@ async def _exec_bash_command(
         )
 
         try:
-            stdout, stderr = await asyncio.wait_for(
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=timeout
             )
-            stdout = stdout.decode("utf-8", errors="replace")
-            stderr = stderr.decode("utf-8", errors="replace")
-            return proc.returncode, stdout, stderr
+            stdout = stdout_bytes.decode("utf-8", errors="replace")
+            stderr = stderr_bytes.decode("utf-8", errors="replace")
+            return proc.returncode or 0, stdout, stderr
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
@@ -49,6 +49,7 @@ async def _exec_bash_command(
 async def create_bash_tool(
     policy_or_config: Policy | dict | None = None,
 ) -> Tool:
+    policy: Policy | None
     if isinstance(policy_or_config, Policy):
         policy = policy_or_config
     elif isinstance(policy_or_config, dict):

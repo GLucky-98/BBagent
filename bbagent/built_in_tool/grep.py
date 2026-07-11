@@ -19,6 +19,7 @@ class GrepOperations:
 def create_grep_tool(
     policy_or_config: Policy | dict | None = None,
 ) -> Tool:
+    policy: Policy | None
     if isinstance(policy_or_config, Policy):
         policy = policy_or_config
     elif isinstance(policy_or_config, dict):
@@ -80,7 +81,7 @@ def create_grep_tool(
                 else:
                     compiled_pattern = re.compile(re.escape(pattern), re.IGNORECASE)
 
-            matches = []
+            matches: list[str] = []
 
             for file_path in files_to_search:
                 if len(matches) >= max_results:
@@ -92,8 +93,8 @@ def create_grep_tool(
 
                     for i, line in enumerate(lines):
                         if compiled_pattern.search(line):
-                            context_before = []
-                            context_after = []
+                            context_before: list[str] = []
+                            context_after: list[str] = []
 
                             if context > 0:
                                 start_ctx = max(0, i - context)

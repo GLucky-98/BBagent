@@ -1,5 +1,7 @@
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import cast
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,8 +55,8 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api")
 
-app.add_exception_handler(AppError, app_error_handler)
-app.add_exception_handler(Exception, unhandled_exception_handler)
+app.add_exception_handler(AppError, cast(Callable, app_error_handler))
+app.add_exception_handler(Exception, cast(Callable, unhandled_exception_handler))
 
 
 @app.get("/health")

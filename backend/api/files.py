@@ -4,6 +4,7 @@ import os
 import platform
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
@@ -102,11 +103,11 @@ async def raw_file(path: str = Query(...)):
     is_text = any(content_type.startswith(prefix) for prefix in text_mimes)
 
     if is_text:
-        content = target.read_text(encoding="utf-8")
-        return Response(content=content, media_type=content_type)
+        text_content = target.read_text(encoding="utf-8")
+        return Response(content=text_content, media_type=content_type)
     else:
-        content = target.read_bytes()
-        return Response(content=content, media_type=content_type)
+        bytes_content = target.read_bytes()
+        return Response(content=bytes_content, media_type=content_type)
 
 
 @router.post("/write")
@@ -129,7 +130,7 @@ async def open_file_dir(payload: dict):
         elif system == "Linux":
             subprocess.run(["xdg-open", str(path)], check=True)
         elif system == "Windows":
-            os.startfile(str(path))
+            cast(Any, os).startfile(str(path))
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to open path: {e}") from None

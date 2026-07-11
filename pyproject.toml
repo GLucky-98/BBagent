@@ -156,7 +156,7 @@ exclude = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["BBagent.built_in_hook.memory.*"]
+module = ["bbagent.built_in_hook.memory.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

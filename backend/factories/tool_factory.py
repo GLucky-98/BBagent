@@ -7,12 +7,17 @@ MCP tools are registered/removed by MCPFactory notifications.
 import asyncio
 import json
 from pathlib import Path
+from typing import cast
 
 from backend.factories import _builtin_tool_id, _mcp_tool_id, _safe_filename
 from backend.logging import get_backend_logger
 from backend.schemas import ToolConfig
 from bbagent.built_in_tool import TOOL_CREATOR
 from bbagent.core.tool import Tool
+
+_BUILTIN_TOOL_DESCRIPTIONS = {
+    "read_file": "Read an uploaded file by file_id from managed local storage.",
+}
 
 
 class ToolFactory:
@@ -70,7 +75,7 @@ class ToolFactory:
                 id=tool_id,
                 name=short_name,
                 source="built_in",
-                description="",
+                description=_BUILTIN_TOOL_DESCRIPTIONS.get(short_name, ""),
             )
             self._configs[tool_id] = config
             self._save_file(config)
@@ -146,7 +151,7 @@ class ToolFactory:
                 tool = await creator(policy)
             else:
                 tool = creator(policy)
-            return tool
+            return cast(Tool, tool)
 
         if config.source == "mcp":
             if mcp_client_getter is None:
@@ -159,7 +164,7 @@ class ToolFactory:
             mcp_tools = await client.create_tools()
             for tool in mcp_tools:
                 if tool.raw_name == config.name:
-                    return tool
+                    return cast(Tool, tool)
             raise ValueError(
                 f"MCP tool '{config.name}' not found on server "
                 f"'{config.mcpServerId}'"

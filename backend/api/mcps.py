@@ -109,6 +109,7 @@ async def import_mcps(req: ImportRequest):
                     logger.info(f"  [skipped] {core_cfg.name} (already exists)")
                     continue
                 cfg = MCPServerConfig(
+                    id="",
                     name=core_cfg.name,
                     command=core_cfg.command,
                     args=core_cfg.args,

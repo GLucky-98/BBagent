@@ -4,6 +4,7 @@ import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 
 import chromadb
 import jieba
@@ -46,7 +47,7 @@ class Memory:
     @staticmethod
     def create(content: str, session_id: str, memory_id: str | None = None) -> 'Memory':
         return Memory(
-            id=memory_id,
+            id=memory_id or "",
             content=content,
             session_id=session_id,
             date_created=datetime.now().isoformat(),
@@ -59,9 +60,9 @@ class MemoryManager:
 
     def __init__(self,
                  name: str = "memories",
-                 embedding: Embedding = None,
+                 embedding: Embedding | None = None,
                  memory_dir: str | Path = "./memory",
-                 logger: logging.Logger | None = None):
+                 logger: Any | None = None):
 
         if embedding is None:
             embedding = OllamaEmbedding()
@@ -75,11 +76,11 @@ class MemoryManager:
             metadata={"hnsw:space": "cosine"}
         )
 
-        self.bm25 = None
-        self.doc_mapping = {}
+        self.bm25: Any | None = None
+        self.doc_mapping: dict[int, str] = {}
         self._bm25_dirty = True
 
-        self.logger = logger or logging.getLogger(__name__)
+        self.logger: Any = logger or logging.getLogger(__name__)
         self.logger.info(f"MemoryManager initialized: collection={name}, dir={self.memory_dir}")
 
         self._next_id = self._compute_next_id()
@@ -88,7 +89,7 @@ class MemoryManager:
 
     def _compute_next_id(self) -> int:
         all_data = self.collection.get(include=[])
-        ids = all_data.get("ids", [])
+        ids = all_data.get("ids") or []
         if not ids:
             return 1
         numeric_ids = []
@@ -108,14 +109,18 @@ class MemoryManager:
         path = self.memory_dir / "memories.json"
         all_data = self.collection.get()
         memories = []
-        for i, doc_id in enumerate(all_data.get("ids", [])):
+        ids = all_data.get("ids") or []
+        documents = all_data.get("documents") or []
+        metadatas = all_data.get("metadatas") or []
+        for i, doc_id in enumerate(ids):
+            metadata = metadatas[i] if i < len(metadatas) and metadatas[i] else {}
             memories.append(Memory(
                 id=doc_id,
-                content=all_data["documents"][i],
-                session_id=all_data["metadatas"][i].get("session_id", ""),
-                date_created=all_data["metadatas"][i].get("date_created", ""),
-                access_count=all_data["metadatas"][i].get("access_count", 0),
-                last_accessed=all_data["metadatas"][i].get("last_accessed", None),
+                content=documents[i] if i < len(documents) else "",
+                session_id=str(metadata.get("session_id", "")),
+                date_created=str(metadata.get("date_created", "")),
+                access_count=int(metadata.get("access_count", 0) or 0),
+                last_accessed=str(metadata.get("last_accessed") or "") or None,
             ).to_dict())
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(memories, f, ensure_ascii=False, indent=2)
@@ -123,32 +128,33 @@ class MemoryManager:
 
     def _load_from_files(self):
         all_data = self.collection.get()
-        has_chroma_data = bool(all_data.get("ids"))
+        ids = all_data.get("ids") or []
+        has_chroma_data = bool(ids)
 
         if not has_chroma_data:
             self.logger.info("No existing memory data found, creating new memory store")
             self._bm25_dirty = True
             return
 
-        self.logger.info(f"Restored {len(all_data['ids'])} memories from ChromaDB")
+        self.logger.info(f"Restored {len(ids)} memories from ChromaDB")
         self._bm25_dirty = True
 
     @property
     def _cleanup_state_path(self) -> Path:
         return self.memory_dir / "cleanup_state.json"
 
-    def _load_cleanup_state(self) -> dict:
+    def _load_cleanup_state(self) -> dict[str, Any]:
         path = self._cleanup_state_path
         if not path.exists():
             return {"mutation_count": 0, "last_cleanup": None, "last_mutation": None}
         try:
             with open(path, encoding="utf-8") as f:
-                return json.load(f)
+                return cast(dict[str, Any], json.load(f))
         except (json.JSONDecodeError, OSError):
             self.logger.warning(f"Failed to read cleanup state file, resetting: {path}")
             return {"mutation_count": 0, "last_cleanup": None, "last_mutation": None}
 
-    def _save_cleanup_state(self, state: dict):
+    def _save_cleanup_state(self, state: dict[str, Any]):
         path = self._cleanup_state_path
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -158,20 +164,20 @@ class MemoryManager:
 
     def increment_mutation_count(self, count: int = 1):
         state = self._load_cleanup_state()
-        state["mutation_count"] = state.get("mutation_count", 0) + count
+        state["mutation_count"] = int(state.get("mutation_count", 0) or 0) + count
         state["last_mutation"] = datetime.now().isoformat()
         self._save_cleanup_state(state)
 
     def decrement_mutation_count(self, count: int = 1):
         state = self._load_cleanup_state()
-        state["mutation_count"] = max(0, state.get("mutation_count", 0) - count)
+        state["mutation_count"] = max(0, int(state.get("mutation_count", 0) or 0) - count)
         self._save_cleanup_state(state)
 
     def check_and_reset_mutation(self, threshold: int) -> bool:
         if threshold < 0:
             return False
         state = self._load_cleanup_state()
-        count = state.get("mutation_count", 0)
+        count = int(state.get("mutation_count", 0) or 0)
         if count >= threshold:
             state["mutation_count"] = 0
             state["last_cleanup"] = datetime.now().isoformat()
@@ -181,7 +187,7 @@ class MemoryManager:
 
     def get_mutation_count(self) -> int:
         state = self._load_cleanup_state()
-        return state.get("mutation_count", 0)
+        return int(state.get("mutation_count", 0) or 0)
 
     def should_clean(self, threshold: int) -> bool:
         if threshold < 0:
@@ -197,7 +203,7 @@ class MemoryManager:
     async def _add_to_chroma(self, memory: Memory, embedding: list[float] | None = None):
         if embedding is None:
             embedding = await self.embedding.get_embedding(memory.content)
-        self.collection.add(
+        cast(Any, self.collection).add(
             ids=[memory.id],
             embeddings=[embedding],
             documents=[memory.content],
@@ -205,7 +211,7 @@ class MemoryManager:
         )
 
     async def _add_batch_to_chroma(self, memories: list[Memory], embeddings: list[list[float]]):
-        self.collection.add(
+        cast(Any, self.collection).add(
             ids=[m.id for m in memories],
             embeddings=embeddings,
             documents=[m.content for m in memories],
@@ -220,7 +226,7 @@ class MemoryManager:
 
     async def add_memories(self, memories: list[Memory]) -> dict:
         all_data = self.collection.get(include=["documents"])
-        existing_contents = set(all_data.get("documents", []))
+        existing_contents = set(all_data.get("documents") or [])
 
         pending = []
         skipped = 0
@@ -284,12 +290,20 @@ class MemoryManager:
 
     def increment_access(self, memory_id: str):
         data = self.collection.get(ids=[memory_id], include=["metadatas"])
-        if not data["metadatas"] or not data["metadatas"][0]:
+        metadatas = data.get("metadatas") or []
+        if not metadatas or not metadatas[0]:
             return
-        metadata = data["metadatas"][0]
-        metadata["access_count"] = metadata.get("access_count", 0) + 1
+        metadata = dict(metadatas[0])
+        raw_access_count = metadata.get("access_count", 0)
+        if isinstance(raw_access_count, int):
+            access_count = raw_access_count
+        elif isinstance(raw_access_count, (float, str)):
+            access_count = int(raw_access_count)
+        else:
+            access_count = 0
+        metadata["access_count"] = access_count + 1
         metadata["last_accessed"] = datetime.now().isoformat()
-        self.collection.update(ids=[memory_id], metadatas=[metadata])
+        cast(Any, self.collection).update(ids=[memory_id], metadatas=[metadata])
         self.logger.debug(
             f"Incremented access count for memory {memory_id[:12]}",
             context={"memory_id_prefix": memory_id[:12]},
@@ -302,7 +316,7 @@ class MemoryManager:
 
     def build_bm25_index(self):
         all_data = self.collection.get()
-        documents = all_data.get("documents", [])
+        documents = all_data.get("documents") or []
 
         if not documents:
             self.bm25 = None
@@ -312,7 +326,8 @@ class MemoryManager:
 
         tokenized_docs = [self._tokenize(doc) for doc in documents]
         self.bm25 = BM25Okapi(tokenized_docs)
-        self.doc_mapping = {i: doc_id for i, doc_id in enumerate(all_data["ids"])}
+        ids = all_data.get("ids") or []
+        self.doc_mapping = {i: doc_id for i, doc_id in enumerate(ids)}
         self.logger.debug(f"BM25 index built: {len(documents)} documents")
 
     def _tokenize(self, text: str) -> list[str]:
@@ -348,11 +363,12 @@ class MemoryManager:
 
         vector_ids = []
         try:
-            vector_results = self.collection.query(
+            vector_results = cast(Any, self.collection).query(
                 query_embeddings=[await self.embedding.get_embedding(query)],
                 n_results=n_results * 3,
             )
-            vector_ids = vector_results["ids"][0] if vector_results.get("ids") else []
+            vector_rows = vector_results.get("ids") or []
+            vector_ids = list(vector_rows[0]) if vector_rows else []
         except Exception as e:
             self.logger.warning(f"Vector search failed: {e}")
 
@@ -373,8 +389,11 @@ class MemoryManager:
 
         top_data = self.collection.get(ids=top_ids, include=["documents"])
         id_to_doc = {}
-        for i, doc_id in enumerate(top_data.get("ids", [])):
-            id_to_doc[doc_id] = top_data["documents"][i]
+        result_ids = top_data.get("ids") or []
+        result_documents = top_data.get("documents") or []
+        for i, doc_id in enumerate(result_ids):
+            if i < len(result_documents):
+                id_to_doc[doc_id] = result_documents[i]
 
         results: dict = {"ids": [], "documents": []}
         for doc_id in top_ids:
@@ -395,18 +414,20 @@ class MemoryManager:
 
     @property
     def count(self) -> int:
-        return self.collection.count()
+        return int(self.collection.count())
 
     def get_all(self) -> list[dict]:
         all_data = self.collection.get(include=["documents"])
+        ids = all_data.get("ids") or []
+        documents = all_data.get("documents") or []
         return [
-            {"id": all_data["ids"][i], "content": all_data["documents"][i]}
-            for i in range(len(all_data.get("ids", [])))
+            {"id": ids[i], "content": documents[i]}
+            for i in range(min(len(ids), len(documents)))
         ]
 
     def get_by_ids(self, memory_ids: list[str]) -> list[dict]:
         data = self.collection.get(ids=memory_ids, include=["documents"])
-        id_to_doc = dict(zip(data.get("ids", []), data.get("documents", []), strict=False))
+        id_to_doc = dict(zip(data.get("ids") or [], data.get("documents") or [], strict=False))
         result = []
         for mid in memory_ids:
             if mid in id_to_doc:

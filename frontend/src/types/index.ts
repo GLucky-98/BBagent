@@ -65,6 +65,17 @@ export interface Message {
   runtime?: boolean;
 }
 
+export interface UploadedFileInfo {
+  id: string;
+  originalName: string;
+  storedName: string;
+  path: string;
+  contentType: string;
+  size: number;
+}
+
+export type AttachmentInfo = UploadedFileInfo;
+
 // Team chat message, corresponds to backend TeamMessage
 export interface TeamChatMessage {
   fromAgent: string;

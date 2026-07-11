@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useMemo, memo, Component } from "react";
 import { flushSync } from "react-dom";
-import { Bot, User, Square, ChevronDown, ChevronRight, Plus, Timer, Sparkles, ArrowUp, Terminal, Brain, Wrench, FileText, ListTodo } from "lucide-react";
+import { Bot, User, Square, ChevronDown, ChevronRight, Plus, Timer, Sparkles, ArrowUp, Terminal, Brain, Wrench, FileText, ListTodo, Paperclip, X } from "lucide-react";
 import { useAppStore, useSelectedAgent, useAgentModel } from "../store";
 import { cn } from "../lib/utils";
 import { api } from "../lib/api";
-import type { Message, SessionInfo } from "../types";
+import type { AttachmentInfo, Message, SessionInfo } from "../types";
 import { TimerPanel } from "./TimerPanel";
 import { MarkdownContent } from "./MarkdownContent";
 
@@ -149,6 +149,31 @@ const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_COLLAPSED_SECTIONS = new Set<string>();
 const INITIAL_VISIBLE_SEGMENTS = 80;
 const SEGMENT_PAGE_SIZE = 80;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatAttachmentSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatMessageWithAttachments(content: string, attachments: AttachmentInfo[]): string {
+  if (attachments.length === 0) return content;
+  const lines = attachments.map(
+    (attachment) =>
+      `- ${attachment.originalName}: file_id=${attachment.id} (${attachment.contentType}, ${attachment.size} bytes)`
+  );
+  return [
+    content || "Please review the uploaded file(s).",
+    "",
+    "[Files]",
+    "These files were uploaded by the user and copied into managed local storage. Use read_file with file_id when needed:",
+    ...lines,
+  ].join("\n");
+}
 
 // ── Error boundary: fall back to plain text if markdown parsing throws ──
 const SafeMarkdown = memo(class SafeMarkdown extends Component<{ content: string; isStreaming?: boolean }> {
@@ -495,6 +520,7 @@ export function ChatWindow() {
   const isRunning = agentState === "running";
   const sessionActionsDisabled = agentState === "running";
   const setAgentState = useAppStore((s) => s.setAgentState);
+  const addToast = useAppStore((s) => s.addToast);
   const contextTokens = useAppStore((s) => s.agentContextTokens[selectedAgent?.id || ""] || 0);
   const loadAgentSessions = useAppStore((s) => s.loadAgentSessions);
   const agentSessions = useAppStore((s) => s.agentSessions[selectedAgent?.id || ""]) || EMPTY_SESSIONS;
@@ -509,6 +535,7 @@ export function ChatWindow() {
   const setAgentInput = useAppStore((s) => s.setAgentInput);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const subscribedAgentRef = useRef<string | null>(null);
   const streamBufferRef = useRef("");
   const currentAssistantMsgIdRef = useRef<string | null>(null);
@@ -517,6 +544,12 @@ export function ChatWindow() {
   const textFlushPendingRef = useRef(false);
   const thinkingFlushPendingRef = useRef(false);
   const [streamingMsgId, setStreamingMsgId] = useState<string | null>(null);
+  const attachmentScope = `${selectedAgentId}:${selectedSessionId}`;
+  const [attachmentState, setAttachmentState] = useState<{ scope: string; items: AttachmentInfo[] }>({
+    scope: "",
+    items: [],
+  });
+  const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
   const [visibleSegmentState, setVisibleSegmentState] = useState({
     scope: "",
     count: INITIAL_VISIBLE_SEGMENTS,
@@ -545,6 +578,7 @@ export function ChatWindow() {
     });
   };
   const messages = selectedAgent?.messages || EMPTY_MESSAGES;
+  const attachments = attachmentState.scope === attachmentScope ? attachmentState.items : [];
 
   // extract all turns (each conversation turn starts with a user message or input_event)
   const turns = useMemo(() => {
@@ -885,16 +919,56 @@ export function ChatWindow() {
     loadAgentMessages(selectedAgentId);
   }, [selectedAgentId, selectedSessionId, loadAgentMessages]);
 
+  const handleFileUpload = async (fileList: FileList | File[]) => {
+    if (!selectedAgent) return;
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    setIsUploadingAttachments(true);
+    try {
+      const uploaded = await api.uploadFiles(selectedAgent.id, files) as AttachmentInfo[];
+      setAttachmentState((current) => ({
+        scope: attachmentScope,
+        items: [...(current.scope === attachmentScope ? current.items : []), ...uploaded],
+      }));
+    } catch (error) {
+      addToast(`File upload failed: ${errorMessage(error)}`, "warning");
+    } finally {
+      setIsUploadingAttachments(false);
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachmentState((current) => ({
+      scope: attachmentScope,
+      items: (current.scope === attachmentScope ? current.items : []).filter((attachment) => attachment.id !== id),
+    }));
+  };
+
   const handleSend = () => {
-    if (!input.trim() || !selectedAgent) return;
-    const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: input.trim(), timestamp: Date.now() };
+    if (
+      (!input.trim() && attachments.length === 0)
+      || !selectedAgent
+      || isUploadingAttachments
+      || agentState !== "waiting"
+    ) return;
+    const content = input.trim() || "Please review the uploaded file(s).";
+    const outgoingAttachments = attachments;
+    const displayContent = formatMessageWithAttachments(content, outgoingAttachments);
+    const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: displayContent, timestamp: Date.now() };
     addMessage(selectedAgent.id, userMessage);
 
     const chatWs = useAppStore.getState().chatWs;
     if (chatWs?.readyState === WebSocket.OPEN) {
-      chatWs.send(JSON.stringify({ type: "user_message", content: input.trim(), message_id: userMessage.id }));
+      chatWs.send(JSON.stringify({
+        type: "user_message",
+        content,
+        attachments: outgoingAttachments,
+        message_id: userMessage.id,
+      }));
     }
     setAgentInput(selectedAgent.id, "");
+    setAttachmentState({ scope: attachmentScope, items: [] });
   };
 
   const handleInterrupt = () => {
@@ -919,6 +993,9 @@ export function ChatWindow() {
 
   const activeSession = agentSessions.find((s) => s.isActive);
   const currentSessionId = selectedAgent?.currentSessionId || activeSession?.id || "";
+  const canSend = (input.trim().length > 0 || attachments.length > 0)
+    && agentState === "waiting"
+    && !isUploadingAttachments;
 
   if (!selectedAgent) {
     return (
@@ -1108,7 +1185,48 @@ export function ChatWindow() {
               )}
             </button>
           </div>
-          <div className="flex items-end gap-2 bg-(--color-tint) border border-(--color-border) rounded-xl p-2 transition-all focus-within:bg-white focus-within:border-(--color-primary) focus-within:shadow-[0_0_0_3px_rgba(0,102,204,0.12)]">
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 mb-2">
+              {attachments.map((attachment) => (
+                <span
+                  key={attachment.id}
+                  title={attachment.path}
+                  className="inline-flex items-center gap-1.5 max-w-full h-7 px-2 rounded-md border border-(--color-border) bg-(--color-tint) text-[11.5px] text-(--color-foreground)"
+                >
+                  <FileText size={12} className="shrink-0 text-(--color-ink-2)" />
+                  <span className="truncate max-w-[220px]">{attachment.originalName}</span>
+                  <span className="shrink-0 text-(--color-ink-3)">{formatAttachmentSize(attachment.size)}</span>
+                  <button
+                    onClick={() => removeAttachment(attachment.id)}
+                    className="shrink-0 text-(--color-ink-3) hover:text-(--color-foreground)"
+                    title="Remove file"
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2 bg-(--color-tint) border border-(--color-border) rounded-xl p-2 transition-all focus-within:bg-white focus-within:border-(--color-primary) focus-within:shadow-[0_0_0_3px_rgba(0,102,204,0.12)]">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(event) => {
+                const files = event.currentTarget.files;
+                if (files) void handleFileUpload(files);
+                event.currentTarget.value = "";
+              }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploadingAttachments || agentState !== "waiting"}
+              className="w-7 h-7 rounded-full flex items-center justify-center self-center shrink-0 text-(--color-ink-2) hover:bg-(--color-secondary) disabled:opacity-30 disabled:cursor-not-allowed"
+              title={isUploadingAttachments ? "Uploading files" : "Attach files"}
+            >
+              <Paperclip size={14} />
+            </button>
             <textarea value={input} onChange={(e) => {
               if (selectedAgent) setAgentInput(selectedAgent.id, e.target.value);
               const el = e.target;
@@ -1118,23 +1236,27 @@ export function ChatWindow() {
               onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
               onDrop={(e) => {
                 e.preventDefault();
+                if (e.dataTransfer.files.length > 0) {
+                  void handleFileUpload(e.dataTransfer.files);
+                  return;
+                }
                 const path = e.dataTransfer.getData("text/plain");
                 if (path && selectedAgent) {
                   setAgentInput(selectedAgent.id, input ? `${input} ${path}` : path);
                 }
               }}
-              placeholder="Message…" rows={1}
+              placeholder={attachments.length > 0 ? "Add a note…" : "Message…"} rows={1}
               className="flex-1 bg-transparent border-0 outline-none resize-none text-[14.5px] leading-[1.5] text-(--color-foreground) placeholder:text-(--color-ink-3) px-2 py-1.5"
               style={{ minHeight: "32px", maxHeight: "120px" }} />
             {isRunning ? (
               <button onClick={handleInterrupt}
-                className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 bg-(--color-danger) text-white transition-colors hover:opacity-90"
+                className="w-7 h-7 rounded-full flex items-center justify-center self-center shrink-0 bg-(--color-danger) text-white transition-colors hover:opacity-90"
                 title="Stop">
                 <Square size={11} fill="currentColor" />
               </button>
             ) : (
-              <button onClick={handleSend} disabled={!input.trim() || agentState !== "waiting"}
-                className={cn("w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-colors", "bg-(--color-foreground) text-white", "hover:bg-black disabled:opacity-30 disabled:cursor-not-allowed")}
+              <button onClick={handleSend} disabled={!canSend}
+                className={cn("w-7 h-7 rounded-full flex items-center justify-center self-center shrink-0 transition-colors", "bg-(--color-foreground) text-white", "hover:bg-black disabled:opacity-30 disabled:cursor-not-allowed")}
                 title="Send">
                 <ArrowUp size={14} strokeWidth={2.5} />
               </button>

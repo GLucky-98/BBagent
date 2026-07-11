@@ -8,12 +8,15 @@ The frontend uses this descriptor to render the hook configuration dialog
 dynamically, without hardcoding field names. Default values are read from
 the canonical BuiltinHookConfig dataclass so they stay in sync.
 """
+from typing import cast
+
 from fastapi import APIRouter
 
 from backend.logging import get_backend_logger
 from backend.schemas import (
     HookDescriptor,
     HookFieldSchema,
+    HookFieldType,
     HookListResponse,
     HookSection,
 )
@@ -63,7 +66,7 @@ def _make_field(key: str, label: str, description: str = "") -> HookFieldSchema:
     default = getattr(BuiltinHookConfig(), key, None)
     return HookFieldSchema(
         key=key,
-        type=_FIELD_TYPES.get(key, "string"),
+        type=cast(HookFieldType, _FIELD_TYPES.get(key, "string")),
         label=label,
         default=default,
         description=description,

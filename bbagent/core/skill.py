@@ -9,9 +9,9 @@ logger = logging.getLogger("skill")
 
 @dataclass
 class SkillMetadata:
-    license: str = None
-    compatibility: str = None
-    version: str = None
+    license: str | None = None
+    compatibility: str | None = None
+    version: str | None = None
     allowed_tools: list[str] | None = None
     metadata: dict | None = None
 
@@ -30,8 +30,8 @@ class Skill:
     name: str
     description: str
     body: str = ""
-    path: Path = None
-    metadata: SkillMetadata = None
+    path: Path | None = None
+    metadata: SkillMetadata | None = None
 
     def to_config_dict(self) -> dict:
         return {

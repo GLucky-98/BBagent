@@ -21,6 +21,7 @@ import json
 import logging
 import shutil
 from pathlib import Path
+from typing import cast
 
 from backend.dispatcher import AgentOutputDispatcher
 from backend.errors import AppError, ConflictError, ErrorCode, NotFoundError
@@ -40,6 +41,8 @@ from bbagent.core.tool import Tool
 # Used only when constructing Policy objects from camelCase dicts.
 _POLICY_FIELD_MAP = {
     "maxReadSize": "max_read_size",
+    "uploadedFileRoot": "uploaded_file_root",
+    "uploadedFileOwnerId": "uploaded_file_owner_id",
     "bashMaxOutputSize": "bash_max_output_size",
     "bashDefaultTimeout": "bash_default_timeout",
     "webTimeout": "web_timeout",
@@ -55,6 +58,13 @@ _POLICY_FIELD_MAP = {
 
 def _policy_to_snake(policy: dict) -> dict:
     return {_POLICY_FIELD_MAP.get(k, k): v for k, v in policy.items()}
+
+
+def _with_uploaded_file_policy(policy: dict, data_dir: Path, agent_id: str) -> dict:
+    result = dict(policy)
+    result["uploaded_file_root"] = str(data_dir / "attachments")
+    result["uploaded_file_owner_id"] = agent_id
+    return result
 
 
 def _prepare_policy_dict(
@@ -262,7 +272,8 @@ class AgentFactory:
 
         # Only supplement runtime-only field; config is already up-to-date
         agent = self.agents.get(agent_id)
-        cfg.lastSessionId = agent.session.id if agent and getattr(agent, "session", None) else ""
+        session = getattr(agent, "session", None) if agent else None
+        cfg.lastSessionId = session.id if session else ""
         return cfg
 
     # ------------------------------------------------------------------
@@ -315,6 +326,7 @@ class AgentFactory:
                 self._model_ids[agent_id] = config.modelId
                 self._hook_names[agent_id] = list(config.hookNames)
                 self._shared_hook_config[agent_id] = shared_hook_config
+                session = getattr(agent, "session", None)
                 self._agent_configs[agent_id] = AgentConfig(
                     id=agent_id,
                     name=config.name,
@@ -328,7 +340,7 @@ class AgentFactory:
                     hookNames=list(config.hookNames),
                     hookConfig=dict(config.hookConfig or {}),
                     timers=list(config.timers),
-                    lastSessionId=agent.session.id if getattr(agent, "session", None) else "",
+                    lastSessionId=session.id if session else "",
                 )
 
                 self._write_agent_json_full(agent_id, started=False)
@@ -509,7 +521,11 @@ class AgentFactory:
                 self._model_factory,
                 self._model_ids.get(agent_id, ""),
             )
-            policy_obj = Policy(**_policy_to_snake(prepared_policy))
+            policy_obj = Policy(**_with_uploaded_file_policy(
+                _policy_to_snake(prepared_policy),
+                self._data_dir,
+                agent_id,
+            ))
 
             for tid in added:
                 try:
@@ -817,11 +833,12 @@ class AgentFactory:
                     turn_count = int(meta.get("turn_count", 0))
                 except Exception:
                     pass
+            active_session = getattr(agent, "session", None)
             sessions.append({
                 "id": sdir.name,
                 "timestamp": timestamp,
                 "turnCount": turn_count,
-                "isActive": agent.session.id == sdir.name,
+                "isActive": active_session.id == sdir.name if active_session else False,
             })
         return sessions
 
@@ -1114,7 +1131,11 @@ class AgentFactory:
             self._model_factory,
             self._model_ids.get(agent_id, ""),
         )
-        policy_obj = Policy(**_policy_to_snake(prepared_policy))
+        policy_obj = Policy(**_with_uploaded_file_policy(
+            _policy_to_snake(prepared_policy),
+            self._data_dir,
+            agent_id,
+        ))
         current_pool = self._tool_instances.get(agent_id)
 
         for tool_id in tool_ids:
@@ -1137,6 +1158,36 @@ class AgentFactory:
             agent.tools[new_tool.name] = new_tool
             if current_pool is not None and tool_id in current_pool:
                 current_pool[tool_id] = new_tool
+
+    async def ensure_builtin_tool_runtime(self, agent_id: str, tool_name: str) -> bool:
+        """Attach a built-in tool at runtime without mutating the persisted agent config."""
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return False
+        if tool_name in agent.tools:
+            return True
+        if tool_name not in TOOL_CREATOR:
+            return False
+
+        tool_id = _builtin_tool_id(tool_name)
+        cfg = self._agent_configs.get(agent_id)
+        configured_tool_ids = list(cfg.toolIds) if cfg else []
+        policy_raw = dict(getattr(agent, "policy", {}) or {})
+        policy_raw.setdefault("cwd", str(agent.base_dir))
+        prepared_policy = _prepare_policy_dict(
+            policy_raw,
+            [*configured_tool_ids, tool_id],
+            self._model_factory,
+            self._model_ids.get(agent_id, ""),
+        )
+        policy_obj = Policy(**_with_uploaded_file_policy(
+            _policy_to_snake(prepared_policy),
+            self._data_dir,
+            agent_id,
+        ))
+        tool = await self._build_tool(agent_id, tool_id, policy_obj)
+        agent.add_tools([tool])
+        return True
 
     def _collect_missing_tool_ids(self, agent_id: str) -> list[str]:
         cfg = self._agent_configs.get(agent_id)
@@ -1179,7 +1230,11 @@ class AgentFactory:
             self._model_factory,
             self._model_ids.get(agent_id, ""),
         )
-        policy_snake = _policy_to_snake(prepared_policy)
+        policy_snake = _with_uploaded_file_policy(
+            _policy_to_snake(prepared_policy),
+            self._data_dir,
+            agent_id,
+        )
         policy_snake.setdefault("cwd", str(agent.base_dir))
         policy_obj = Policy(**policy_snake)
 
@@ -1225,14 +1280,14 @@ class AgentFactory:
         tool = await self._tool_factory.build_tool(
             template_id, policy=policy_obj, mcp_client_getter=_mcp_client_getter,
         )
-        instances[template_id] = tool
-        return tool
+        instances[template_id] = cast(Tool, tool)
+        return instances[template_id]
 
     async def _get_mcp_client(self, agent_id: str, mcp_server_id: str) -> MCPClient:
         bucket = self._mcp_clients.setdefault(agent_id, {})
         if mcp_server_id in bucket:
             return bucket[mcp_server_id]
-        client = self._mcp_factory.create_client(mcp_server_id)
+        client = cast(MCPClient, self._mcp_factory.create_client(mcp_server_id))
         try:
             await asyncio.wait_for(client.start(), timeout=15.0)
             await asyncio.wait_for(client.initialize(), timeout=15.0)
@@ -1280,7 +1335,9 @@ class AgentFactory:
                 "hookConfig": dict(cfg.hookConfig or {}),
                 "timers": [t.model_dump() for t in cfg.timers],
                 "started": bool(started),
-                "lastSessionId": agent.session.id if getattr(agent, "session", None) else None,
+                "lastSessionId": (
+                    session.id if (session := getattr(agent, "session", None)) else None
+                ),
             }
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(new_data, f, indent=2, ensure_ascii=False)
@@ -1293,7 +1350,8 @@ class AgentFactory:
         cfg = self._agent_configs.get(agent_id)
         if not agent or not cfg:
             return
-        new_id = agent.session.id if getattr(agent, "session", None) else ""
+        session = getattr(agent, "session", None)
+        new_id = session.id if session else ""
         if cfg.lastSessionId == new_id:
             return
         cfg.lastSessionId = new_id

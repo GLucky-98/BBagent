@@ -44,7 +44,7 @@ class Hook:
     hook_type: HookType
     handler: Callable
     priority: int = 100
-    name: str = None
+    name: str | None = None
     critical: bool = False
 
     def __post_init__(self):
@@ -151,7 +151,7 @@ class AgentHook:
 
     def list_hooks(self) -> dict[HookType, list[str]]:
         return {
-            hook_type: [h.name for h in hooks]
+            hook_type: [h.name for h in hooks if h.name is not None]
             for hook_type, hooks in self._hooks.items()
             if hooks
         }

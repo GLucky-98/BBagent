@@ -2,6 +2,7 @@
 SubAgent tool - Delegate tasks to a sub-agent with its own model and tools.
 """
 import inspect
+from typing import cast
 from uuid import uuid4 as uuid
 
 from ..core.agent import SubAgent
@@ -13,6 +14,7 @@ from .policy import Policy
 async def create_sub_agent_tool(
     policy_or_config: Policy | dict | None = None,
 ) -> Tool:
+    policy: Policy | None
     if isinstance(policy_or_config, Policy):
         policy = policy_or_config
     elif isinstance(policy_or_config, dict):
@@ -40,7 +42,7 @@ async def create_sub_agent_tool(
             continue
         try:
             tool = creator(policy) if not inspect.iscoroutinefunction(creator) else await creator(policy)
-            all_sub_tools[creator_key] = tool
+            all_sub_tools[creator_key] = cast(Tool, tool)
         except Exception:
             continue
 

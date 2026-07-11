@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 from ..core import Agent, HookContext, HookType, Model
 from .ctx_compress_hook import COMPRESS_PREFIX, COMPRESS_PROMPT, compress_session, create_ctx_compress_hook
@@ -123,9 +124,9 @@ class BuiltinHookConfig:
     # Hard cap for the oversampled retrieval size.
     inject_oversample_cap: int = INJECT_OVERSAMPLE_CAP
     # Model used by the memory subsystem; defaults to the agent's own model.
-    submodel: Model = None
+    submodel: Model | None = None
     # Embedding model used by the memory subsystem; defaults to OllamaEmbedding().
-    embedding_model: Embedding = None
+    embedding_model: Embedding | None = None
 
     # === Todo subsystem (consumed by _setup_todo) ===
     # System prompt appended to agent.system_prompt after todo setup.
@@ -148,7 +149,7 @@ class BuiltinHookConfig:
     merge_ratio: float = MERGE_RATIO
 
 
-def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
+def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict[Any, Any] | None = None) -> None:
     """Register the memory subsystem: 4 hooks + add_memory tool + system_prompt extension.
 
     Soft-depends on _setup_compress: the extract_memories_before_compress hook
@@ -175,9 +176,14 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
         if agent.session is not None and agent.session.turns:
             agent.session.turns[-1].memory_extracted = True
 
+    def current_session_id() -> str:
+        if agent.session is None:
+            raise RuntimeError("Cannot add memory without an active session")
+        return agent.session.id
+
     add_tool = create_add_memory_tool(
         memory_manager,
-        lambda: agent.session.id,
+        current_session_id,
         prompt=config.add_memory_tool_prompt,
         runtime=memory_runtime,
         mark_current_turn_extracted=mark_current_turn_memory_extracted,
@@ -222,7 +228,7 @@ def _setup_memory(agent: Agent, config: BuiltinHookConfig | dict = None) -> None
     agent.set_runtime_prompt("built_in.memory", prompt, order=100)
 
 
-def _setup_compress(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
+def _setup_compress(agent: Agent, config: BuiltinHookConfig | dict[Any, Any] | None = None) -> None:
     """Register the context-compression subsystem: 2 hooks.
 
     Side effect: sets ctx['compression_needed'] before each stream so that
@@ -246,7 +252,7 @@ def _setup_compress(agent: Agent, config: BuiltinHookConfig | dict = None) -> No
     hook.register(func=do_compress, hook_type=HookType.BEFORE_STREAM, priority=102)
 
 
-def _setup_todo(agent: Agent, config: BuiltinHookConfig | dict = None) -> None:
+def _setup_todo(agent: Agent, config: BuiltinHookConfig | dict[Any, Any] | None = None) -> None:
     """Register the runtime todo subsystem: tools + context/display/session hooks."""
     if config is None:
         config = BuiltinHookConfig()

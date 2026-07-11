@@ -12,7 +12,19 @@ def test_load_builtins_registers_all_builtin_tools(tmp_path):
     all_tools = factory.list_by_source("built_in")
     names = {t.name for t in all_tools}
 
-    expected = {"read", "write", "edit", "bash", "grep", "find", "ls", "web_search", "fetch_url", "sub_agent"}
+    expected = {
+        "read",
+        "read_file",
+        "write",
+        "edit",
+        "bash",
+        "grep",
+        "find",
+        "ls",
+        "web_search",
+        "fetch_url",
+        "sub_agent",
+    }
     assert expected.issubset(names)
     for name in expected:
         assert name in names

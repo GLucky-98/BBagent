@@ -12,6 +12,8 @@ class Policy:
 
     # ── Read limits ──
     max_read_size: int = 30_000
+    uploaded_file_root: str | None = None
+    uploaded_file_owner_id: str | None = None
 
     # ── Bash limits ──
     bash_max_output_size: int = 50_000

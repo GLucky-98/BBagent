@@ -7,14 +7,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4 as uuid
 
 from .hook import AgentHook, HookType
 from .input import InputChannel, InputEvent
 from .logger import AgentLogger, _NullLogger
 from .message import (
+    ContentBlock,
     HumanMessage,
     Message,
+    ModelMessage,
     Session,
     TextBlock,
     ToolMessage,
@@ -31,9 +34,9 @@ class AgentConfig:
     base_dir: Path | str = field(default_factory=Path.cwd)
     system_prompt: str = ""
     name: str = ""
-    session: Session = None
-    tools: list[Tool] = None
-    skills: list[Skill] = None
+    session: Session | None = None
+    tools: list[Tool] | None = None
+    skills: list[Skill] | None = None
 
     def __post_init__(self):
         if not self.name:
@@ -63,8 +66,9 @@ class Agent:
         self.name = agent_config.name
 
         self.model = agent_config.model
+        self.policy: dict[str, Any] = {}
 
-        self.base_dir = agent_config.base_dir
+        self.base_dir = Path(agent_config.base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
         self.system_prompt_path = self.base_dir / 'system_prompt.md'
@@ -100,7 +104,7 @@ class Agent:
         self._loop_running = False
         self._interrupt_event = asyncio.Event()
         self._stop_event = asyncio.Event()
-        self._active_tool_tasks: set[asyncio.Task] = set()
+        self._active_tool_tasks: set[asyncio.Task[ToolMessage]] = set()
 
         self.logger = AgentLogger(
             name=self.name,
@@ -119,9 +123,10 @@ class Agent:
     # ========================================================================
     # Session Management
     # ========================================================================
-    def _ensure_session(self):
+    def _ensure_session(self) -> Session:
         if self.session is None:
             self.session = Session.create(self.session_dir)
+        return self.session
 
     def set_session(self, session: Session):
         self.session = session
@@ -385,17 +390,17 @@ Your available skills are:
     # Execution: Model Input & Tool Execution
     # ========================================================================
     def construct_model_input(self) -> Model_Input:
-        self._ensure_session()
+        session = self._ensure_session()
         tools = list(self.tools.values())
         prompt = self.system_prompt + self.render_runtime_prompts()
-        messages = self.session.get_visible_context()
+        messages = session.get_visible_context()
         return Model_Input(prompt=prompt, tools=tools, messages=messages)
 
     async def tool_execute(self, tool_use: ToolUseBlock) -> ToolMessage:
         tool = self.tools.get(tool_use.name)
 
         if tool is None:
-            content = f"Unknown tool: {tool_use.name}"
+            content: str | list[ContentBlock] = f"Unknown tool: {tool_use.name}"
             self.logger.warning(
                 f"Tool not found: {tool_use.name}",
                 context={"tool_name": tool_use.name, "tool_input": tool_use.input}
@@ -413,8 +418,10 @@ Your available skills are:
                     else:
                         raw_result = await asyncio.to_thread(tool.invoke, tool_use.input)
 
-                    if isinstance(raw_result, (str, list)):
+                    if isinstance(raw_result, str):
                         content = raw_result
+                    elif isinstance(raw_result, list):
+                        content = cast(list[ContentBlock], raw_result)
                     else:
                         content = json.dumps(raw_result, ensure_ascii=False)
 
@@ -447,19 +454,23 @@ Your available skills are:
     # ========================================================================
     # Execution: Interrupt Control
     # ========================================================================
-    async def _cancel_tool_tasks(self, tool_tasks: list[asyncio.Task]):
+    async def _cancel_tool_tasks(self, tool_tasks: list[asyncio.Task[ToolMessage]]) -> None:
         for task in tool_tasks:
             if not task.done():
                 task.cancel()
         if tool_tasks:
             await asyncio.gather(*tool_tasks, return_exceptions=True)
 
-    async def _wait_for_tool_results(self, tool_tasks: list[asyncio.Task]):
+    async def _wait_for_tool_results(
+        self,
+        tool_tasks: list[asyncio.Task[ToolMessage]],
+    ) -> list[ToolMessage] | None:
         tool_results_future = asyncio.gather(*tool_tasks)
         interrupt_waiter = asyncio.create_task(self._interrupt_event.wait())
         try:
+            waitables: set[asyncio.Future[Any]] = {tool_results_future, interrupt_waiter}
             _done, _ = await asyncio.wait(
-                {tool_results_future, interrupt_waiter},
+                waitables,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if self._interrupt_event.is_set():
@@ -482,10 +493,10 @@ Your available skills are:
     async def stream_tool_loop(self):
         try:
             while True:
-                tool_tasks = []
-                stop_reason = None
+                tool_tasks: list[asyncio.Task[ToolMessage]] = []
+                stop_reason: str | None = None
                 interrupted = False
-                pending_model_message = None
+                pending_model_message: ModelMessage | None = None
 
                 await self.hook.trigger(HookType.BEFORE_STREAM)
                 if self._interrupt_event.is_set():
@@ -512,7 +523,7 @@ Your available skills are:
                         yield {'type': 'stream_chunk', 'chunk_type': 'thinking', 'content': content}
 
                     if chunk_type == 'completed_tool_use':
-                        tool_use = content
+                        tool_use = cast(ToolUseBlock, content)
                         task = asyncio.create_task(
                             self.tool_execute(tool_use)
                         )
@@ -522,18 +533,19 @@ Your available skills are:
                         yield {'type': 'stream_chunk', 'chunk_type': 'completed_tool_use', 'content': tool_use}
 
                     if chunk_type == 'completed_message':
-                        stop_reason = content.stop_reason
+                        model_message = cast(ModelMessage, content)
+                        stop_reason = model_message.stop_reason
                         self.logger.debug(
                             "Model response received",
                             context={"stop_reason": stop_reason}
                         )
-                        await self.hook.trigger(HookType.ON_MESSAGE, content)
-                        self._ensure_session()
+                        await self.hook.trigger(HookType.ON_MESSAGE, model_message)
+                        session = self._ensure_session()
                         if stop_reason == 'tool_use':
-                            pending_model_message = content
+                            pending_model_message = model_message
                         else:
-                            self.session.add_message(content)
-                        yield {'type': 'stream_chunk', 'chunk_type': 'completed_message', 'content': content}
+                            session.add_message(model_message)
+                        yield {'type': 'stream_chunk', 'chunk_type': 'completed_message', 'content': model_message}
                         break
 
                 if interrupted:
@@ -553,11 +565,11 @@ Your available skills are:
                         yield {'type': 'event', 'event_type': 'interrupted', 'content': 'Agent interrupted'}
                         break
                     yield {'type': 'stream_chunk', 'chunk_type': 'tool_results', 'content': tool_results}
-                    self._ensure_session()
+                    session = self._ensure_session()
                     if pending_model_message is not None:
-                        self.session.add_message([pending_model_message, *tool_results])
+                        session.add_message([pending_model_message, *tool_results])
                     else:
-                        self.session.add_message(tool_results)
+                        session.add_message(tool_results)
                 elif stop_reason == 'end_turn':
                     self.logger.info("Agent tool loop ended with end_turn")
                     break
@@ -584,13 +596,13 @@ Your available skills are:
         self._interrupt_event.clear()
         self.state = AgentState.Running
         self.logger.set_trace_id()
-        self._ensure_session()
+        session = self._ensure_session()
         with self.logger.span("agent_run"):
             self.logger.info(
                 "Agent run started",
-                context={"session_id": self.session.id}
+                context={"session_id": session.id}
             )
-            self.session.add_message(human_msg)
+            session.add_message(human_msg)
             await self.hook.trigger(HookType.AFTER_INPUT)
             try:
                 async for chunk in self.stream_tool_loop():
@@ -628,8 +640,8 @@ Your available skills are:
                 }
             )
             msg = event.to_human_message()
-            self._ensure_session()
-            self.session.add_message(msg)
+            session = self._ensure_session()
+            session.add_message(msg)
 
             if isinstance(msg.content, str):
                 text = msg.content
@@ -840,7 +852,7 @@ Your available skills are:
 class SubAgent:
     def __init__(self, model: Model, tools: list[Tool] | None = None, system_prompt: str = "",
                 skills: list[Skill] | None = None, name: str | None = None,
-                logger: AgentLogger = None):
+                logger: AgentLogger | None = None):
         self.name = name or f'sub_{id(self)}'
         self.model = model
         self.system_prompt = system_prompt
@@ -920,7 +932,7 @@ Your available skills are:
         tool = self.tools.get(tool_use.name)
 
         if tool is None:
-            content = f"Unknown tool: {tool_use.name}"
+            content: str | list[ContentBlock] = f"Unknown tool: {tool_use.name}"
             self.logger.warning(
                 f"Tool not found: {tool_use.name}",
                 context={"tool_name": tool_use.name, "tool_input": tool_use.input}
@@ -937,8 +949,10 @@ Your available skills are:
                     else:
                         raw_result = await asyncio.to_thread(tool.invoke, tool_use.input)
 
-                    if isinstance(raw_result, (str, list)):
+                    if isinstance(raw_result, str):
                         content = raw_result
+                    elif isinstance(raw_result, list):
+                        content = cast(list[ContentBlock], raw_result)
                     else:
                         content = json.dumps(raw_result, ensure_ascii=False)
 
@@ -970,6 +984,7 @@ Your available skills are:
     async def run(self, messages: list[Message] | Message | str) -> str:
         messages = self._normalize_input(messages)
         tools = list(self.tools.values())
+        final_result: ModelMessage | None = None
 
         trace = getattr(self.logger, "trace", None)
         trace_context = trace(inherit=True) if trace else contextlib.nullcontext()
@@ -993,7 +1008,7 @@ Your available skills are:
                         messages=messages,
                     )
                     try:
-                        result = await self.model.async_invoke(model_input)
+                        model_result = await self.model.async_invoke(model_input)
                     except Exception as e:
                         self.logger.error(
                             f"SubAgent model run failed: {e!s}",
@@ -1002,6 +1017,10 @@ Your available skills are:
                         )
                         raise
 
+                    if isinstance(model_result, str):
+                        return model_result
+
+                    result = model_result
                     messages.append(result)
                     self.logger.debug(
                         "Model response received",
@@ -1015,6 +1034,7 @@ Your available skills are:
                             if self._force_stop:
                                 break
                     elif result.stop_reason == 'end_turn':
+                        final_result = result
                         break
                     else:
                         error_msg = f"SubAgent stop reason: {result.stop_reason}"
@@ -1024,11 +1044,14 @@ Your available skills are:
                         )
                         raise ValueError(error_msg)
 
-            if isinstance(result.content, list):
-                parts = [b.text for b in result.content if isinstance(b, TextBlock)]
+            if final_result is None:
+                return ""
+
+            if isinstance(final_result.content, list):
+                parts = [b.text for b in final_result.content if isinstance(b, TextBlock)]
                 text = '\n'.join(parts)
             else:
-                text = str(result.content)
+                text = str(final_result.content)
 
             self.logger.info(
                 "SubAgent run completed",

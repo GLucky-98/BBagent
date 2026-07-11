@@ -61,8 +61,7 @@ class TeamConversationManager:
 
         for member_name, agent in team.agents.items():
             current = getattr(agent, "session", None)
-            reused = bool(current and len(current.turns) == 0)
-            if reused:
+            if current is not None and len(current.turns) == 0:
                 session_id = current.id
                 statuses[member_name] = {"status": "reused_empty", "sessionId": session_id}
             else:
@@ -70,6 +69,8 @@ class TeamConversationManager:
                 if not agent_id:
                     raise NotFoundError(ErrorCode.AGENT_NOT_FOUND, f"Agent '{member_name}' not found")
                 await self._agent_factory.new_session(agent_id)
+                if agent.session is None:
+                    raise NotFoundError(ErrorCode.SESSION_NOT_FOUND, f"Session for member '{member_name}' not found")
                 session_id = agent.session.id
                 statuses[member_name] = {"status": "created", "sessionId": session_id}
             member_sessions[member_name] = session_id
@@ -110,6 +111,8 @@ class TeamConversationManager:
             else:
                 old_session_id = session_id or ""
                 await self._agent_factory.new_session(agent_id)
+                if agent.session is None:
+                    raise NotFoundError(ErrorCode.SESSION_NOT_FOUND, f"Session for member '{member_name}' not found")
                 new_session_id = agent.session.id
                 member_sessions[member_name] = new_session_id
                 if old_session_id:
@@ -230,11 +233,7 @@ class TeamConversationManager:
             "name": "Conversation",
             "createdAt": now,
             "updatedAt": now,
-            "memberSessions": {
-                name: agent.session.id
-                for name, agent in team.agents.items()
-                if getattr(agent, "session", None)
-            },
+            "memberSessions": self._current_member_sessions(team),
             "missingSessions": {},
             "messageCount": self._message_count(team, cid),
         }
@@ -253,8 +252,17 @@ class TeamConversationManager:
     def _agent_id_for(self, agent) -> str | None:
         for aid, candidate in self._agent_factory.agents.items():
             if candidate is agent:
-                return aid
+                return str(aid)
         return None
+
+    @staticmethod
+    def _current_member_sessions(team: AgentTeam) -> dict[str, str]:
+        sessions: dict[str, str] = {}
+        for name, agent in team.agents.items():
+            session = getattr(agent, "session", None)
+            if session is not None:
+                sessions[name] = session.id
+        return sessions
 
     @staticmethod
     def _session_exists(agent, session_id: str) -> bool:

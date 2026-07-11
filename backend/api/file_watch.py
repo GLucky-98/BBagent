@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -153,7 +154,7 @@ class _WatchSession:
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
         self.queue: asyncio.Queue = asyncio.Queue()
-        self.observer = None
+        self.observer: Any | None = None
         self.forwarder_task: asyncio.Task | None = None
         self.session_id = f"file_ws:{uuid4().hex[:8]}"
 

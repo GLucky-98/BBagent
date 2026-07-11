@@ -3,8 +3,13 @@ import type { CreateAgentPayload, CreateTeamPayload, UpdateAgentPayload, UpdateT
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000/api";
 
 async function request(path: string, options: RequestInit = {}) {
+  const isFormData = options.body instanceof FormData;
+  const headers = new Headers(options.headers);
+  if (!isFormData && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...options,
   });
   if (!res.ok) {
@@ -66,6 +71,14 @@ export const api = {
     request(`/agents/${id}/sessions/${sessionId}/switch`, { method: "POST" }),
   newSession: (id: string) => request(`/agents/${id}/sessions/new`, { method: "POST" }),
   getAgentMessages: (id: string) => request(`/agents/${id}/messages`),
+
+  // Uploaded files. The /attachments route is kept for backend compatibility.
+  uploadFiles: (id: string, files: File[]) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    return request(`/attachments/${id}`, { method: "POST", body: form });
+  },
+  uploadAttachments: (id: string, files: File[]) => api.uploadFiles(id, files),
 
   // Timers — per agent, timer identified by name
   listTimers: (id: string) => request(`/agents/${id}/timers`),

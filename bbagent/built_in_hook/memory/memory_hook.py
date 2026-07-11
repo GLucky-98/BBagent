@@ -1,6 +1,6 @@
 import hashlib
-import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 from ...core.agent import SubAgent
 from ...core.hook import HookContext
@@ -170,8 +170,8 @@ async def extract_memories(
     extract_prompt: str = EXTRACT_SYSTEM_PROMPT,
     subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
     extract_user_prompt: str = EXTRACT_USER_PROMPT,
-    logger: AgentLogger = None,
-    runtime: MemoryRuntime = None,
+    logger: AgentLogger | None = None,
+    runtime: MemoryRuntime | None = None,
 ):
     from ...built_in_tool import Policy, create_write_tool
 
@@ -292,8 +292,8 @@ async def clean_memory(
     memory_manager: MemoryManager,
     clean_prompt: str = CLEAN_SYSTEM_PROMPT,
     clean_user_prompt: str = CLEAN_USER_PROMPT,
-    logger: AgentLogger = None,
-    runtime: MemoryRuntime = None,
+    logger: AgentLogger | None = None,
+    runtime: MemoryRuntime | None = None,
 ) -> bool:
     from ...built_in_tool import Policy, create_read_tool
 
@@ -329,14 +329,14 @@ async def clean_memory(
     return True
 
 
-def _hard_clean_memories(memory_manager: MemoryManager, logger: logging.Logger | None = None) -> int:
+def _hard_clean_memories(memory_manager: MemoryManager, logger: Any | None = None) -> int:
     all_data = memory_manager.collection.get(include=["documents", "metadatas"])
-    ids = all_data.get("ids", [])
+    ids = all_data.get("ids") or []
     if not ids:
         return 0
 
-    documents = all_data.get("documents", [])
-    metadatas = all_data.get("metadatas", [])
+    documents = all_data.get("documents") or []
+    metadatas = all_data.get("metadatas") or []
     cutoff = datetime.now() - timedelta(days=HARD_CLEAN_STALE_DAYS)
 
     to_delete = []
@@ -351,9 +351,11 @@ def _hard_clean_memories(memory_manager: MemoryManager, logger: logging.Logger |
             to_delete.append(doc_id)
             continue
 
-        metadata = metadatas[i] if i < len(metadatas) else {}
-        date_created_str = metadata.get("date_created", "")
-        last_accessed_str = metadata.get("last_accessed", "")
+        metadata = metadatas[i] if i < len(metadatas) and metadatas[i] else {}
+        raw_date_created = metadata.get("date_created", "")
+        raw_last_accessed = metadata.get("last_accessed", "")
+        date_created_str = raw_date_created if isinstance(raw_date_created, str) else ""
+        last_accessed_str = raw_last_accessed if isinstance(raw_last_accessed, str) else ""
 
         try:
             date_created = datetime.fromisoformat(date_created_str)
@@ -406,8 +408,8 @@ async def do_extract_turns(
     extract_prompt: str,
     subagent_add_memory_tool_prompt: str,
     extract_user_prompt: str,
-    logger: AgentLogger = None,
-    runtime: MemoryRuntime = None,
+    logger: AgentLogger | None = None,
+    runtime: MemoryRuntime | None = None,
 ):
     merge_threshold = int(max_context_tokens * merge_ratio)
     groups = _group_turns_for_extraction(turns, merge_threshold)
@@ -439,7 +441,7 @@ async def do_extract_turns(
 def create_memory_hook(
     memory_manager: MemoryManager,
     submodel: Model,
-    runtime: MemoryRuntime = None,
+    runtime: MemoryRuntime | None = None,
     extract_prompt: str = EXTRACT_SYSTEM_PROMPT,
     clean_prompt: str = CLEAN_SYSTEM_PROMPT,
     subagent_add_memory_tool_prompt: str = ADD_MEMORY_TOOL_DESCRIPTION_SUBAGENT,
@@ -689,7 +691,7 @@ def create_memory_hook(
 
         inject_static_prefix = inject_user_prompt.split("{search_context}", 1)[0]
         seen_memory_keys = runtime.get_seen_memory_keys(session, inject_static_prefix)
-        selected_memory_keys = []
+        selected_memory_keys: list[bytes] = []
 
         context = await inject_memory_context(
             query=query,

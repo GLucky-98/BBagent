@@ -1,7 +1,7 @@
 import copy
 import inspect
 from collections.abc import Callable
-from typing import Any, Literal, get_type_hints
+from typing import Any, Literal, cast, get_type_hints
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -39,7 +39,7 @@ def inline_refs(schema: dict) -> dict:
                 obj[i] = _resolve_ref(item)
         return obj
 
-    return _resolve_ref(schema)
+    return cast(dict, _resolve_ref(schema))
 
 
 # ------------------------------------------------------------
@@ -164,6 +164,5 @@ class Tool:
 def tool(func:Callable):
 
     return Tool(func)
-
 
 

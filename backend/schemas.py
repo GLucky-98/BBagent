@@ -222,6 +222,18 @@ class FileNode(BaseModel):
     modifiedAt: int | None = None
 
 
+class FileInfo(BaseModel):
+    id: str
+    originalName: str
+    storedName: str
+    path: str
+    contentType: str = "application/octet-stream"
+    size: int = 0
+
+
+AttachmentInfo = FileInfo
+
+
 class UIState(BaseModel):
     currentTab: Literal["agent", "team"] = "agent"
     currentAgentId: str | None = None

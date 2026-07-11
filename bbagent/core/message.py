@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 __all__ = [
     'ContentBlock',
@@ -400,9 +400,13 @@ class Session:
         return len(self.turns)
 
     def _messages_path(self) -> Path:
+        if self.dir is None:
+            raise ValueError("Session has no directory")
         return self.dir / f'{self.id}.jsonl'
 
     def _metadata_path(self) -> Path:
+        if self.dir is None:
+            raise ValueError("Session has no directory")
         return self.dir / f'{self.id}.md'
 
     @classmethod
@@ -763,9 +767,9 @@ class Session:
     @staticmethod
     def _parse_metadata(md_path: Path) -> dict:
         text = md_path.read_text(encoding='utf-8')
-        result = {}
-        turns_metadata = []
-        current_turn = None
+        result: dict[str, Any] = {}
+        turns_metadata: list[dict[str, str]] = []
+        current_turn: dict[str, str] | None = None
 
         for line in text.split('\n'):
             stripped = line.strip()

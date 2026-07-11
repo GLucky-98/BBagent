@@ -204,25 +204,23 @@ class InputChannel:
 
     def start_timer(self, name: str) -> bool:
         """Start task from existing config (without deleting config). Returns whether it started successfully."""
-        config = None
-        config_type = None
+        interval_config: tuple[float, str, str] | None = None
+        at_config: tuple[str, str, str] | None = None
 
         # find interval config
         for s, n, h in self._interval_configs:
             if n == name:
-                config = (s, n, h)
-                config_type = "interval"
+                interval_config = (s, n, h)
                 break
 
         # find time-point config
-        if config is None:
+        if interval_config is None:
             for t, n, h in self._at_configs:
                 if n == name:
-                    config = (t, n, h)
-                    config_type = "at"
+                    at_config = (t, n, h)
                     break
 
-        if config is None:
+        if interval_config is None and at_config is None:
             return False
 
         # already running?
@@ -231,10 +229,11 @@ class InputChannel:
                 return False
 
         if self._running:
-            if config_type == "interval":
-                task = self._create_interval_task(config[0], config[1], config[2])
+            if interval_config is not None:
+                task = self._create_interval_task(interval_config[0], interval_config[1], interval_config[2])
             else:
-                task = self._create_at_task(config[0], config[1], config[2])
+                assert at_config is not None
+                task = self._create_at_task(at_config[0], at_config[1], at_config[2])
             self._timers.append((name, task))
             return True
         return False

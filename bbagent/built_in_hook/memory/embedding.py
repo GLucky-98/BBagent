@@ -13,6 +13,9 @@ class Embedding(ABC):
     async def get_embedding(self, text: str, **kwargs) -> list[float]:
         pass
 
+    async def get_embeddings(self, texts: list[str], truncate: bool = True, **kwargs) -> list[list[float]]:
+        return [await self.get_embedding(text, truncate=truncate, **kwargs) for text in texts]
+
 
 class OllamaEmbedding(Embedding):
     def __init__(self, model: str = "nomic-embed-text"):
@@ -23,7 +26,7 @@ class OllamaEmbedding(Embedding):
         embeddings = await self.get_embeddings([text], truncate)
         return embeddings[0]
 
-    async def get_embeddings(self, texts: list[str], truncate: bool = True) -> list[list[float]]:
+    async def get_embeddings(self, texts: list[str], truncate: bool = True, **kwargs) -> list[list[float]]:
         try:
             return await self._batch_embed(texts, truncate)
         except Exception:
@@ -41,7 +44,7 @@ class OllamaEmbedding(Embedding):
                     input=texts,
                     truncate=truncate,
                 )
-                return response.embeddings
+                return [list(embedding) for embedding in response.embeddings]
             except ollama.ResponseError:
                 raise
             except Exception as e:
@@ -54,7 +57,7 @@ class OllamaEmbedding(Embedding):
         ) from last_error
 
     async def _embed_individually(self, texts: list[str], truncate: bool = True) -> list[list[float]]:
-        embeddings = [None] * len(texts)
+        embeddings: list[list[float] | None] = [None] * len(texts)
         failed_indices = []
 
         for i, text in enumerate(texts):
@@ -65,7 +68,7 @@ class OllamaEmbedding(Embedding):
                         input=[text],
                         truncate=truncate,
                     )
-                    embeddings[i] = response.embeddings[0]
+                    embeddings[i] = list(response.embeddings[0])
                     break
                 except Exception:
                     if attempt < 2:
